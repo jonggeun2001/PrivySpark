@@ -1,25 +1,51 @@
 # PrivySpark
 
-PrivySpark is an open-source Scala + Spark batch scanner that detects potential PII in datasets.
+PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개인정보(PII)를 정규식으로 탐지해 리포트를 생성합니다.
 
-## MVP Scope
-- One-time batch execution
-- Input path from CLI (`--path`)
-- Works with any Spark-supported filesystem (HDFS/S3/ADLS/GCS/local, etc.)
-- Regex-based detection
-- Column-level reporting
-- Optimized to minimize false positives
-- Report output to a Spark-supported filesystem path (`--output`)
-- Reporting only (no blocking, no masking)
+## 현재 범위 (MVP v0.1)
+- 일회성 배치 실행
+- 입력/출력 경로는 절대경로(또는 URI)만 허용
+- 파일 단위 스캔
+- 외부 규칙 파일 기반 정규식 탐지
+- 샘플링 지원(`--sample-ratio`, 기본값 `0.2`, 비결정적 랜덤)
+- 결과 출력: Parquet + Excel
+- 실패 파일은 스킵하고 별도 오류 리포트 생성
+- PII 원문값 저장 금지(파일/컬럼/집계 정보만 저장)
 
-## Status
-Planning/PRD stage. Implementation will continue in a separate development environment.
+## 프로젝트 구조
+- `src/main/scala/io/github/jonggeun2001/privyspark`: 애플리케이션 코드
+- `src/test/scala/io/github/jonggeun2001/privyspark`: 테스트 코드
+- `config/rules/default.yaml`: 기본 규칙셋
+- `bin/privyspark-submit`: YARN cluster 제출 스크립트
+- `docs/PRD.md`: 요구사항 문서
 
-## Planned CLI (draft)
+## 빌드
 ```bash
-privyspark scan \
-  --path <input_path> \
-  --output <report_path> \
-  --format auto \
-  --ruleset default
+./gradlew clean jar
+```
+
+## 테스트
+```bash
+./gradlew test
+```
+
+## YARN Cluster 실행
+```bash
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ruleset default \
+  --sample-ratio 0.2
+```
+
+스크립트는 `spark-submit --master yarn --deploy-mode cluster`를 기본 사용합니다.
+또한 기본 규칙 파일(`config/rules/default.yaml`)을 `--files`로 YARN 드라이버에 배포합니다.
+
+## 규칙셋 파일 형식
+`config/rules/default.yaml` 예시:
+```yaml
+rules:
+  - pii_type: email
+    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}'
 ```

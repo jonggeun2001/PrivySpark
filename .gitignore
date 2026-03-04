@@ -1,0 +1,19 @@
+# Scala / Gradle
+/target/
+/build/
+/.gradle/
+/project/target/
+/project/project/
+/.bsp/
+/.metals/
+/.bloop/
+
+# IDE
+/.idea/
+*.iml
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
