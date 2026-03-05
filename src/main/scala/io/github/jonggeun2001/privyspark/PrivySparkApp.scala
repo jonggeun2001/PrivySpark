@@ -1,8 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
 import org.apache.hadoop.fs.Path
-import org.apache.spark.sql.functions.col
-import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
@@ -105,35 +103,33 @@ object PrivySparkApp {
 
       val sourceDf = readSource(spark, format, filePath)
       val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
-      val sampledRowCount = sampledDf.count()
 
-      if (sampledRowCount == 0L) {
-        Right(Seq.empty)
-      } else {
-        val fileResults = ArrayBuffer.empty[ScanResult]
+      sampledDf.cache()
+      try {
+        val sampledRowCount = sampledDf.count()
 
-        sampledDf.columns.foreach { columnName =>
-          val columnValue = col(columnName).cast(StringType)
-
-          rules.foreach { rule =>
-            val matchCount = sampledDf.filter(columnValue.isNotNull && columnValue.rlike(rule.regex)).count()
-            if (matchCount > 0L) {
-              val matchRatio = matchCount.toDouble / sampledRowCount.toDouble
-              fileResults += ScanResult(
-                dataset_path = datasetPath,
-                scan_timestamp = timestamp,
-                file_identifier = fileIdentifier,
-                column_name = columnName,
-                pii_type = rule.piiType,
-                match_count = matchCount,
-                match_ratio = matchRatio,
-                confidence = matchRatio
-              )
-            }
+        if (sampledRowCount == 0L) {
+          Right(Seq.empty)
+        } else {
+          val matchCounts = DetectionAggregator.aggregate(sampledDf, rules)
+          val fileResults = matchCounts.map { matchCount =>
+            val matchRatio = matchCount.count.toDouble / sampledRowCount.toDouble
+            ScanResult(
+              dataset_path = datasetPath,
+              scan_timestamp = timestamp,
+              file_identifier = fileIdentifier,
+              column_name = matchCount.columnName,
+              pii_type = matchCount.piiType,
+              match_count = matchCount.count,
+              match_ratio = matchRatio,
+              confidence = matchRatio
+            )
           }
-        }
 
-        Right(fileResults.toSeq)
+          Right(fileResults)
+        }
+      } finally {
+        sampledDf.unpersist(blocking = false)
       }
     } catch {
       case NonFatal(e) =>
