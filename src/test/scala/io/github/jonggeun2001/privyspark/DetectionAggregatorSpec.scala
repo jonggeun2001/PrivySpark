@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.DetectionAggregator.{AggregationConfig, MatchCount}
+import io.github.jonggeun2001.privyspark.DetectionAggregator.{AggregationConfig, FileMatchCount, MatchCount}
 import io.github.jonggeun2001.privyspark.model.PiiRule
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.StringType
@@ -98,8 +98,59 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(sortByKey(actual) == sortByKey(expected))
   }
 
+  test("aggregateByFile matches legacy per-file behavior") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("alpha.csv", "noise", "none"),
+      ("beta.csv", "beta@example.com", "010-9999-8888"),
+      ("beta.csv", null.asInstanceOf[String], null.asInstanceOf[String])
+    ).toDF("file_id", "c_email", "c_phone")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val actual = sortByFileKey(DetectionAggregator.aggregateByFile(df, "file_id", rules))
+    val expected = sortByFileKey(legacyCountsByFile(df, "file_id", rules))
+
+    assert(actual == expected)
+  }
+
+  test("aggregateByFile supports batch split and fallback path") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("beta.csv", "beta@example.com", "010-9999-8888")
+    ).toDF("file_id", "c1", "c2")
+
+    val rules = (1 to 10).map(i => PiiRule(s"email_rule_$i", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")) ++
+      (1 to 10).map(i => PiiRule(s"phone_rule_$i", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b"))
+
+    val expected = sortByFileKey(legacyCountsByFile(df, "file_id", rules))
+
+    val batched = DetectionAggregator.aggregateByFile(
+      df,
+      "file_id",
+      rules,
+      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
+    )
+    assert(sortByFileKey(batched) == expected)
+
+    val forcedFallback = DetectionAggregator.aggregateByFile(
+      df,
+      "file_id",
+      rules,
+      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
+    )
+    assert(sortByFileKey(forcedFallback) == expected)
+  }
+
   private def sortByKey(values: Seq[MatchCount]): Seq[MatchCount] = {
     values.sortBy(v => (v.columnName, v.piiType, v.count))
+  }
+
+  private def sortByFileKey(values: Seq[FileMatchCount]): Seq[FileMatchCount] = {
+    values.sortBy(v => (v.fileIdentifier, v.columnName, v.piiType, v.count))
   }
 
   private def legacyCounts(df: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
@@ -130,6 +181,36 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
           }
 
           if (count > 0) Some(MatchCount(columnName, rule.piiType, count.toLong)) else None
+      }
+    }
+  }
+
+  private def legacyCountsByFile(
+    df: DataFrame,
+    fileIdentifierColumn: String,
+    rules: Seq[PiiRule]
+  ): Seq[FileMatchCount] = {
+    val dataColumns = df.columns.toSeq.filterNot(_ == fileIdentifierColumn)
+
+    dataColumns.flatMap { columnName =>
+      val valueColumn = col(columnName).cast(StringType)
+
+      rules.flatMap { rule =>
+        val groupedRows = df
+          .filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex))
+          .groupBy(col(fileIdentifierColumn))
+          .count()
+          .collect()
+
+        groupedRows.flatMap { row =>
+          val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+          val count = if (row.isNullAt(1)) 0L else row.getLong(1)
+          if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
+            None
+          } else {
+            Some(FileMatchCount(fileIdentifier, columnName, rule.piiType, count))
+          }
+        }
       }
     }
   }

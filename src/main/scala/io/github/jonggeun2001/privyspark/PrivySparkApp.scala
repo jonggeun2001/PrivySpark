@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.functions.{col, input_file_name, regexp_extract}
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
 
@@ -10,6 +11,17 @@ import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
 object PrivySparkApp {
+  private final case class ScanFileEntry(filePath: String, directoryPath: String, format: String)
+  private final case class ScanGroup(directoryPath: String, format: String, filePaths: Seq[String])
+  private final case class DirectoryScanPlan(
+    groups: Seq[ScanGroup],
+    unsupportedFiles: Seq[String],
+    totalFiles: Int,
+    directoryCount: Int
+  )
+
+  private val FileIdentifierColumn = "__privyspark_file_identifier"
+
   def main(args: Array[String]): Unit = {
     val normalizedArgs = if (args.headOption.contains("scan")) args.drop(1) else args
 
@@ -44,25 +56,36 @@ object PrivySparkApp {
 
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
     val rules = RulesetLoader.load(config.ruleset)
-    val files = listFiles(spark, config.inputPath)
+    val scanPlan = scanDirectoryStructure(spark, config.inputPath)
     val timestamp = Instant.now().toString
 
     val results = ArrayBuffer.empty[ScanResult]
     val errors = ArrayBuffer.empty[ScanError]
 
-    files.foreach { filePath =>
-      scanFile(spark, config.inputPath, filePath, rules, config.sampleRatio, timestamp) match {
-        case Right(fileResults) => results ++= fileResults
-        case Left(error) => errors += error
-      }
+    scanPlan.unsupportedFiles.foreach { filePath =>
+      errors += ScanError(
+        config.inputPath,
+        timestamp,
+        new Path(filePath).getName,
+        s"Unsupported file format: $filePath"
+      )
+    }
+
+    scanPlan.groups.foreach { group =>
+      val (groupResults, groupErrors) =
+        scanGroup(spark, config.inputPath, group, rules, config.sampleRatio, timestamp)
+      results ++= groupResults
+      errors ++= groupErrors
     }
 
     writeReports(spark, config.outputPath, results.toSeq, errors.toSeq)
 
-    println(s"[PrivySpark] scanned_files=${files.size}, detections=${results.size}, errors=${errors.size}")
+    println(
+      s"[PrivySpark] scanned_files=${scanPlan.totalFiles}, grouped_dirs=${scanPlan.directoryCount}, groups=${scanPlan.groups.size}, detections=${results.size}, errors=${errors.size}"
+    )
   }
 
-  private def listFiles(spark: SparkSession, inputPath: String): Seq[String] = {
+  private def scanDirectoryStructure(spark: SparkSession, inputPath: String): DirectoryScanPlan = {
     val conf = spark.sparkContext.hadoopConfiguration
     val path = new Path(inputPath)
     val fs = path.getFileSystem(conf)
@@ -71,7 +94,7 @@ object PrivySparkApp {
       throw new IllegalArgumentException(s"Input path not found: $inputPath")
     }
 
-    if (fs.getFileStatus(path).isFile) {
+    val files = if (fs.getFileStatus(path).isFile) {
       Seq(path.toString)
     } else {
       val iter = fs.listFiles(path, true)
@@ -83,6 +106,125 @@ object PrivySparkApp {
         }
       }
       files.toSeq.sorted
+    }
+
+    val supportedFiles = ArrayBuffer.empty[ScanFileEntry]
+    val unsupportedFiles = ArrayBuffer.empty[String]
+
+    files.foreach { filePath =>
+      FormatDetector.infer(filePath) match {
+        case Some(format) =>
+          val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
+          supportedFiles += ScanFileEntry(filePath, parentDirectory, format)
+        case None =>
+          unsupportedFiles += filePath
+      }
+    }
+
+    val groups = supportedFiles
+      .groupBy(file => (file.directoryPath, file.format))
+      .toSeq
+      .sortBy { case ((directoryPath, format), _) => (directoryPath, format) }
+      .map {
+        case ((directoryPath, format), groupedFiles) =>
+          ScanGroup(directoryPath, format, groupedFiles.map(_.filePath).sorted)
+      }
+
+    val directoryCount = files
+      .map(filePath => Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath))
+      .distinct
+      .size
+
+    DirectoryScanPlan(
+      groups = groups,
+      unsupportedFiles = unsupportedFiles.toSeq,
+      totalFiles = files.size,
+      directoryCount = directoryCount
+    )
+  }
+
+  private def scanGroup(
+    spark: SparkSession,
+    datasetPath: String,
+    group: ScanGroup,
+    rules: Seq[PiiRule],
+    sampleRatio: Double,
+    timestamp: String
+  ): (Seq[ScanResult], Seq[ScanError]) = {
+    try {
+      val results = scanGroupBatch(spark, datasetPath, group, rules, sampleRatio, timestamp)
+      (results, Seq.empty)
+    } catch {
+      case NonFatal(e) =>
+        System.err.println(
+          s"[PrivySpark] group_scan_fallback directory=${group.directoryPath} format=${group.format} files=${group.filePaths.size} reason=${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+        )
+
+        val fallbackResults = ArrayBuffer.empty[ScanResult]
+        val fallbackErrors = ArrayBuffer.empty[ScanError]
+        group.filePaths.foreach { filePath =>
+          scanFile(spark, datasetPath, filePath, rules, sampleRatio, timestamp) match {
+            case Right(fileResults) => fallbackResults ++= fileResults
+            case Left(error) => fallbackErrors += error
+          }
+        }
+
+        (fallbackResults.toSeq, fallbackErrors.toSeq)
+    }
+  }
+
+  private def scanGroupBatch(
+    spark: SparkSession,
+    datasetPath: String,
+    group: ScanGroup,
+    rules: Seq[PiiRule],
+    sampleRatio: Double,
+    timestamp: String
+  ): Seq[ScanResult] = {
+    val sourceDf = readSource(spark, group.format, group.filePaths)
+      .withColumn(FileIdentifierColumn, regexp_extract(input_file_name(), "([^/]+)$", 1))
+
+    val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
+
+    sampledDf.cache()
+    try {
+      val sampledRowsByFile = sampledDf
+        .groupBy(col(FileIdentifierColumn))
+        .count()
+        .collect()
+        .flatMap { row =>
+          val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+          val rowCount = if (row.isNullAt(1)) 0L else row.getLong(1)
+          if (fileIdentifier == null || fileIdentifier.isEmpty || rowCount <= 0L) {
+            None
+          } else {
+            Some(fileIdentifier -> rowCount)
+          }
+        }
+        .toMap
+
+      if (sampledRowsByFile.isEmpty) {
+        Seq.empty
+      } else {
+        val matchCounts = DetectionAggregator.aggregateByFile(sampledDf, FileIdentifierColumn, rules)
+        matchCounts.flatMap { matchCount =>
+          sampledRowsByFile.get(matchCount.fileIdentifier).map { sampledRowCount =>
+            val matchRatio = matchCount.count.toDouble / sampledRowCount.toDouble
+            ScanResult(
+              dataset_path = datasetPath,
+              scan_timestamp = timestamp,
+              file_identifier = matchCount.fileIdentifier,
+              column_name = matchCount.columnName,
+              pii_type = matchCount.piiType,
+              match_count = matchCount.count,
+              match_ratio = matchRatio,
+              confidence = matchRatio
+            )
+          }
+        }
+      }
+    } finally {
+      sampledDf.unpersist(blocking = true)
     }
   }
 
@@ -101,7 +243,7 @@ object PrivySparkApp {
         return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $filePath"))
       }
 
-      val sourceDf = readSource(spark, format, filePath)
+      val sourceDf = readSource(spark, format, Seq(filePath))
       val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
 
       sampledDf.cache()
@@ -137,20 +279,22 @@ object PrivySparkApp {
     }
   }
 
-  private def readSource(spark: SparkSession, format: String, filePath: String): DataFrame = {
+  private def readSource(spark: SparkSession, format: String, filePaths: Seq[String]): DataFrame = {
+    require(filePaths.nonEmpty, "filePaths must not be empty")
+
     format match {
       case "csv" =>
         spark.read
           .option("header", "true")
           .option("inferSchema", "true")
           .option("mode", "PERMISSIVE")
-          .csv(filePath)
+          .csv(filePaths: _*)
       case "json" =>
         spark.read
           .option("mode", "PERMISSIVE")
-          .json(filePath)
+          .json(filePaths: _*)
       case "parquet" =>
-        spark.read.parquet(filePath)
+        spark.read.parquet(filePaths: _*)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
