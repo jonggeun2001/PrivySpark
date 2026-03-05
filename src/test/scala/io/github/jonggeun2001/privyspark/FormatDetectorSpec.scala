@@ -20,6 +20,10 @@ class FormatDetectorSpec extends AnyFunSuite {
     assert(FormatDetector.infer("/data/input.parquet").contains("parquet"))
   }
 
+  test("infers orc format") {
+    assert(FormatDetector.infer("/data/input.orc").contains("orc"))
+  }
+
   test("returns empty for unsupported extensions") {
     assert(FormatDetector.infer("/data/input.xlsx").isEmpty)
   }

@@ -1,0 +1,4 @@
+name,email,phone,note
+alice,alice@example.com,010-1234-5678,hello
+bob,bob@example.com,02-987-6543,test
+charlie,invalid-email,abc,none

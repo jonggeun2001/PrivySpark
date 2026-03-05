@@ -8,8 +8,9 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, Paths}
 import java.util.Comparator
+import scala.collection.mutable.ArrayBuffer
 
 @RunWith(classOf[JUnitRunner])
 class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
@@ -232,6 +233,86 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure and scanGroup detect expected pii counts from bundled dataset") {
+    val datasetDir = resolveResourcePath("datasets/pii-sample")
+    val timestamp = "2026-03-05T00:00:00Z"
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val plan = PrivySparkApp.scanDirectoryStructure(
+      spark,
+      datasetDir.toString,
+      datasetDir.toString,
+      timestamp
+    )
+
+    assert(plan.errors.isEmpty)
+    assert(plan.totalFiles == 2)
+
+    val results = ArrayBuffer.empty[ScanResult]
+    val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
+
+    plan.groups.foreach { group =>
+      val (groupResults, groupErrors) = PrivySparkApp.scanGroup(
+        spark,
+        datasetDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+      results ++= groupResults
+      errors ++= groupErrors
+    }
+
+    assert(errors.isEmpty)
+
+    val actual = results
+      .map(result => ((result.file_identifier, result.column_name, result.pii_type), result.match_count))
+      .toMap
+    val expected = Map(
+      (("customers.csv", "email", "email"), 2L),
+      (("customers.csv", "phone", "phone"), 2L),
+      (("events.jsonl", "user_email", "email"), 2L),
+      (("events.jsonl", "contact_phone", "phone"), 2L)
+    )
+
+    assert(actual == expected)
+  }
+
+  test("scanDirectoryStructure and scanGroup detect expected pii counts from parquet and orc files") {
+    val outputDir = Files.createTempDirectory("privyspark-columnar-fixture-")
+    val timestamp = "2026-03-05T00:00:00Z"
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    try {
+      val parquetFilePath = createColumnarDataFile(outputDir, "parquet")
+      val orcFilePath = createColumnarDataFile(outputDir, "orc")
+
+      val (parquetResults, parquetErrors) = scanWithRules(parquetFilePath, parquetFilePath, rules, timestamp)
+      val (orcResults, orcErrors) = scanWithRules(orcFilePath, orcFilePath, rules, timestamp)
+
+      assert(parquetErrors.isEmpty)
+      assert(orcErrors.isEmpty)
+
+      assert(parquetResults.map(result => (result.column_name, result.pii_type)).toSet == Set(("email", "email"), ("phone", "phone")))
+      assert(orcResults.map(result => (result.column_name, result.pii_type)).toSet == Set(("email", "email"), ("phone", "phone")))
+      assert(parquetResults.forall(_.match_count == 2L))
+      assert(orcResults.forall(_.match_count == 2L))
+      assert(parquetResults.forall(_.file_identifier.toLowerCase.endsWith(".parquet")))
+      assert(orcResults.forall(_.file_identifier.toLowerCase.endsWith(".orc")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("writeReports stores scan results and errors in csv output paths") {
     val outputDir = Files.createTempDirectory("privyspark-write-reports-")
 
@@ -284,6 +365,82 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def writeText(path: Path, content: String): Unit = {
     Files.write(path, content.getBytes(StandardCharsets.UTF_8))
+  }
+
+  private def scanWithRules(
+    inputPath: String,
+    datasetPath: String,
+    rules: Seq[PiiRule],
+    timestamp: String
+  ): (Seq[ScanResult], Seq[ScanError]) = {
+    val plan = PrivySparkApp.scanDirectoryStructure(
+      spark,
+      inputPath,
+      datasetPath,
+      timestamp
+    )
+
+    val results = ArrayBuffer.empty[ScanResult]
+    val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
+
+    plan.groups.foreach { group =>
+      val (groupResults, groupErrors) = PrivySparkApp.scanGroup(
+        spark,
+        datasetPath,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+      results ++= groupResults
+      errors ++= groupErrors
+    }
+
+    (results.toSeq, errors.toSeq)
+  }
+
+  private def createColumnarDataFile(outputDir: Path, format: String): String = {
+    import spark.implicits._
+
+    val sourceDf = Seq(
+      ("alpha@example.com", "010-1111-2222", "ok"),
+      ("invalid-email", "not-phone", "skip"),
+      ("beta@example.com", "031-555-7777", "ok")
+    ).toDF("email", "phone", "message")
+
+    val targetDir = outputDir.resolve(s"fixture-$format")
+    format match {
+      case "parquet" => sourceDf.coalesce(1).write.mode("overwrite").parquet(targetDir.toString)
+      case "orc" => sourceDf.coalesce(1).write.mode("overwrite").orc(targetDir.toString)
+      case _ => fail(s"Unsupported columnar fixture format: $format")
+    }
+
+    findDataFile(targetDir, s".$format")
+      .map(_.toString)
+      .getOrElse(fail(s"Failed to locate generated $format data file under $targetDir"))
+  }
+
+  private def findDataFile(root: Path, extension: String): Option[Path] = {
+    val stream = Files.walk(root)
+    try {
+      val iter = stream.iterator()
+      var found: Option[Path] = None
+      while (iter.hasNext && found.isEmpty) {
+        val candidate = iter.next()
+        if (Files.isRegularFile(candidate) && candidate.getFileName.toString.toLowerCase.endsWith(extension)) {
+          found = Some(candidate)
+        }
+      }
+      found
+    } finally {
+      stream.close()
+    }
+  }
+
+  private def resolveResourcePath(resource: String): Path = {
+    val resourceUrl = Option(getClass.getClassLoader.getResource(resource))
+      .getOrElse(fail(s"Missing test resource: $resource"))
+    Paths.get(resourceUrl.toURI)
   }
 
   private def deleteRecursively(path: Path): Unit = {
