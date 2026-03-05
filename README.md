@@ -43,6 +43,17 @@ bin/privyspark-submit \
 스크립트는 `spark-submit --master yarn --deploy-mode cluster`를 기본 사용합니다.
 또한 기본 규칙 파일(`config/rules/default.yaml`)을 `--files`로 YARN 드라이버에 배포합니다.
 
+
+## GitHub Release 산출물
+- 태그 `v*` 푸시 시 GitHub Actions가 `./gradlew clean jar`를 실행하고 JAR + SHA256 파일을 Release 자산으로 업로드합니다.
+- 수동 실행은 GitHub Actions의 `Release Artifact` 워크플로우에서 **이미 존재하는 태그**(`tag`)를 입력해 실행합니다.
+
+예시:
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## 규칙셋 파일 형식
 `config/rules/default.yaml` 예시:
 ```yaml
