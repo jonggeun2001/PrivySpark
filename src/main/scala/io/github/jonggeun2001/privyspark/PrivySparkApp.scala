@@ -73,7 +73,7 @@ object PrivySparkApp {
       throw new IllegalArgumentException(s"Input path not found: $inputPath")
     }
 
-    if (fs.isFile(path)) {
+    if (fs.getFileStatus(path).isFile) {
       Seq(path.toString)
     } else {
       val iter = fs.listFiles(path, true)
@@ -99,7 +99,7 @@ object PrivySparkApp {
     val fileIdentifier = new Path(filePath).getName
 
     try {
-      val format = inferFormat(filePath).getOrElse {
+      val format = FormatDetector.infer(filePath).getOrElse {
         return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $filePath"))
       }
 
@@ -137,16 +137,8 @@ object PrivySparkApp {
       }
     } catch {
       case NonFatal(e) =>
-        Left(ScanError(datasetPath, timestamp, fileIdentifier, e.getMessage))
+        Left(ScanError(datasetPath, timestamp, fileIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
     }
-  }
-
-  private def inferFormat(filePath: String): Option[String] = {
-    val lower = filePath.toLowerCase
-    if (lower.endsWith(".csv")) Some("csv")
-    else if (lower.endsWith(".json") || lower.endsWith(".jsonl") || lower.endsWith(".ndjson")) Some("json")
-    else if (lower.endsWith(".parquet")) Some("parquet")
-    else None
   }
 
   private def readSource(spark: SparkSession, format: String, filePath: String): DataFrame = {
