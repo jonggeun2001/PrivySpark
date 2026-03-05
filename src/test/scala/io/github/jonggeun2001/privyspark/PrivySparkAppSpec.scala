@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.model.PiiRule
+import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
@@ -187,6 +187,56 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(results.exists(_.column_name == "email"))
     } finally {
       deleteRecursively(inputDir)
+    }
+  }
+
+  test("writeReports stores scan results and errors in csv output paths") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-")
+
+    try {
+      val results = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 3L,
+          match_ratio = 0.6,
+          confidence = 0.6
+        ),
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "part-0002.csv",
+          column_name = "phone",
+          pii_type = "phone",
+          match_count = 1L,
+          match_ratio = 0.2,
+          confidence = 0.2
+        )
+      )
+
+      val errors = Seq(
+        ScanError(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "broken.csv",
+          error_message = "Unsupported file format"
+        )
+      )
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
+
+      val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
+      val errorCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors")
+
+      assert(resultCsvDf.count() == 2L)
+      assert(errorCsvDf.count() == 1L)
+      assert(resultCsvDf.columns.toSet.contains("file_identifier"))
+      assert(errorCsvDf.columns.toSet.contains("error_message"))
+    } finally {
+      deleteRecursively(outputDir)
     }
   }
 

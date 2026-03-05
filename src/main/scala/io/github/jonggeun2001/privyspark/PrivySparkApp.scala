@@ -425,7 +425,7 @@ object PrivySparkApp {
     }
   }
 
-  private def writeReports(
+  private[privyspark] def writeReports(
     spark: SparkSession,
     outputRoot: String,
     results: Seq[ScanResult],
