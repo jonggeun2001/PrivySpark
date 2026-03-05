@@ -12,9 +12,11 @@ repositories {
 }
 
 val scalaVersion = "2.12.19"
-val sparkVersion = "3.5.1"
+val sparkVersion = "3.5.3"
 val sparkExcelVersion = "3.5.1_0.20.4"
 val scalaTestVersion = "3.2.19"
+val jvmTarget = "1.8"
+val javaRelease = "8"
 
 dependencies {
     implementation("org.scala-lang:scala-library:$scalaVersion")
@@ -36,7 +38,17 @@ application {
 }
 
 tasks.withType<ScalaCompile>().configureEach {
-    scalaCompileOptions.additionalParameters = listOf("-deprecation", "-feature", "-unchecked")
+    scalaCompileOptions.additionalParameters = listOf(
+        "-deprecation",
+        "-feature",
+        "-unchecked",
+        "-target:jvm-$jvmTarget",
+        "-release:$javaRelease",
+    )
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(8)
 }
 
 tasks.test {

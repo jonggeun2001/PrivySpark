@@ -19,6 +19,11 @@
 
 `--path`, `--output`은 절대경로(또는 URI)만 허용합니다.
 
+기본 버전 타겟:
+- Spark `3.5.3`
+- Scala `2.12`
+- JVM 바이트코드 `1.8`
+
 ## 코딩 스타일 및 네이밍 규칙
 - Scala 2.12 기준, 들여쓰기 2칸.
 - 패키지 루트는 `io.github.jonggeun2001.privyspark`를 유지.

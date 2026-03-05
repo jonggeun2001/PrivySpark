@@ -16,6 +16,9 @@
 
 ### 2.2 실행 환경
 - Spark on YARN cluster (`--master yarn --deploy-mode cluster`)
+- Spark 버전 타겟: `3.5.3`
+- Scala 버전 타겟: `2.12`
+- JVM 바이트코드 타겟: `1.8`
 - 클러스터 외부 네트워크 차단 환경을 지원해야 함
 - 배포 아티팩트는 Shadow fat JAR(`*-all.jar`)를 기본으로 사용
 - 기본 규칙셋 파일은 `spark-submit --files`로 드라이버에 배포

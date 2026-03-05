@@ -20,6 +20,11 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - `bin/privyspark-submit`: YARN cluster 제출 스크립트
 - `docs/PRD.md`: 요구사항 문서
 
+## 빌드 타겟 버전
+- Spark: `3.5.3`
+- Scala: `2.12`
+- JVM 바이트코드 타겟: `1.8`
+
 ## 빌드
 ```bash
 ./gradlew clean shadowJar
