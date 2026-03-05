@@ -49,6 +49,23 @@ bin/privyspark-submit \
 오프라인 YARN 환경 대응을 위해 기본적으로 `--packages`를 사용하지 않으며, Shadow fat JAR(`*-all.jar`)를 제출합니다.
 또한 기본 규칙 파일(`config/rules/default.yaml`)을 `--files`로 YARN 드라이버에 배포합니다.
 
+## spark-submit 직접 실행
+```bash
+spark-submit \
+  --class io.github.jonggeun2001.privyspark.PrivySparkApp \
+  --master yarn \
+  --deploy-mode cluster \
+  --files /abs/path/config/rules/default.yaml#default-rules.yaml \
+  /abs/path/privyspark-v0.1.1-all.jar \
+  scan \
+  --path hdfs:///data/input \
+  --output hdfs:///data/privyspark-report \
+  --ruleset default \
+  --sample-ratio 0.2
+```
+
+커스텀 ruleset 사용 시 `--files /abs/path/my-rules.yaml#my-rules.yaml`와 `--ruleset my-rules.yaml`를 함께 지정합니다.
+
 
 ## GitHub Release 산출물
 - 태그 `v*` 푸시 시 GitHub Actions가 `./gradlew clean shadowJar`를 실행합니다.
