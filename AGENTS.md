@@ -50,9 +50,8 @@
 
 ## Release 운영
 - 워크플로우: `.github/workflows/release-artifact.yml`
-- 트리거: `v*` 태그 푸시 또는 수동 실행(`workflow_dispatch`)
-- 수동 실행 시 입력한 `tag`를 checkout하여 해당 태그 커밋 기준으로 릴리즈 자산 생성
-- 결과물: `build/libs/*-all.jar`, `build/libs/*-all.jar.sha256`를 GitHub Release에서 다운로드 가능
+- 트리거: `v*` 태그 푸시
+- 결과물: `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`를 GitHub Release에서 다운로드 가능
 
 ## 오프라인 배포
 - 기본 제출 스크립트는 `--packages`를 사용하지 않습니다.
