@@ -78,6 +78,48 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure throws when input path does not exist") {
+    val missingPath = s"/tmp/privyspark-missing-${System.nanoTime()}"
+
+    val exception = intercept[IllegalArgumentException] {
+      PrivySparkApp.scanDirectoryStructure(
+        spark,
+        missingPath,
+        missingPath,
+        "2026-03-05T00:00:00Z"
+      )
+    }
+
+    assert(exception.getMessage.contains("Input path not found"))
+  }
+
+  test("scanDirectoryStructure records unsupported files as errors and keeps supported groups") {
+    val inputDir = Files.createTempDirectory("privyspark-unsupported-format-")
+
+    try {
+      writeText(inputDir.resolve("supported.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(inputDir.resolve("unsupported.xlsx"), "binary-placeholder")
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-03-05T00:00:00Z"
+      )
+
+      assert(plan.totalFiles == 2)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("supported.csv"))
+      assert(plan.errors.size == 1)
+      assert(plan.errors.head.file_identifier == "unsupported.xlsx")
+      assert(plan.errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroupBatch returns file-level detections for grouped files") {
     val inputDir = Files.createTempDirectory("privyspark-group-batch-")
 
