@@ -1,6 +1,7 @@
 plugins {
     scala
     application
+    id("com.gradleup.shadow") version "9.0.0"
 }
 
 group = "io.github.jonggeun2001"
@@ -43,6 +44,14 @@ tasks.test {
 }
 
 tasks.jar {
+    manifest {
+        attributes["Main-Class"] = "io.github.jonggeun2001.privyspark.PrivySparkApp"
+    }
+}
+
+tasks.shadowJar {
+    archiveClassifier.set("all")
+    mergeServiceFiles()
     manifest {
         attributes["Main-Class"] = "io.github.jonggeun2001.privyspark.PrivySparkApp"
     }

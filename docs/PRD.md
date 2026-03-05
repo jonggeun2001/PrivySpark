@@ -16,6 +16,8 @@
 
 ### 2.2 실행 환경
 - Spark on YARN cluster (`--master yarn --deploy-mode cluster`)
+- 클러스터 외부 네트워크 차단 환경을 지원해야 함
+- 배포 아티팩트는 Shadow fat JAR(`*-all.jar`)를 기본으로 사용
 - 기본 규칙셋 파일은 `spark-submit --files`로 드라이버에 배포
 
 ### 2.3 입력 처리

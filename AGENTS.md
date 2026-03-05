@@ -11,7 +11,7 @@
 - `docs/PRD.md`: 제품 요구사항
 
 ## 빌드, 테스트, 개발 명령어
-- `./gradlew clean jar`: 컴파일 및 JAR 생성
+- `./gradlew clean shadowJar`: Shadow fat JAR 생성(`build/libs/*-all.jar`)
 - `./gradlew test`: 테스트 실행
 - `bin/privyspark-submit scan --path /abs/input --output /abs/output --ruleset default --sample-ratio 0.2`: YARN cluster 실행
 - `rg --files`: 파일 구조 빠른 탐색
@@ -47,7 +47,12 @@
 - 워크플로우: `.github/workflows/release-artifact.yml`
 - 트리거: `v*` 태그 푸시 또는 수동 실행(`workflow_dispatch`)
 - 수동 실행 시 입력한 `tag`를 checkout하여 해당 태그 커밋 기준으로 릴리즈 자산 생성
-- 결과물: `build/libs/*.jar`, `build/libs/*.jar.sha256`를 GitHub Release에서 다운로드 가능
+- 결과물: `build/libs/*-all.jar`, `build/libs/*-all.jar.sha256`를 GitHub Release에서 다운로드 가능
+
+## 오프라인 배포
+- 기본 제출 스크립트는 `--packages`를 사용하지 않습니다.
+- 클러스터 외부 네트워크가 차단된 환경에서는 Shadow fat JAR를 사용합니다.
+- Spark 런타임 라이브러리는 클러스터 제공을 전제로 하며(`compileOnly`), 앱 의존성은 Shadow JAR에 포함됩니다.
 
 ## 보안 및 설정 주의사항
 - 리포트에 실제 PII 원문값은 저장하지 않습니다.

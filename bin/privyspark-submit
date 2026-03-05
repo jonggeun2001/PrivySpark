@@ -6,23 +6,28 @@ if [[ $# -eq 0 ]]; then
   exit 1
 fi
 
-DEFAULT_JAR="$(ls -1 build/libs/privyspark-*.jar 2>/dev/null | head -n 1 || true)"
+DEFAULT_JAR="$(ls -1 build/libs/privyspark-*-all.jar 2>/dev/null | head -n 1 || true)"
 APP_JAR="${PRIVYSPARK_APP_JAR:-${DEFAULT_JAR}}"
 MAIN_CLASS="io.github.jonggeun2001.privyspark.PrivySparkApp"
-PACKAGES="${PRIVYSPARK_PACKAGES:-com.github.scopt:scopt_2.12:4.1.0,org.yaml:snakeyaml:2.2,com.crealytics:spark-excel_2.12:3.5.1_0.20.4}"
 SPARK_FILES="${PRIVYSPARK_SPARK_FILES:-config/rules/default.yaml#default-rules.yaml}"
+PACKAGES="${PRIVYSPARK_PACKAGES:-}"
 
 if [[ -z "${APP_JAR}" || ! -f "${APP_JAR}" ]]; then
-  echo "Application jar not found. Build first: ./gradlew clean jar"
+  echo "Application jar not found. Build first: ./gradlew clean shadowJar"
   echo "Or set PRIVYSPARK_APP_JAR explicitly."
   exit 1
+fi
+
+PACKAGE_ARGS=()
+if [[ -n "${PACKAGES}" ]]; then
+  PACKAGE_ARGS=(--packages "${PACKAGES}")
 fi
 
 spark-submit \
   --class "${MAIN_CLASS}" \
   --master yarn \
   --deploy-mode cluster \
-  --packages "${PACKAGES}" \
+  "${PACKAGE_ARGS[@]}" \
   --files "${SPARK_FILES}" \
   "${APP_JAR}" \
   "$@"
