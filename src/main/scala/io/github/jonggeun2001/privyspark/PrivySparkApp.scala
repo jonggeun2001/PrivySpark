@@ -203,12 +203,31 @@ object PrivySparkApp {
   ): Either[String, String] = {
     try {
       val schema = readSchemaSource(spark, format, filePath).schema
-      val schemaSignature = schema.fieldNames.map(_.toLowerCase).sorted.mkString("|")
+      val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
+      val schemaSignature = if (format == "csv") {
+        // CSV는 헤더 순서가 데이터 매핑에 직접 영향을 주므로 순서를 유지한다.
+        normalizedFieldNames.mkString("|")
+      } else {
+        normalizedFieldNames.sorted.mkString("|")
+      }
       Right(schemaSignature)
     } catch {
       case NonFatal(e) =>
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
     }
+  }
+
+  private def resolveFileIdentifierColumn(columns: Seq[String]): String = {
+    val normalized = columns.map(_.toLowerCase).toSet
+    var candidate = FileIdentifierColumn
+    var index = 1
+
+    while (normalized.contains(candidate.toLowerCase)) {
+      candidate = s"${FileIdentifierColumn}_$index"
+      index += 1
+    }
+
+    candidate
   }
 
   private def readSchemaSource(spark: SparkSession, format: String, filePath: String): DataFrame = {
@@ -286,15 +305,16 @@ object PrivySparkApp {
     sampleRatio: Double,
     timestamp: String
   ): Seq[ScanResult] = {
-    val sourceDf = readSource(spark, group.format, group.filePaths)
-      .withColumn(FileIdentifierColumn, regexp_extract(input_file_name(), "([^/]+)$", 1))
+    val baseDf = readSource(spark, group.format, group.filePaths)
+    val fileIdentifierColumn = resolveFileIdentifierColumn(baseDf.columns.toSeq)
+    val sourceDf = baseDf.withColumn(fileIdentifierColumn, regexp_extract(input_file_name(), "([^/]+)$", 1))
 
     val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
 
     sampledDf.cache()
     try {
       val sampledRowsByFile = sampledDf
-        .groupBy(col(FileIdentifierColumn))
+        .groupBy(col(fileIdentifierColumn))
         .count()
         .collect()
         .flatMap { row =>
@@ -311,7 +331,7 @@ object PrivySparkApp {
       if (sampledRowsByFile.isEmpty) {
         Seq.empty
       } else {
-        val matchCounts = DetectionAggregator.aggregateByFile(sampledDf, FileIdentifierColumn, rules)
+        val matchCounts = DetectionAggregator.aggregateByFile(sampledDf, fileIdentifierColumn, rules)
         matchCounts.flatMap { matchCount =>
           sampledRowsByFile.get(matchCount.fileIdentifier).map { sampledRowCount =>
             val matchRatio = matchCount.count.toDouble / sampledRowCount.toDouble

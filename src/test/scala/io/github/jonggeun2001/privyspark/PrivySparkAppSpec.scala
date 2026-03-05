@@ -52,6 +52,32 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure splits CSV files when header order differs") {
+    val inputDir = Files.createTempDirectory("privyspark-schema-order-")
+
+    try {
+      writeText(inputDir.resolve("ordered_a.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(inputDir.resolve("ordered_b.csv"),
+        "email,name\n" +
+          "bob@example.com,bob\n")
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-03-05T00:00:00Z"
+      )
+
+      val csvGroups = plan.groups.filter(_.format == "csv")
+      assert(csvGroups.size == 2)
+      assert(csvGroups.forall(_.filePaths.size == 1))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroupBatch returns file-level detections for grouped files") {
     val inputDir = Files.createTempDirectory("privyspark-group-batch-")
 
@@ -126,6 +152,39 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(_.file_identifier).toSet == Set("part-a.csv", "part-b.csv"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupBatch keeps scanning source column even when internal identifier column exists") {
+    val inputDir = Files.createTempDirectory("privyspark-file-id-column-")
+
+    try {
+      val file = inputDir.resolve("part-with-internal-name.csv")
+      writeText(file,
+        "__privyspark_file_identifier,email\n" +
+          "alpha@example.com,beta@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "__privyspark_file_identifier|email",
+        filePaths = Seq(file.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val results = PrivySparkApp.scanGroupBatch(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-03-05T00:00:00Z"
+      )
+
+      assert(results.exists(_.column_name == "__privyspark_file_identifier"))
+      assert(results.exists(_.column_name == "email"))
     } finally {
       deleteRecursively(inputDir)
     }
