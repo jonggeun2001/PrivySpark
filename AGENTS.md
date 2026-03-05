@@ -8,7 +8,8 @@
 - `src/test/scala/io/github/jonggeun2001/privyspark`: 단위 테스트
 - `config/rules/default.yaml`: 기본 정규식 규칙셋
 - `bin/privyspark-submit`: YARN cluster 제출 스크립트
-- `docs/PRD.md`: 제품 요구사항
+- `docs/PRD-Functional.md`: 기능 요구사항
+- `docs/PRD-Architecture.md`: 아키텍처 요구사항
 
 ## 빌드, 테스트, 개발 명령어
 - `./gradlew clean shadowJar`: Shadow fat JAR 생성(`build/libs/*-all.jar`)
@@ -46,7 +47,7 @@
   - 변경 목적과 범위
   - CLI/출력 스키마 영향
   - 테스트 결과(`./gradlew test`) 또는 미실행 사유
-  - 요구사항 변경 시 `README.md`와 `docs/PRD.md` 동시 반영
+  - 요구사항 변경 시 `README.md`, `docs/PRD-Functional.md`, `docs/PRD-Architecture.md` 동시 반영
 
 ## Release 운영
 - 워크플로우: `.github/workflows/release-artifact.yml`
