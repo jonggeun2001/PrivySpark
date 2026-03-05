@@ -40,7 +40,7 @@
 - 비결정적 랜덤 샘플링(seed 고정 없음).
 
 ### 2.6 출력
-- 포맷: Parquet + Excel(`spark-excel`).
+- 포맷: Parquet + CSV(Spark 기본 포맷).
 - 결과 리포트는 아래 필드 포함:
   - `dataset_path`, `scan_timestamp`, `file_identifier`, `column_name`, `pii_type`, `match_count`, `match_ratio`, `confidence`
 - MVP의 `confidence = match_ratio`.
@@ -61,5 +61,5 @@
 1. 절대경로/URI 검증이 동작하고, 상대경로 입력 시 실패한다.
 2. YARN cluster 모드에서 실행 가능하다.
 3. 파일 단위 정규식 탐지가 동작하고 `match_count`, `match_ratio`, `confidence`를 생성한다.
-4. 결과를 Parquet + Excel로 저장한다.
+4. 결과를 Parquet + CSV로 저장한다.
 5. 일부 파일 실패 시 오류 리포트를 남기고 나머지 파일 처리를 계속한다.

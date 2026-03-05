@@ -425,7 +425,7 @@ object PrivySparkApp {
     }
   }
 
-  private def writeReports(
+  private[privyspark] def writeReports(
     spark: SparkSession,
     outputRoot: String,
     results: Seq[ScanResult],
@@ -439,22 +439,20 @@ object PrivySparkApp {
 
     val resultParquetPath = s"$root/parquet/scan_results"
     val errorParquetPath = s"$root/parquet/scan_errors"
-    val resultExcelPath = s"$root/excel/scan_results.xlsx"
-    val errorExcelPath = s"$root/excel/scan_errors.xlsx"
+    val resultCsvPath = s"$root/csv/scan_results"
+    val errorCsvPath = s"$root/csv/scan_errors"
 
     resultDf.write.mode("overwrite").parquet(resultParquetPath)
     errorDf.write.mode("overwrite").parquet(errorParquetPath)
 
     resultDf.write
-      .format("com.crealytics.spark.excel")
       .option("header", "true")
       .mode("overwrite")
-      .save(resultExcelPath)
+      .csv(resultCsvPath)
 
     errorDf.write
-      .format("com.crealytics.spark.excel")
       .option("header", "true")
       .mode("overwrite")
-      .save(errorExcelPath)
+      .csv(errorCsvPath)
   }
 }

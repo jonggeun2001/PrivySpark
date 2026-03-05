@@ -13,7 +13,6 @@ repositories {
 
 val scalaVersion = "2.12.19"
 val sparkVersion = "3.5.3"
-val sparkExcelVersion = "3.5.1_0.20.4"
 val scalaTestVersion = "3.2.19"
 val jvmTarget = "1.8"
 val javaRelease = "8"
@@ -26,7 +25,6 @@ dependencies {
 
     implementation("com.github.scopt:scopt_2.12:4.1.0")
     implementation("org.yaml:snakeyaml:2.2")
-    implementation("com.crealytics:spark-excel_2.12:$sparkExcelVersion")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.scalatest:scalatest_2.12:$scalaTestVersion")
