@@ -31,6 +31,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.scalatest:scalatest_2.12:$scalaTestVersion")
     testImplementation("org.scalatestplus:junit-4-13_2.12:3.2.19.0")
+    testImplementation("org.apache.spark:spark-sql_2.12:$sparkVersion")
 }
 
 application {
@@ -53,6 +54,11 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.test {
     useJUnit()
+    jvmArgs(
+        "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+    )
 }
 
 tasks.jar {

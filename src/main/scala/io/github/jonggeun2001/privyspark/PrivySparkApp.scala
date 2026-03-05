@@ -129,7 +129,7 @@ object PrivySparkApp {
           Right(fileResults)
         }
       } finally {
-        sampledDf.unpersist(blocking = false)
+        sampledDf.unpersist(blocking = true)
       }
     } catch {
       case NonFatal(e) =>
