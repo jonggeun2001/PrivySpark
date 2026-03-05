@@ -15,6 +15,7 @@
 - `./gradlew test`: 테스트 실행
 - `bin/privyspark-submit scan --path /abs/input --output /abs/output --ruleset default --sample-ratio 0.2`: YARN cluster 실행
 - `rg --files`: 파일 구조 빠른 탐색
+- `git tag v0.1.0 && git push origin v0.1.0`: Release Artifact 워크플로우 트리거
 
 `--path`, `--output`은 절대경로(또는 URI)만 허용합니다.
 
@@ -41,6 +42,11 @@
   - CLI/출력 스키마 영향
   - 테스트 결과(`./gradlew test`) 또는 미실행 사유
   - 요구사항 변경 시 `README.md`와 `docs/PRD.md` 동시 반영
+
+## Release 운영
+- 워크플로우: `.github/workflows/release-artifact.yml`
+- 트리거: `v*` 태그 푸시 또는 수동 실행(`workflow_dispatch`)
+- 결과물: `build/libs/*.jar`, `build/libs/*.jar.sha256`를 GitHub Release에서 다운로드 가능
 
 ## 보안 및 설정 주의사항
 - 리포트에 실제 PII 원문값은 저장하지 않습니다.

@@ -1,0 +1,75 @@
+name: Release Artifact
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "릴리즈 태그 (예: v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Jar
+        run: ./gradlew clean jar
+
+      - name: Resolve release tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create checksums
+        run: |
+          shopt -s nullglob
+          jars=(build/libs/*.jar)
+          if [ ${#jars[@]} -eq 0 ]; then
+            echo "No jar files found in build/libs" >&2
+            exit 1
+          fi
+          for jar in "${jars[@]}"; do
+            sha256sum "$jar" > "$jar.sha256"
+          done
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: privyspark-${{ steps.meta.outputs.tag }}
+          path: |
+            build/libs/*.jar
+            build/libs/*.jar.sha256
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: |
+            build/libs/*.jar
+            build/libs/*.jar.sha256
+          fail_on_unmatched_files: true
