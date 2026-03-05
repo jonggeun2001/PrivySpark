@@ -46,6 +46,7 @@
 ## Release 운영
 - 워크플로우: `.github/workflows/release-artifact.yml`
 - 트리거: `v*` 태그 푸시 또는 수동 실행(`workflow_dispatch`)
+- 수동 실행 시 입력한 `tag`를 checkout하여 해당 태그 커밋 기준으로 릴리즈 자산 생성
 - 결과물: `build/libs/*.jar`, `build/libs/*.jar.sha256`를 GitHub Release에서 다운로드 가능
 
 ## 보안 및 설정 주의사항
