@@ -20,7 +20,8 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - `src/test/scala/io/github/jonggeun2001/privyspark`: 테스트 코드
 - `config/rules/default.yaml`: 기본 규칙셋
 - `bin/privyspark-submit`: YARN cluster 제출 스크립트
-- `docs/PRD.md`: 요구사항 문서
+- `docs/PRD-Functional.md`: 기능 요구사항 문서
+- `docs/PRD-Architecture.md`: 아키텍처 요구사항 문서
 
 ## 빌드 타겟 버전
 - Spark: `3.5.3`
