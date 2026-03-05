@@ -244,6 +244,8 @@ object PrivySparkApp {
           .json(filePath)
       case "parquet" =>
         spark.read.parquet(filePath)
+      case "orc" =>
+        spark.read.orc(filePath)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
@@ -420,6 +422,8 @@ object PrivySparkApp {
           .json(filePaths: _*)
       case "parquet" =>
         spark.read.parquet(filePaths: _*)
+      case "orc" =>
+        spark.read.orc(filePaths: _*)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }

@@ -9,7 +9,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - 디렉토리 구조 선스캔 후 `(디렉토리, 포맷)` 그룹 단위로 배치 처리
 - 그룹 내부는 파일별 스키마 시그니처로 재분할하고, 과대 그룹은 파일 단위로 자동 폴백
 - 외부 규칙 파일 기반 정규식 탐지 (배치 집계 + 임계치 초과 시 안전 폴백)
-- 지원 확장자: `csv`, `json`, `jsonl`, `ndjson`, `parquet` (그 외 포맷은 오류 리포트로 분류)
+- 지원 확장자: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc` (그 외 포맷은 오류 리포트로 분류)
 - 샘플링 지원(`--sample-ratio`, 기본값 `0.2`, 비결정적 랜덤)
 - 결과 출력: Parquet + CSV (Spark 기본 포맷)
 - 실패 파일은 스킵하고 별도 오류 리포트 생성
@@ -18,6 +18,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 ## 프로젝트 구조
 - `src/main/scala/io/github/jonggeun2001/privyspark`: 애플리케이션 코드
 - `src/test/scala/io/github/jonggeun2001/privyspark`: 테스트 코드
+- `src/test/resources/datasets`: 검증용 테스트 데이터셋
 - `config/rules/default.yaml`: 기본 규칙셋
 - `bin/privyspark-submit`: YARN cluster 제출 스크립트
 - `docs/PRD-Functional.md`: 기능 요구사항 문서
