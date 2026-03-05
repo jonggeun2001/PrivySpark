@@ -51,8 +51,8 @@ bin/privyspark-submit \
 
 
 ## GitHub Release 산출물
-- 태그 `v*` 푸시 시 GitHub Actions가 `./gradlew clean shadowJar`를 실행하고 Shadow JAR(`*-all.jar`) + SHA256 파일을 Release 자산으로 업로드합니다.
-- 수동 실행은 GitHub Actions의 `Release Artifact` 워크플로우에서 **이미 존재하는 태그**(`tag`)를 입력해 실행합니다.
+- 태그 `v*` 푸시 시 GitHub Actions가 `./gradlew clean shadowJar`를 실행합니다.
+- 릴리즈 자산 파일명은 태그를 포함한 `privyspark-<tag>-all.jar` 및 `privyspark-<tag>-all.jar.sha256` 형식으로 업로드됩니다.
 
 예시:
 ```bash
