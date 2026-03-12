@@ -260,6 +260,38 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules uses dot for the root directory group identifier to avoid nested collisions") {
+    val parentDir = Files.createTempDirectory("privyspark-root-directory-group-")
+    val datasetDir = Files.createDirectories(parentDir.resolve("users"))
+    val nestedDir = Files.createDirectories(datasetDir.resolve("users"))
+    val timestamp = "2026-03-12T00:00:00Z"
+
+    try {
+      writeText(datasetDir.resolve("root-0001.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(datasetDir.resolve("root-0002.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n")
+      writeText(nestedDir.resolve("nested-0001.csv"),
+        "name,email\n" +
+          "carol,carol@example.com\n")
+      writeText(nestedDir.resolve("nested-0002.csv"),
+        "name,email\n" +
+          "dave,dave@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(datasetDir.toString, datasetDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(_.file_identifier).toSet == Set(".", "users"))
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set((".", "email", 2L), ("users", "email", 2L)))
+    } finally {
+      deleteRecursively(parentDir)
+    }
+  }
+
   test("scanWithRules keeps file identifiers when grouped directory has pre-scan errors") {
     val inputDir = Files.createTempDirectory("privyspark-directory-group-prescan-error-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))

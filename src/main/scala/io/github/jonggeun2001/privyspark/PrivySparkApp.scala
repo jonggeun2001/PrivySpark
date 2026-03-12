@@ -50,6 +50,18 @@ object PrivySparkApp {
   }
 
   private[privyspark] def resolveRelativeIdentifier(datasetPath: String, targetPath: String): String = {
+    resolveRelativeIdentifier(datasetPath, targetPath, useCurrentDirectoryMarker = false)
+  }
+
+  private def resolveDirectoryIdentifier(datasetPath: String, directoryPath: String): String = {
+    resolveRelativeIdentifier(datasetPath, directoryPath, useCurrentDirectoryMarker = true)
+  }
+
+  private def resolveRelativeIdentifier(
+    datasetPath: String,
+    targetPath: String,
+    useCurrentDirectoryMarker: Boolean
+  ): String = {
     val datasetUri = new Path(datasetPath).toUri.normalize()
     val targetUri = new Path(targetPath).toUri.normalize()
 
@@ -64,7 +76,7 @@ object PrivySparkApp {
     if (!schemesCompatible || !authoritiesCompatible) {
       fallbackIdentifier(targetPath)
     } else if (datasetComparablePath == targetComparablePath) {
-      fallbackIdentifier(targetPath)
+      if (useCurrentDirectoryMarker) "." else fallbackIdentifier(targetPath)
     } else {
       val prefix = if (datasetComparablePath == "/") "/" else s"$datasetComparablePath/"
       if (targetComparablePath.startsWith(prefix)) {
@@ -404,7 +416,7 @@ object PrivySparkApp {
       buildScanResults(
         datasetPath,
         timestamp,
-        resolveRelativeIdentifier(datasetPath, group.directoryPath),
+        resolveDirectoryIdentifier(datasetPath, group.directoryPath),
         sampledRowCount,
         aggregatedMatchCounts
       )
@@ -460,7 +472,7 @@ object PrivySparkApp {
             buildScanResults(
               datasetPath,
               timestamp,
-              resolveRelativeIdentifier(datasetPath, group.directoryPath),
+              resolveDirectoryIdentifier(datasetPath, group.directoryPath),
               sampledRowCount,
               DetectionAggregator.aggregate(sampledDf, rules)
             )
