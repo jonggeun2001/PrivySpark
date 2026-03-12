@@ -92,6 +92,28 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("metric_threshold_exceeded(1)"))
   }
 
+  test("logs dataset aggregation debug lifecycle") {
+    val df = Seq(
+      ("alpha@example.com", "010-1234-5678"),
+      ("beta@example.com", "010-9876-5432")
+    ).toDF("c1", "c2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val logs = captureStderr {
+      withDebugLoggingEnabled {
+        DetectionAggregator.aggregate(df, rules)
+      }
+    }
+
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_start scope=dataset"))
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_metrics_built scope=dataset"))
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_complete scope=dataset"))
+  }
+
   test("produces correct results when aggregation is split into batches") {
     val columnCount = 32
     val columns = (1 to columnCount).map(i => s"c$i")
@@ -195,6 +217,28 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("metric_threshold_exceeded(1)"))
   }
 
+  test("logs file aggregation debug lifecycle") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("beta.csv", "beta@example.com", "010-9999-8888")
+    ).toDF("file_id", "c1", "c2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val logs = captureStderr {
+      withDebugLoggingEnabled {
+        DetectionAggregator.aggregateByFile(df, "file_id", rules)
+      }
+    }
+
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_start scope=file"))
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_metrics_built scope=file"))
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_complete scope=file"))
+  }
+
   private def sortByKey(values: Seq[MatchCount]): Seq[MatchCount] = {
     values.sortBy(v => (v.columnName, v.piiType, v.count))
   }
@@ -215,6 +259,19 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       System.setErr(originalErr)
     }
     output.toString(StandardCharsets.UTF_8.name())
+  }
+
+  private def withDebugLoggingEnabled[A](block: => A): A = {
+    val previous = sys.props.get("privyspark.debug")
+    System.setProperty("privyspark.debug", "true")
+    try {
+      block
+    } finally {
+      previous match {
+        case Some(value) => System.setProperty("privyspark.debug", value)
+        case None => System.clearProperty("privyspark.debug")
+      }
+    }
   }
 
   private def legacyCounts(df: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {

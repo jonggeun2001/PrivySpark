@@ -81,6 +81,37 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure emits debug logs for planning lifecycle") {
+    val inputDir = Files.createTempDirectory("privyspark-debug-plan-")
+
+    try {
+      writeText(inputDir.resolve("users_a.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(inputDir.resolve("users_b.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          PrivySparkApp.scanDirectoryStructure(
+            spark,
+            inputDir.toString,
+            inputDir.toString,
+            "2026-03-12T00:00:00Z"
+          )
+        }
+      }
+
+      assert(logs.contains("[PrivySpark][DEBUG] scan_directory_structure_start"))
+      assert(logs.contains("[PrivySpark][DEBUG] scan_group_schema_split_start"))
+      assert(logs.contains("[PrivySpark][DEBUG] scan_group_planned"))
+      assert(logs.contains("[PrivySpark][DEBUG] scan_directory_structure_complete"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure marks a multi-file directory group to use directory identifier") {
     val inputDir = Files.createTempDirectory("privyspark-directory-identifier-plan-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
@@ -523,6 +554,50 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroupBatch emits debug logs for batch scan lifecycle") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-debug-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          PrivySparkApp.scanGroupBatch(
+            spark,
+            inputDir.toString,
+            group,
+            rules,
+            sampleRatio = 1.0,
+            timestamp = "2026-03-12T00:00:00Z"
+          )
+        }
+      }
+
+      assert(logs.contains("[PrivySpark][DEBUG] group_scan_batch_start"))
+      assert(logs.contains("[PrivySpark][DEBUG] read_source_start"))
+      assert(logs.contains("[PrivySpark][DEBUG] group_scan_batch_source_ready"))
+      assert(logs.contains("[PrivySpark][DEBUG] group_scan_batch_complete"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure and scanGroup detect expected pii counts from bundled dataset") {
     val datasetDir = resolveResourcePath("datasets/pii-sample")
     val timestamp = "2026-03-05T00:00:00Z"
@@ -669,6 +744,19 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       System.setErr(originalErr)
     }
     output.toString(StandardCharsets.UTF_8.name())
+  }
+
+  private def withDebugLoggingEnabled[A](block: => A): A = {
+    val previous = sys.props.get("privyspark.debug")
+    System.setProperty("privyspark.debug", "true")
+    try {
+      block
+    } finally {
+      previous match {
+        case Some(value) => System.setProperty("privyspark.debug", value)
+        case None => System.clearProperty("privyspark.debug")
+      }
+    }
   }
 
   private def scanWithRules(

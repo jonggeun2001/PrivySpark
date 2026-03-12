@@ -11,6 +11,11 @@ APP_JAR="${PRIVYSPARK_APP_JAR:-${DEFAULT_JAR}}"
 MAIN_CLASS="io.github.jonggeun2001.privyspark.PrivySparkApp"
 SPARK_FILES="${PRIVYSPARK_SPARK_FILES:-config/rules/default.yaml#default-rules.yaml}"
 PACKAGES="${PRIVYSPARK_PACKAGES:-}"
+DEBUG_ARGS=()
+
+if [[ -n "${PRIVYSPARK_DEBUG:-}" ]]; then
+  DEBUG_ARGS=(--conf "spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=${PRIVYSPARK_DEBUG}")
+fi
 
 if [[ -z "${APP_JAR}" || ! -f "${APP_JAR}" ]]; then
   echo "Application jar not found. Build first: ./gradlew clean shadowJar"
@@ -28,6 +33,7 @@ spark-submit \
   --master yarn \
   --deploy-mode cluster \
   "${PACKAGE_ARGS[@]}" \
+  "${DEBUG_ARGS[@]}" \
   --files "${SPARK_FILES}" \
   "${APP_JAR}" \
   "$@"

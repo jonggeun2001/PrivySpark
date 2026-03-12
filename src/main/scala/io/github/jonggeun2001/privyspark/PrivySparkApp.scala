@@ -34,9 +34,39 @@ object PrivySparkApp {
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
   private[privyspark] val MaxFilesPerGroupBatchScan = 1000
+  private val DebugPropertyName = "privyspark.debug"
+  private val DebugEnvName = "PRIVYSPARK_DEBUG"
 
   private def logDriver(message: String): Unit = {
     System.err.println(s"[PrivySpark] $message")
+  }
+
+  private def isDebugLoggingEnabled: Boolean = {
+    val rawValue = sys.props.get(DebugPropertyName).orElse(sys.env.get(DebugEnvName))
+    rawValue.exists { value =>
+      value.trim.toLowerCase match {
+        case "1" | "true" | "yes" | "on" => true
+        case _ => false
+      }
+    }
+  }
+
+  private def logDebug(event: String, fields: (String, Any)*): Unit = {
+    if (!isDebugLoggingEnabled) {
+      return
+    }
+
+    val suffix = if (fields.isEmpty) {
+      ""
+    } else {
+      fields.map {
+        case (key, value) =>
+          val renderedValue = if (value == null) "null" else value.toString
+          s"$key=$renderedValue"
+      }.mkString(" ", " ", "")
+    }
+
+    System.err.println(s"[PrivySpark][DEBUG] $event$suffix")
   }
 
   private def stripTrailingSlash(path: String): String = {
@@ -146,21 +176,54 @@ object PrivySparkApp {
   }
 
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
+    logDebug(
+      "scan_run_start",
+      "input_path" -> config.inputPath,
+      "output_path" -> config.outputPath,
+      "ruleset" -> config.ruleset,
+      "sample_ratio" -> config.sampleRatio
+    )
     val rules = RulesetLoader.load(config.ruleset)
+    logDebug("ruleset_loaded", "rules" -> rules.size, "ruleset" -> config.ruleset)
     val timestamp = Instant.now().toString
     val scanPlan = scanDirectoryStructure(spark, config.inputPath, config.inputPath, timestamp)
+    logDebug(
+      "scan_plan_ready",
+      "groups" -> scanPlan.groups.size,
+      "plan_errors" -> scanPlan.errors.size,
+      "total_files" -> scanPlan.totalFiles,
+      "directories" -> scanPlan.directoryCount
+    )
 
     val results = ArrayBuffer.empty[ScanResult]
     val errors = ArrayBuffer.empty[ScanError] ++ scanPlan.errors
 
     scanPlan.groups.foreach { group =>
+      logDebug(
+        "group_scan_dispatch",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "schema" -> group.schemaSignature,
+        "files" -> group.filePaths.size,
+        "use_directory_identifier" -> group.useDirectoryIdentifier
+      )
       val (groupResults, groupErrors) =
         scanGroup(spark, config.inputPath, group, rules, config.sampleRatio, timestamp)
       results ++= groupResults
       errors ++= groupErrors
+      logDebug(
+        "group_scan_recorded",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "schema" -> group.schemaSignature,
+        "result_rows" -> groupResults.size,
+        "error_rows" -> groupErrors.size
+      )
     }
 
+    logDebug("report_write_start", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
     writeReports(spark, config.outputPath, results.toSeq, errors.toSeq)
+    logDebug("report_write_complete", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
 
     println(
       s"[PrivySpark] scanned_files=${scanPlan.totalFiles}, grouped_dirs=${scanPlan.directoryCount}, groups=${scanPlan.groups.size}, detections=${results.size}, errors=${errors.size}"
@@ -173,6 +236,7 @@ object PrivySparkApp {
     datasetPath: String,
     timestamp: String
   ): DirectoryScanPlan = {
+    logDebug("scan_directory_structure_start", "input_path" -> inputPath, "dataset_path" -> datasetPath)
     val conf = spark.sparkContext.hadoopConfiguration
     val path = new Path(inputPath)
     val fs = path.getFileSystem(conf)
@@ -194,6 +258,7 @@ object PrivySparkApp {
       }
       files.toSeq.sorted
     }
+    logDebug("scan_directory_files_discovered", "input_path" -> inputPath, "files" -> files.size)
 
     val supportedFiles = ArrayBuffer.empty[ScanFileEntry]
     val errors = ArrayBuffer.empty[ScanError]
@@ -204,6 +269,7 @@ object PrivySparkApp {
       FormatDetector.infer(filePath) match {
         case Some(format) =>
           supportedFiles += ScanFileEntry(filePath, parentDirectory, format)
+          logDebug("scan_directory_file_supported", "file" -> filePath, "format" -> format, "directory" -> parentDirectory)
         case None =>
           directoriesWithPreScanErrors += parentDirectory
           errors += ScanError(
@@ -212,6 +278,7 @@ object PrivySparkApp {
             resolveRelativeIdentifier(datasetPath, filePath),
             s"Unsupported file format: $filePath"
           )
+          logDebug("scan_directory_file_unsupported", "file" -> filePath, "directory" -> parentDirectory)
       }
     }
 
@@ -228,12 +295,21 @@ object PrivySparkApp {
             filePaths = groupedFiles.map(_.filePath).sorted
           )
       }
+    logDebug("scan_directory_initial_groups_ready", "groups" -> groupedByDirectoryAndFormat.size, "supported_files" -> supportedFiles.size)
 
     val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
     groupedByDirectoryAndFormat.foreach { group =>
       val (splitGroups, splitErrors) = splitGroupBySchema(spark, datasetPath, timestamp, group)
       schemaAwareGroups ++= splitGroups
       errors ++= splitErrors
+      logDebug(
+        "scan_directory_group_schema_split",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "input_files" -> group.filePaths.size,
+        "split_groups" -> splitGroups.size,
+        "split_errors" -> splitErrors.size
+      )
       if (splitErrors.nonEmpty) {
         directoriesWithPreScanErrors += group.directoryPath
       }
@@ -248,16 +324,36 @@ object PrivySparkApp {
         groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 &&
           group.filePaths.size > 1 &&
           !directoriesWithPreScanErrors.contains(group.directoryPath)
-      group.copy(useDirectoryIdentifier = useDirectoryIdentifier)
+      val finalizedGroup = group.copy(useDirectoryIdentifier = useDirectoryIdentifier)
+      logDebug(
+        "scan_group_planned",
+        "directory" -> finalizedGroup.directoryPath,
+        "format" -> finalizedGroup.format,
+        "schema" -> finalizedGroup.schemaSignature,
+        "files" -> finalizedGroup.filePaths.size,
+        "use_directory_identifier" -> finalizedGroup.useDirectoryIdentifier
+      )
+      finalizedGroup
     }
 
     val directoryCount = files
       .map(filePath => Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath))
       .distinct
       .size
+    val plannedGroups = finalizedGroups.toSeq.sortBy(group => (group.directoryPath, group.format, group.schemaSignature))
+
+    logDebug(
+      "scan_directory_structure_complete",
+      "input_path" -> inputPath,
+      "total_files" -> files.size,
+      "supported_files" -> supportedFiles.size,
+      "groups" -> plannedGroups.size,
+      "errors" -> errors.size,
+      "directories" -> directoryCount
+    )
 
     DirectoryScanPlan(
-      groups = finalizedGroups.toSeq.sortBy(group => (group.directoryPath, group.format, group.schemaSignature)),
+      groups = plannedGroups,
       errors = errors.toSeq,
       totalFiles = files.size,
       directoryCount = directoryCount
@@ -270,6 +366,12 @@ object PrivySparkApp {
     timestamp: String,
     group: ScanGroup
   ): (Seq[ScanGroup], Seq[ScanError]) = {
+    logDebug(
+      "scan_group_schema_split_start",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "files" -> group.filePaths.size
+    )
     val filesBySchema = scala.collection.mutable.Map.empty[String, ArrayBuffer[String]]
     val errors = ArrayBuffer.empty[ScanError]
 
@@ -278,7 +380,21 @@ object PrivySparkApp {
         case Right(schemaSignature) =>
           val groupedFiles = filesBySchema.getOrElseUpdate(schemaSignature, ArrayBuffer.empty[String])
           groupedFiles += filePath
+          logDebug(
+            "group_schema_signature_detected",
+            "directory" -> group.directoryPath,
+            "file" -> filePath,
+            "format" -> group.format,
+            "schema" -> schemaSignature
+          )
         case Left(errorMessage) =>
+          logDebug(
+            "group_schema_signature_failed",
+            "directory" -> group.directoryPath,
+            "file" -> filePath,
+            "format" -> group.format,
+            "reason" -> errorMessage
+          )
           errors += ScanError(
             datasetPath,
             timestamp,
@@ -295,6 +411,13 @@ object PrivySparkApp {
           group.copy(schemaSignature = schemaSignature, filePaths = groupedFiles.toSeq.sorted)
       }
 
+    logDebug(
+      "scan_group_schema_split_complete",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "schema_groups" -> groups.size,
+      "errors" -> errors.size
+    )
     (groups, errors.toSeq)
   }
 
@@ -333,6 +456,7 @@ object PrivySparkApp {
   }
 
   private def readSchemaSource(spark: SparkSession, format: String, filePath: String): DataFrame = {
+    logDebug("read_schema_source_start", "format" -> format, "file" -> filePath)
     format match {
       case "csv" =>
         spark.read
@@ -362,22 +486,77 @@ object PrivySparkApp {
     timestamp: String,
     maxFilesPerGroupBatchScan: Int = MaxFilesPerGroupBatchScan
   ): (Seq[ScanResult], Seq[ScanError]) = {
+    logDebug(
+      "group_scan_start",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "schema" -> group.schemaSignature,
+      "files" -> group.filePaths.size,
+      "sample_ratio" -> sampleRatio,
+      "use_directory_identifier" -> group.useDirectoryIdentifier
+    )
     if (group.filePaths.size > maxFilesPerGroupBatchScan) {
       logDriver(
         s"group_scan_fallback directory=${group.directoryPath} format=${group.format} files=${group.filePaths.size} reason=group_size_limit_exceeded($maxFilesPerGroupBatchScan)"
       )
-      return scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
+      logDebug(
+        "group_scan_fallback_requested",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "schema" -> group.schemaSignature,
+        "files" -> group.filePaths.size,
+        "reason" -> s"group_size_limit_exceeded($maxFilesPerGroupBatchScan)"
+      )
+      val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
+      logDebug(
+        "group_scan_complete",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "schema" -> group.schemaSignature,
+        "result_rows" -> fallbackResult._1.size,
+        "error_rows" -> fallbackResult._2.size,
+        "mode" -> "fallback_file_scan"
+      )
+      return fallbackResult
     }
 
     try {
       val results = scanGroupBatch(spark, datasetPath, group, rules, sampleRatio, timestamp)
+      logDebug(
+        "group_scan_complete",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "schema" -> group.schemaSignature,
+        "result_rows" -> results.size,
+        "error_rows" -> 0,
+        "mode" -> "group_batch_scan"
+      )
       (results, Seq.empty)
     } catch {
       case NonFatal(e) =>
         logDriver(
           s"group_scan_fallback directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} reason=${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
         )
-        scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
+        val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+        logDebug(
+          "group_scan_fallback_requested",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "files" -> group.filePaths.size,
+          "reason" -> errorMessage
+        )
+        val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
+        logDebug(
+          "group_scan_complete",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "result_rows" -> fallbackResult._1.size,
+          "error_rows" -> fallbackResult._2.size,
+          "mode" -> "fallback_file_scan"
+        )
+        fallbackResult
     }
   }
 
@@ -392,12 +571,36 @@ object PrivySparkApp {
     logDriver(
       s"group_scan_fallback_execute directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} mode=file_scan"
     )
+    logDebug(
+      "group_scan_fallback_execute",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "schema" -> group.schemaSignature,
+      "files" -> group.filePaths.size,
+      "use_directory_identifier" -> group.useDirectoryIdentifier
+    )
     val successfulFileMetrics = ArrayBuffer.empty[FileScanMetrics]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
     group.filePaths.foreach { filePath =>
+      logDebug("group_scan_fallback_file_start", "file" -> filePath, "directory" -> group.directoryPath)
       scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp) match {
-        case Right(fileMetrics) => successfulFileMetrics += fileMetrics
-        case Left(error) => fallbackErrors += error
+        case Right(fileMetrics) =>
+          successfulFileMetrics += fileMetrics
+          logDebug(
+            "group_scan_fallback_file_success",
+            "file" -> filePath,
+            "file_identifier" -> fileMetrics.fileIdentifier,
+            "sampled_rows" -> fileMetrics.sampledRowCount,
+            "matches" -> fileMetrics.matchCounts.size
+          )
+        case Left(error) =>
+          fallbackErrors += error
+          logDebug(
+            "group_scan_fallback_file_error",
+            "file" -> filePath,
+            "file_identifier" -> error.file_identifier,
+            "reason" -> error.error_message
+          )
       }
     }
 
@@ -425,6 +628,13 @@ object PrivySparkApp {
         logDriver(
           s"group_scan_partial_results directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} failed_files=${fallbackErrors.size} mode=file_identifier_preserved"
         )
+        logDebug(
+          "group_scan_partial_results",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "failed_files" -> fallbackErrors.size
+        )
       }
       successfulFileMetrics.flatMap { fileMetrics =>
         buildScanResults(
@@ -437,6 +647,15 @@ object PrivySparkApp {
       }
     }
 
+    logDebug(
+      "group_scan_fallback_complete",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "schema" -> group.schemaSignature,
+      "successful_files" -> successfulFileMetrics.size,
+      "failed_files" -> fallbackErrors.size,
+      "result_rows" -> fallbackResults.size
+    )
     (fallbackResults.toSeq, fallbackErrors.toSeq)
   }
 
@@ -448,6 +667,15 @@ object PrivySparkApp {
     sampleRatio: Double,
     timestamp: String
   ): Seq[ScanResult] = {
+    logDebug(
+      "group_scan_batch_start",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "schema" -> group.schemaSignature,
+      "files" -> group.filePaths.size,
+      "sample_ratio" -> sampleRatio,
+      "use_directory_identifier" -> group.useDirectoryIdentifier
+    )
     val baseDf = readSource(spark, group.format, group.filePaths)
     val fileIdentifierColumn = if (group.useDirectoryIdentifier) {
       None
@@ -458,6 +686,13 @@ object PrivySparkApp {
       case Some(columnName) => baseDf.withColumn(columnName, input_file_name())
       case None => baseDf
     }
+    logDebug(
+      "group_scan_batch_source_ready",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "columns" -> sourceDf.columns.length,
+      "file_identifier_mode" -> fileIdentifierColumn.fold("directory")(identity)
+    )
 
     val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
 
@@ -466,16 +701,35 @@ object PrivySparkApp {
       fileIdentifierColumn match {
         case None =>
           val sampledRowCount = sampledDf.count()
+          logDebug(
+            "group_scan_batch_sampled_rows",
+            "directory" -> group.directoryPath,
+            "sampled_rows" -> sampledRowCount,
+            "mode" -> "directory_identifier"
+          )
           if (sampledRowCount == 0L) {
+            logDebug(
+              "group_scan_batch_complete",
+              "directory" -> group.directoryPath,
+              "result_rows" -> 0,
+              "mode" -> "directory_identifier"
+            )
             Seq.empty
           } else {
-            buildScanResults(
+            val results = buildScanResults(
               datasetPath,
               timestamp,
               resolveDirectoryIdentifier(datasetPath, group.directoryPath),
               sampledRowCount,
               DetectionAggregator.aggregate(sampledDf, rules)
             )
+            logDebug(
+              "group_scan_batch_complete",
+              "directory" -> group.directoryPath,
+              "result_rows" -> results.size,
+              "mode" -> "directory_identifier"
+            )
+            results
           }
         case Some(columnName) =>
           val sampledRowsByFile = sampledDf
@@ -492,11 +746,23 @@ object PrivySparkApp {
               }
             }
             .toMap
+          logDebug(
+            "group_scan_batch_sampled_file_rows",
+            "directory" -> group.directoryPath,
+            "files_with_rows" -> sampledRowsByFile.size,
+            "mode" -> "file_identifier"
+          )
 
           if (sampledRowsByFile.isEmpty) {
+            logDebug(
+              "group_scan_batch_complete",
+              "directory" -> group.directoryPath,
+              "result_rows" -> 0,
+              "mode" -> "file_identifier"
+            )
             Seq.empty
           } else {
-            DetectionAggregator.aggregateByFile(sampledDf, columnName, rules).flatMap { matchCount =>
+            val results = DetectionAggregator.aggregateByFile(sampledDf, columnName, rules).flatMap { matchCount =>
               sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
                 buildScanResults(
                   datasetPath,
@@ -507,6 +773,13 @@ object PrivySparkApp {
                 ).headOption
               }
             }
+            logDebug(
+              "group_scan_batch_complete",
+              "directory" -> group.directoryPath,
+              "result_rows" -> results.size,
+              "mode" -> "file_identifier"
+            )
+            results
           }
       }
     } finally {
@@ -523,9 +796,11 @@ object PrivySparkApp {
     timestamp: String
   ): Either[ScanError, FileScanMetrics] = {
     val fileIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
+    logDebug("scan_file_start", "file" -> filePath, "file_identifier" -> fileIdentifier, "sample_ratio" -> sampleRatio)
 
     try {
       val format = FormatDetector.infer(filePath).getOrElse {
+        logDebug("scan_file_error", "file" -> filePath, "file_identifier" -> fileIdentifier, "reason" -> "Unsupported file format")
         return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $filePath"))
       }
 
@@ -535,18 +810,34 @@ object PrivySparkApp {
       sampledDf.cache()
       try {
         val sampledRowCount = sampledDf.count()
+        logDebug(
+          "scan_file_sampled_rows",
+          "file" -> filePath,
+          "file_identifier" -> fileIdentifier,
+          "sampled_rows" -> sampledRowCount
+        )
 
         if (sampledRowCount == 0L) {
+          logDebug("scan_file_complete", "file" -> filePath, "file_identifier" -> fileIdentifier, "matches" -> 0)
           Right(FileScanMetrics(fileIdentifier, sampledRowCount, Seq.empty))
         } else {
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, DetectionAggregator.aggregate(sampledDf, rules)))
+          val matchCounts = DetectionAggregator.aggregate(sampledDf, rules)
+          logDebug(
+            "scan_file_complete",
+            "file" -> filePath,
+            "file_identifier" -> fileIdentifier,
+            "matches" -> matchCounts.size
+          )
+          Right(FileScanMetrics(fileIdentifier, sampledRowCount, matchCounts))
         }
       } finally {
         sampledDf.unpersist(blocking = true)
       }
     } catch {
       case NonFatal(e) =>
-        Left(ScanError(datasetPath, timestamp, fileIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
+        val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+        logDebug("scan_file_error", "file" -> filePath, "file_identifier" -> fileIdentifier, "reason" -> errorMessage)
+        Left(ScanError(datasetPath, timestamp, fileIdentifier, errorMessage))
     }
   }
 
@@ -571,6 +862,7 @@ object PrivySparkApp {
 
   private def readSource(spark: SparkSession, format: String, filePaths: Seq[String]): DataFrame = {
     require(filePaths.nonEmpty, "filePaths must not be empty")
+    logDebug("read_source_start", "format" -> format, "files" -> filePaths.size, "first_file" -> filePaths.head)
 
     format match {
       case "csv" =>
@@ -601,6 +893,7 @@ object PrivySparkApp {
     import spark.implicits._
 
     val root = outputRoot.stripSuffix("/")
+    logDebug("write_reports_materialize", "output_root" -> root, "results" -> results.size, "errors" -> errors.size)
     val resultDf = spark.createDataset(results).toDF()
     val errorDf = spark.createDataset(errors).toDF()
 
@@ -621,5 +914,14 @@ object PrivySparkApp {
       .option("header", "true")
       .mode("overwrite")
       .csv(errorCsvPath)
+
+    logDebug(
+      "write_reports_complete",
+      "output_root" -> root,
+      "result_parquet_path" -> resultParquetPath,
+      "error_parquet_path" -> errorParquetPath,
+      "result_csv_path" -> resultCsvPath,
+      "error_csv_path" -> errorCsvPath
+    )
   }
 }
