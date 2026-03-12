@@ -7,6 +7,7 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
+import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.util.Comparator
@@ -48,6 +49,33 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(plan.errors.isEmpty)
       assert(csvGroups.size == 2)
       assert(csvGroups.forall(_.filePaths.size == 1))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure groups same directory CSV files when schema signature matches") {
+    val inputDir = Files.createTempDirectory("privyspark-schema-group-")
+
+    try {
+      writeText(inputDir.resolve("users_a.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(inputDir.resolve("users_b.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-03-12T00:00:00Z"
+      )
+
+      val csvGroups = plan.groups.filter(_.format == "csv")
+      assert(plan.errors.isEmpty)
+      assert(csvGroups.size == 1)
+      assert(csvGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("users_a.csv", "users_b.csv"))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -195,6 +223,49 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(_.file_identifier).toSet == Set("part-a.csv", "part-b.csv"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroup emits driver fallback logs when switching to file scan") {
+    val inputDir = Files.createTempDirectory("privyspark-group-fallback-log-")
+
+    try {
+      val file1 = inputDir.resolve("part-a.csv")
+      val file2 = inputDir.resolve("part-b.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val logs = captureStderr {
+        PrivySparkApp.scanGroup(
+          spark,
+          inputDir.toString,
+          group,
+          rules,
+          sampleRatio = 1.0,
+          timestamp = "2026-03-12T00:00:00Z",
+          maxFilesPerGroupBatchScan = 1
+        )
+      }
+
+      assert(logs.contains("group_scan_fallback"))
+      assert(logs.contains("group_scan_fallback_execute"))
+      assert(logs.contains("mode=file_scan"))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -365,6 +436,20 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def writeText(path: Path, content: String): Unit = {
     Files.write(path, content.getBytes(StandardCharsets.UTF_8))
+  }
+
+  private def captureStderr[A](block: => A): String = {
+    val output = new ByteArrayOutputStream()
+    val originalErr = System.err
+    val captureErr = new PrintStream(output, true, StandardCharsets.UTF_8.name())
+    try {
+      System.setErr(captureErr)
+      block
+    } finally {
+      captureErr.flush()
+      System.setErr(originalErr)
+    }
+    output.toString(StandardCharsets.UTF_8.name())
   }
 
   private def scanWithRules(

@@ -14,6 +14,10 @@ object DetectionAggregator {
 
   private final case class Metric(alias: String, columnName: String, piiType: String, predicate: Column)
 
+  private def logFallback(scope: String, metricsSize: Int, reason: String): Unit = {
+    System.err.println(s"[PrivySpark] detection_aggregation_fallback scope=$scope metrics=$metricsSize reason=$reason")
+  }
+
   def aggregate(sampledDf: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
     aggregate(sampledDf, rules, AggregationConfig())
   }
@@ -37,13 +41,15 @@ object DetectionAggregator {
     }
 
     if (metrics.size > config.legacyFallbackThreshold) {
+      logFallback("dataset", metrics.size, s"metric_threshold_exceeded(${config.legacyFallbackThreshold})")
       return aggregateLegacy(sampledDf, metrics)
     }
 
     try {
       aggregateInBatches(sampledDf, metrics, config.maxExpressionsPerAgg)
     } catch {
-      case NonFatal(_) =>
+      case NonFatal(e) =>
+        logFallback("dataset", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
         aggregateLegacy(sampledDf, metrics)
     }
   }
@@ -78,13 +84,15 @@ object DetectionAggregator {
     }
 
     if (metrics.size > config.legacyFallbackThreshold) {
+      logFallback("file", metrics.size, s"metric_threshold_exceeded(${config.legacyFallbackThreshold})")
       return aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
     }
 
     try {
       aggregateByFileInBatches(sampledDf, fileIdentifierColumn, metrics, config.maxExpressionsPerAgg)
     } catch {
-      case NonFatal(_) =>
+      case NonFatal(e) =>
+        logFallback("file", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
         aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
     }
   }

@@ -47,5 +47,5 @@
 - 저장 데이터는 집계 메타데이터만 포함하고 원문 PII는 저장하지 않음
 
 ## 5. 운영 특성
-- 로그는 스캔 요약(`scanned_files`, `groups`, `detections`, `errors`)과 폴백 원인을 출력
+- 로그는 스캔 요약(`scanned_files`, `groups`, `detections`, `errors`)과 폴백 원인/실행 경로를 드라이버 로그에 출력
 - 실패 허용 전략: 파일/그룹 단위 오류를 누적 기록하고 나머지 처리를 지속
