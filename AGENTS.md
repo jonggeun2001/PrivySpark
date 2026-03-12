@@ -16,7 +16,7 @@
 - `./gradlew test`: 테스트 실행
 - `bin/privyspark-submit scan --path /abs/input --output /abs/output --ruleset default --sample-ratio 0.2`: YARN cluster 실행
 - `rg --files`: 파일 구조 빠른 탐색
-- `git tag v0.1.0 && git push origin v0.1.0`: Release Artifact 워크플로우 트리거
+- `git tag v0.1.0 && git push origin v0.1.0` 또는 `git tag 0.1.3 && git push origin 0.1.3`: Release Artifact 워크플로우 트리거
 
 `--path`, `--output`은 절대경로(또는 URI)만 허용합니다.
 
@@ -51,7 +51,7 @@
 
 ## Release 운영
 - 워크플로우: `.github/workflows/release-artifact.yml`
-- 트리거: `v*` 태그 푸시
+- 트리거: `v*` 태그 또는 bare semver(`0.1.3`) 태그 푸시
 - 결과물: `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`를 GitHub Release에서 다운로드 가능
 
 ## 오프라인 배포

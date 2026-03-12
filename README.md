@@ -79,13 +79,16 @@ debug 로그를 끄더라도 스캔 요약과 fallback 로그는 계속 출력�
 
 
 ## GitHub Release 산출물
-- 태그 `v*` 푸시 시 GitHub Actions가 `./gradlew clean shadowJar`를 실행합니다.
+- 태그 `v*` 또는 bare semver(`0.1.3` 형식) 푸시 시 GitHub Actions가 `./gradlew clean shadowJar`를 실행합니다.
 - 릴리즈 자산 파일명은 태그를 포함한 `privyspark-<tag>-all.jar` 및 `privyspark-<tag>-all.jar.sha256` 형식으로 업로드됩니다.
 
 예시:
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
+
+git tag 0.1.3
+git push origin 0.1.3
 ```
 
 ## 규칙셋 파일 형식
