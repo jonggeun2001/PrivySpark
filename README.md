@@ -75,6 +75,7 @@ spark-submit \
 
 커스텀 ruleset 사용 시 `--files /abs/path/my-rules.yaml#my-rules.yaml`와 `--ruleset my-rules.yaml`를 함께 지정합니다.
 debug 로그가 필요 없으면 `PRIVYSPARK_DEBUG`를 생략하면 됩니다.
+debug 로그를 끄더라도 스캔 요약과 fallback 로그는 계속 출력됩니다.
 
 
 ## GitHub Release 산출물
