@@ -185,13 +185,15 @@ object PrivySparkApp {
 
     val supportedFiles = ArrayBuffer.empty[ScanFileEntry]
     val errors = ArrayBuffer.empty[ScanError]
+    val directoriesWithPreScanErrors = scala.collection.mutable.Set.empty[String]
 
     files.foreach { filePath =>
+      val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
       FormatDetector.infer(filePath) match {
         case Some(format) =>
-          val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
           supportedFiles += ScanFileEntry(filePath, parentDirectory, format)
         case None =>
+          directoriesWithPreScanErrors += parentDirectory
           errors += ScanError(
             datasetPath,
             timestamp,
@@ -220,6 +222,9 @@ object PrivySparkApp {
       val (splitGroups, splitErrors) = splitGroupBySchema(spark, datasetPath, timestamp, group)
       schemaAwareGroups ++= splitGroups
       errors ++= splitErrors
+      if (splitErrors.nonEmpty) {
+        directoriesWithPreScanErrors += group.directoryPath
+      }
     }
 
     val groupsPerDirectory = schemaAwareGroups.groupBy(_.directoryPath).map {
@@ -227,7 +232,10 @@ object PrivySparkApp {
     }
 
     val finalizedGroups = schemaAwareGroups.map { group =>
-      val useDirectoryIdentifier = groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 && group.filePaths.size > 1
+      val useDirectoryIdentifier =
+        groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 &&
+          group.filePaths.size > 1 &&
+          !directoriesWithPreScanErrors.contains(group.directoryPath)
       group.copy(useDirectoryIdentifier = useDirectoryIdentifier)
     }
 

@@ -260,6 +260,43 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules keeps file identifiers when grouped directory has pre-scan errors") {
+    val inputDir = Files.createTempDirectory("privyspark-directory-group-prescan-error-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-03-12T00:00:00Z"
+
+    try {
+      writeText(groupedDir.resolve("part-0001.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(groupedDir.resolve("part-0002.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n")
+      writeText(groupedDir.resolve("unsupported.xlsx"), "binary-placeholder")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        timestamp
+      )
+      val csvGroups = plan.groups.filter(_.format == "csv")
+
+      assert(csvGroups.size == 1)
+      assert(!csvGroups.head.useDirectoryIdentifier)
+      assert(plan.errors.map(_.file_identifier).toSet == Set("users/unsupported.xlsx"))
+
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.size == 1)
+      assert(results.map(_.file_identifier).toSet == Set("users/part-0001.csv", "users/part-0002.csv"))
+      assert(!results.exists(_.file_identifier == "users"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroup falls back to file scan when group file count exceeds limit") {
     val inputDir = Files.createTempDirectory("privyspark-group-fallback-")
 

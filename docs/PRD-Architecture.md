@@ -28,7 +28,7 @@
 ### 3.2 그룹 전략
 - 그룹 키: `directoryPath`, `format`, `schemaSignature`
 - CSV는 헤더 순서를 유지한 시그니처를 사용해 컬럼 매핑 왜곡을 방지
-- 동일 스키마 파일이 하나의 디렉토리 그룹이면 결과 `file_identifier`는 파일명이 아니라 디렉토리 상대경로를 사용
+- 동일 스키마 파일이 pre-scan 오류 없이 하나의 디렉토리 그룹이면 결과 `file_identifier`는 파일명이 아니라 디렉토리 상대경로를 사용
 - 과대 그룹(`MaxFilesPerGroupBatchScan`)은 드라이버 메모리 위험 회피를 위해 파일 단위로 전환
 
 ### 3.3 탐지 집계 전략
@@ -42,7 +42,7 @@
 - 결과 리포트
   - Parquet: `<output>/parquet/scan_results`
   - CSV: `<output>/csv/scan_results`
-- `file_identifier`는 입력 경로 기준 상대경로를 사용하며, 단일 디렉토리 그룹은 디렉토리 상대경로로 집계
+- `file_identifier`는 입력 경로 기준 상대경로를 사용하며, pre-scan 오류가 없는 단일 디렉토리 그룹은 디렉토리 상대경로로 집계
 - 오류 리포트
   - Parquet: `<output>/parquet/scan_errors`
   - CSV: `<output>/csv/scan_errors`
