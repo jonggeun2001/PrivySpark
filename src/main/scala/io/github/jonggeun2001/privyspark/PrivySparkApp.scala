@@ -28,6 +28,10 @@ object PrivySparkApp {
   private val FileIdentifierColumn = "__privyspark_file_identifier"
   private[privyspark] val MaxFilesPerGroupBatchScan = 1000
 
+  private def logDriver(message: String): Unit = {
+    System.err.println(s"[PrivySpark] $message")
+  }
+
   def main(args: Array[String]): Unit = {
     val normalizedArgs = if (args.headOption.contains("scan")) args.drop(1) else args
 
@@ -261,8 +265,8 @@ object PrivySparkApp {
     maxFilesPerGroupBatchScan: Int = MaxFilesPerGroupBatchScan
   ): (Seq[ScanResult], Seq[ScanError]) = {
     if (group.filePaths.size > maxFilesPerGroupBatchScan) {
-      System.err.println(
-        s"[PrivySpark] group_scan_fallback directory=${group.directoryPath} format=${group.format} files=${group.filePaths.size} reason=group_size_limit_exceeded($maxFilesPerGroupBatchScan)"
+      logDriver(
+        s"group_scan_fallback directory=${group.directoryPath} format=${group.format} files=${group.filePaths.size} reason=group_size_limit_exceeded($maxFilesPerGroupBatchScan)"
       )
       return scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
     }
@@ -272,8 +276,8 @@ object PrivySparkApp {
       (results, Seq.empty)
     } catch {
       case NonFatal(e) =>
-        System.err.println(
-          s"[PrivySpark] group_scan_fallback directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} reason=${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+        logDriver(
+          s"group_scan_fallback directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} reason=${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
         )
         scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
     }
@@ -287,6 +291,9 @@ object PrivySparkApp {
     sampleRatio: Double,
     timestamp: String
   ): (Seq[ScanResult], Seq[ScanError]) = {
+    logDriver(
+      s"group_scan_fallback_execute directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} mode=file_scan"
+    )
     val fallbackResults = ArrayBuffer.empty[ScanResult]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
     group.filePaths.foreach { filePath =>

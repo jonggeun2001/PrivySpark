@@ -10,6 +10,9 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
+import java.io.{ByteArrayOutputStream, PrintStream}
+import java.nio.charset.StandardCharsets
+
 @RunWith(classOf[JUnitRunner])
 class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
   private val spark = SparkSession.builder()
@@ -63,6 +66,30 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val expected = legacyCounts(df, rules)
 
     assert(sortByKey(forcedFallback) == sortByKey(expected))
+  }
+
+  test("logs dataset fallback when metric count exceeds threshold") {
+    val df = Seq(
+      ("alpha@example.com", "010-1234-5678"),
+      ("beta@example.com", "010-9876-5432")
+    ).toDF("c1", "c2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val logs = captureStderr {
+      DetectionAggregator.aggregate(
+        df,
+        rules,
+        AggregationConfig(maxExpressionsPerAgg = 2, legacyFallbackThreshold = 1)
+      )
+    }
+
+    assert(logs.contains("detection_aggregation_fallback"))
+    assert(logs.contains("scope=dataset"))
+    assert(logs.contains("metric_threshold_exceeded(1)"))
   }
 
   test("produces correct results when aggregation is split into batches") {
@@ -145,12 +172,49 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(sortByFileKey(forcedFallback) == expected)
   }
 
+  test("aggregateByFile logs fallback when legacy path is selected") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("beta.csv", "beta@example.com", "010-9999-8888")
+    ).toDF("file_id", "c1", "c2")
+
+    val rules = (1 to 10).map(i => PiiRule(s"email_rule_$i", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")) ++
+      (1 to 10).map(i => PiiRule(s"phone_rule_$i", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b"))
+
+    val logs = captureStderr {
+      DetectionAggregator.aggregateByFile(
+        df,
+        "file_id",
+        rules,
+        AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
+      )
+    }
+
+    assert(logs.contains("detection_aggregation_fallback"))
+    assert(logs.contains("scope=file"))
+    assert(logs.contains("metric_threshold_exceeded(1)"))
+  }
+
   private def sortByKey(values: Seq[MatchCount]): Seq[MatchCount] = {
     values.sortBy(v => (v.columnName, v.piiType, v.count))
   }
 
   private def sortByFileKey(values: Seq[FileMatchCount]): Seq[FileMatchCount] = {
     values.sortBy(v => (v.fileIdentifier, v.columnName, v.piiType, v.count))
+  }
+
+  private def captureStderr[A](block: => A): String = {
+    val output = new ByteArrayOutputStream()
+    val originalErr = System.err
+    val captureErr = new PrintStream(output, true, StandardCharsets.UTF_8.name())
+    try {
+      System.setErr(captureErr)
+      block
+    } finally {
+      captureErr.flush()
+      System.setErr(originalErr)
+    }
+    output.toString(StandardCharsets.UTF_8.name())
   }
 
   private def legacyCounts(df: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
