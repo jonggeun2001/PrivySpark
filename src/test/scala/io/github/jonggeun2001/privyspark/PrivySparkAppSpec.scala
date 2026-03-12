@@ -339,6 +339,45 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroup fallback preserves file identifiers when a grouped directory has partial file errors") {
+    val inputDir = Files.createTempDirectory("privyspark-directory-group-partial-fallback-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+
+    try {
+      val existingFile = groupedDir.resolve("part-a.csv")
+      val missingFile = groupedDir.resolve("part-missing.csv")
+
+      writeText(existingFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(existingFile.toString, missingFile.toString),
+        useDirectoryIdentifier = true
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-03-12T00:00:00Z",
+        maxFilesPerGroupBatchScan = 1
+      )
+
+      assert(errors.size == 1)
+      assert(results.map(_.file_identifier).toSet == Set("users/part-a.csv"))
+      assert(!results.exists(_.file_identifier == "users"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroup emits driver fallback logs when switching to file scan") {
     val inputDir = Files.createTempDirectory("privyspark-group-fallback-log-")
 

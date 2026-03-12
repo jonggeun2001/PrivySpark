@@ -381,7 +381,7 @@ object PrivySparkApp {
       }
     }
 
-    val fallbackResults = if (group.useDirectoryIdentifier) {
+    val fallbackResults = if (group.useDirectoryIdentifier && fallbackErrors.isEmpty) {
       val sampledRowCount = successfulFileMetrics.map(_.sampledRowCount).sum
       val aggregatedMatchCounts = successfulFileMetrics
         .flatMap(_.matchCounts)
@@ -401,6 +401,11 @@ object PrivySparkApp {
         aggregatedMatchCounts
       )
     } else {
+      if (group.useDirectoryIdentifier && fallbackErrors.nonEmpty) {
+        logDriver(
+          s"group_scan_partial_results directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} failed_files=${fallbackErrors.size} mode=file_identifier_preserved"
+        )
+      }
       successfulFileMetrics.flatMap { fileMetrics =>
         buildScanResults(
           datasetPath,
