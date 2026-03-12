@@ -93,12 +93,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "bob,bob@example.com\n")
 
       val logs = captureStderr {
-        PrivySparkApp.scanDirectoryStructure(
-          spark,
-          inputDir.toString,
-          inputDir.toString,
-          "2026-03-12T00:00:00Z"
-        )
+        withDebugLoggingEnabled {
+          PrivySparkApp.scanDirectoryStructure(
+            spark,
+            inputDir.toString,
+            inputDir.toString,
+            "2026-03-12T00:00:00Z"
+          )
+        }
       }
 
       assert(logs.contains("[PrivySpark][DEBUG] scan_directory_structure_start"))
@@ -575,14 +577,16 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
-        PrivySparkApp.scanGroupBatch(
-          spark,
-          inputDir.toString,
-          group,
-          rules,
-          sampleRatio = 1.0,
-          timestamp = "2026-03-12T00:00:00Z"
-        )
+        withDebugLoggingEnabled {
+          PrivySparkApp.scanGroupBatch(
+            spark,
+            inputDir.toString,
+            group,
+            rules,
+            sampleRatio = 1.0,
+            timestamp = "2026-03-12T00:00:00Z"
+          )
+        }
       }
 
       assert(logs.contains("[PrivySpark][DEBUG] group_scan_batch_start"))
@@ -740,6 +744,19 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       System.setErr(originalErr)
     }
     output.toString(StandardCharsets.UTF_8.name())
+  }
+
+  private def withDebugLoggingEnabled[A](block: => A): A = {
+    val previous = sys.props.get("privyspark.debug")
+    System.setProperty("privyspark.debug", "true")
+    try {
+      block
+    } finally {
+      previous match {
+        case Some(value) => System.setProperty("privyspark.debug", value)
+        case None => System.clearProperty("privyspark.debug")
+      }
+    }
   }
 
   private def scanWithRules(

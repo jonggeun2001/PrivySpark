@@ -34,12 +34,28 @@ object PrivySparkApp {
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
   private[privyspark] val MaxFilesPerGroupBatchScan = 1000
+  private val DebugPropertyName = "privyspark.debug"
+  private val DebugEnvName = "PRIVYSPARK_DEBUG"
 
   private def logDriver(message: String): Unit = {
     System.err.println(s"[PrivySpark] $message")
   }
 
+  private def isDebugLoggingEnabled: Boolean = {
+    val rawValue = sys.props.get(DebugPropertyName).orElse(sys.env.get(DebugEnvName))
+    rawValue.exists { value =>
+      value.trim.toLowerCase match {
+        case "1" | "true" | "yes" | "on" => true
+        case _ => false
+      }
+    }
+  }
+
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
+    if (!isDebugLoggingEnabled) {
+      return
+    }
+
     val suffix = if (fields.isEmpty) {
       ""
     } else {
@@ -196,7 +212,7 @@ object PrivySparkApp {
       results ++= groupResults
       errors ++= groupErrors
       logDebug(
-        "group_scan_complete",
+        "group_scan_recorded",
         "directory" -> group.directoryPath,
         "format" -> group.format,
         "schema" -> group.schemaSignature,

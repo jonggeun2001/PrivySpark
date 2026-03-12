@@ -104,7 +104,9 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val logs = captureStderr {
-      DetectionAggregator.aggregate(df, rules)
+      withDebugLoggingEnabled {
+        DetectionAggregator.aggregate(df, rules)
+      }
     }
 
     assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_start scope=dataset"))
@@ -227,7 +229,9 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val logs = captureStderr {
-      DetectionAggregator.aggregateByFile(df, "file_id", rules)
+      withDebugLoggingEnabled {
+        DetectionAggregator.aggregateByFile(df, "file_id", rules)
+      }
     }
 
     assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_start scope=file"))
@@ -255,6 +259,19 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       System.setErr(originalErr)
     }
     output.toString(StandardCharsets.UTF_8.name())
+  }
+
+  private def withDebugLoggingEnabled[A](block: => A): A = {
+    val previous = sys.props.get("privyspark.debug")
+    System.setProperty("privyspark.debug", "true")
+    try {
+      block
+    } finally {
+      previous match {
+        case Some(value) => System.setProperty("privyspark.debug", value)
+        case None => System.clearProperty("privyspark.debug")
+      }
+    }
   }
 
   private def legacyCounts(df: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {

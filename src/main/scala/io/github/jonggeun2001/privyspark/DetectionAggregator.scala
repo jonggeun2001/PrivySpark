@@ -13,8 +13,24 @@ object DetectionAggregator {
   final case class AggregationConfig(maxExpressionsPerAgg: Int = 400, legacyFallbackThreshold: Int = 10000)
 
   private final case class Metric(alias: String, columnName: String, piiType: String, predicate: Column)
+  private val DebugPropertyName = "privyspark.debug"
+  private val DebugEnvName = "PRIVYSPARK_DEBUG"
+
+  private def isDebugLoggingEnabled: Boolean = {
+    val rawValue = sys.props.get(DebugPropertyName).orElse(sys.env.get(DebugEnvName))
+    rawValue.exists { value =>
+      value.trim.toLowerCase match {
+        case "1" | "true" | "yes" | "on" => true
+        case _ => false
+      }
+    }
+  }
 
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
+    if (!isDebugLoggingEnabled) {
+      return
+    }
+
     val suffix = if (fields.isEmpty) {
       ""
     } else {
