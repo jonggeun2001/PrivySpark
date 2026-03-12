@@ -1,7 +1,7 @@
 # PrivySpark 기능 PRD (MVP v0.1)
 
 ## 1. 목표
-사용자가 지정한 데이터 경로를 스캔해 잠재적 PII를 탐지하고, 파일/컬럼 단위 리포트를 생성한다.
+사용자가 지정한 데이터 경로를 스캔해 잠재적 PII를 탐지하고, 파일 또는 디렉토리 그룹/컬럼 단위 리포트를 생성한다.
 
 ## 2. 기능 요구사항
 
@@ -18,7 +18,7 @@
 - 포맷 인자는 받지 않음.
 - 확장자 기반 자동 감지(`csv`, `json/jsonl/ndjson`, `parquet`, `orc`).
 - 미지원 확장자는 해당 파일을 실패로 기록하고 오류 리포트에 포함.
-- 스캔 단위는 파일 단위.
+- 스캔 단위는 파일 단위를 기본으로 하며, 동일 스키마 파일이 하나의 디렉토리 그룹이면 디렉토리 식별자로 결과를 집계할 수 있다.
 
 ### 2.3 탐지
 - MVP는 정규식 매칭만 사용.
@@ -34,6 +34,7 @@
 - 포맷: Parquet + CSV(Spark 기본 포맷).
 - 결과 리포트는 아래 필드 포함:
   - `dataset_path`, `scan_timestamp`, `file_identifier`, `column_name`, `pii_type`, `match_count`, `match_ratio`, `confidence`
+- `file_identifier`는 입력 경로 기준 상대경로를 사용하며, 동일 스키마 파일이 하나의 디렉토리 그룹이면 해당 디렉토리 상대경로를 사용.
 - MVP의 `confidence = match_ratio`.
 - 실제 매칭값(원문 PII)은 저장하지 않음.
 
@@ -50,6 +51,6 @@
 
 ## 4. MVP 완료 기준 (Acceptance Criteria)
 1. 절대경로/URI 검증이 동작하고, 상대경로 입력 시 실패한다.
-2. 파일 단위 정규식 탐지가 동작하고 `match_count`, `match_ratio`, `confidence`를 생성한다.
+2. 파일 또는 단일 디렉토리 그룹 기준 정규식 탐지가 동작하고 `match_count`, `match_ratio`, `confidence`를 생성한다.
 3. 결과를 Parquet + CSV로 저장한다.
 4. 일부 파일 실패 시 오류 리포트를 남기고 나머지 파일 처리를 계속한다.
