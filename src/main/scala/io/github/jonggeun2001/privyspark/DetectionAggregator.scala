@@ -14,6 +14,20 @@ object DetectionAggregator {
 
   private final case class Metric(alias: String, columnName: String, piiType: String, predicate: Column)
 
+  private def logDebug(event: String, fields: (String, Any)*): Unit = {
+    val suffix = if (fields.isEmpty) {
+      ""
+    } else {
+      fields.map {
+        case (key, value) =>
+          val renderedValue = if (value == null) "null" else value.toString
+          s"$key=$renderedValue"
+      }.mkString(" ", " ", "")
+    }
+
+    System.err.println(s"[PrivySpark][DEBUG] $event$suffix")
+  }
+
   private def logFallback(scope: String, metricsSize: Int, reason: String): Unit = {
     System.err.println(s"[PrivySpark] detection_aggregation_fallback scope=$scope metrics=$metricsSize reason=$reason")
   }
@@ -28,7 +42,9 @@ object DetectionAggregator {
     config: AggregationConfig
   ): Seq[MatchCount] = {
     val columns = sampledDf.columns.toSeq
+    logDebug("detection_aggregation_start", "scope" -> "dataset", "columns" -> columns.size, "rules" -> rules.size)
     if (columns.isEmpty || rules.isEmpty) {
+      logDebug("detection_aggregation_complete", "scope" -> "dataset", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
     }
 
@@ -37,20 +53,46 @@ object DetectionAggregator {
 
     val metrics = buildMetrics(columns, rules)
     if (metrics.isEmpty) {
+      logDebug("detection_aggregation_complete", "scope" -> "dataset", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
     }
+    logDebug("detection_aggregation_metrics_built", "scope" -> "dataset", "metrics" -> metrics.size)
 
     if (metrics.size > config.legacyFallbackThreshold) {
       logFallback("dataset", metrics.size, s"metric_threshold_exceeded(${config.legacyFallbackThreshold})")
-      return aggregateLegacy(sampledDf, metrics)
+      val results = aggregateLegacy(sampledDf, metrics)
+      logDebug(
+        "detection_aggregation_complete",
+        "scope" -> "dataset",
+        "metrics" -> metrics.size,
+        "results" -> results.size,
+        "mode" -> "legacy_fallback"
+      )
+      return results
     }
 
     try {
-      aggregateInBatches(sampledDf, metrics, config.maxExpressionsPerAgg)
+      val results = aggregateInBatches(sampledDf, metrics, config.maxExpressionsPerAgg)
+      logDebug(
+        "detection_aggregation_complete",
+        "scope" -> "dataset",
+        "metrics" -> metrics.size,
+        "results" -> results.size,
+        "mode" -> "batched_agg"
+      )
+      results
     } catch {
       case NonFatal(e) =>
         logFallback("dataset", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
-        aggregateLegacy(sampledDf, metrics)
+        val results = aggregateLegacy(sampledDf, metrics)
+        logDebug(
+          "detection_aggregation_complete",
+          "scope" -> "dataset",
+          "metrics" -> metrics.size,
+          "results" -> results.size,
+          "mode" -> "legacy_fallback"
+        )
+        results
     }
   }
 
@@ -71,7 +113,9 @@ object DetectionAggregator {
     require(fileIdentifierColumn.nonEmpty, "fileIdentifierColumn must not be empty")
 
     val columns = sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn)
+    logDebug("detection_aggregation_start", "scope" -> "file", "columns" -> columns.size, "rules" -> rules.size)
     if (columns.isEmpty || rules.isEmpty) {
+      logDebug("detection_aggregation_complete", "scope" -> "file", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
     }
 
@@ -80,20 +124,46 @@ object DetectionAggregator {
 
     val metrics = buildMetrics(columns, rules)
     if (metrics.isEmpty) {
+      logDebug("detection_aggregation_complete", "scope" -> "file", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
     }
+    logDebug("detection_aggregation_metrics_built", "scope" -> "file", "metrics" -> metrics.size)
 
     if (metrics.size > config.legacyFallbackThreshold) {
       logFallback("file", metrics.size, s"metric_threshold_exceeded(${config.legacyFallbackThreshold})")
-      return aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
+      val results = aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
+      logDebug(
+        "detection_aggregation_complete",
+        "scope" -> "file",
+        "metrics" -> metrics.size,
+        "results" -> results.size,
+        "mode" -> "legacy_fallback"
+      )
+      return results
     }
 
     try {
-      aggregateByFileInBatches(sampledDf, fileIdentifierColumn, metrics, config.maxExpressionsPerAgg)
+      val results = aggregateByFileInBatches(sampledDf, fileIdentifierColumn, metrics, config.maxExpressionsPerAgg)
+      logDebug(
+        "detection_aggregation_complete",
+        "scope" -> "file",
+        "metrics" -> metrics.size,
+        "results" -> results.size,
+        "mode" -> "batched_agg"
+      )
+      results
     } catch {
       case NonFatal(e) =>
         logFallback("file", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
-        aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
+        val results = aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
+        logDebug(
+          "detection_aggregation_complete",
+          "scope" -> "file",
+          "metrics" -> metrics.size,
+          "results" -> results.size,
+          "mode" -> "legacy_fallback"
+        )
+        results
     }
   }
 

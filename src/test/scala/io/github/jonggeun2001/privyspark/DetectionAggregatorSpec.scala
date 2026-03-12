@@ -92,6 +92,26 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("metric_threshold_exceeded(1)"))
   }
 
+  test("logs dataset aggregation debug lifecycle") {
+    val df = Seq(
+      ("alpha@example.com", "010-1234-5678"),
+      ("beta@example.com", "010-9876-5432")
+    ).toDF("c1", "c2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val logs = captureStderr {
+      DetectionAggregator.aggregate(df, rules)
+    }
+
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_start scope=dataset"))
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_metrics_built scope=dataset"))
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_complete scope=dataset"))
+  }
+
   test("produces correct results when aggregation is split into batches") {
     val columnCount = 32
     val columns = (1 to columnCount).map(i => s"c$i")
@@ -193,6 +213,26 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("detection_aggregation_fallback"))
     assert(logs.contains("scope=file"))
     assert(logs.contains("metric_threshold_exceeded(1)"))
+  }
+
+  test("logs file aggregation debug lifecycle") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("beta.csv", "beta@example.com", "010-9999-8888")
+    ).toDF("file_id", "c1", "c2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val logs = captureStderr {
+      DetectionAggregator.aggregateByFile(df, "file_id", rules)
+    }
+
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_start scope=file"))
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_metrics_built scope=file"))
+    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_complete scope=file"))
   }
 
   private def sortByKey(values: Seq[MatchCount]): Seq[MatchCount] = {
