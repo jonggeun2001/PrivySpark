@@ -27,7 +27,7 @@
 
 ### 3.2 그룹 전략
 - 그룹 키: `directoryPath`, `format`, `schemaSignature`
-- CSV는 헤더 순서를 유지한 시그니처를 사용해 컬럼 매핑 왜곡을 방지
+- CSV는 Spark DataFrame 생성 대신 헤더 라인을 직접 읽어 헤더 순서를 유지한 시그니처를 만든다
 - 동일 스키마 파일이 pre-scan 오류 없이 하나의 디렉토리 그룹이면 결과 `file_identifier`는 파일명이 아니라 디렉토리 상대경로를 사용하며, 입력 루트 디렉토리 그룹은 `.`로 표기
 - 과대 그룹(`MaxFilesPerGroupBatchScan`)은 드라이버 메모리 위험 회피를 위해 파일 단위로 전환
 
@@ -54,3 +54,5 @@
 ## 5. 운영 특성
 - 로그는 스캔 요약(`scanned_files`, `groups`, `detections`, `errors`)과 폴백 원인/실행 경로를 드라이버 로그에 출력하고, `bin/privyspark-submit`의 `PRIVYSPARK_DEBUG=true` 또는 `spark-submit`의 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true`/`-Dprivyspark.debug=true`가 설정되면 debug 진행 이벤트(플랜 수립, 스키마 분할, 그룹/파일 스캔, 리포트 저장)를 추가로 출력
 - 실패 허용 전략: 파일/그룹 단위 오류를 누적 기록하고 나머지 처리를 지속
+- 그룹 스캔 병렬도는 `spark.privyspark.groupParallelism`(기본 `4`), 파일 폴백 병렬도는 `spark.privyspark.fileParallelism`(기본 `3`)으로 조정한다
+- report DataFrame은 cache 후 Parquet/CSV 저장을 재사용하고, `sampledDf`/report DataFrame 해제는 non-blocking `unpersist(false)`를 사용한다

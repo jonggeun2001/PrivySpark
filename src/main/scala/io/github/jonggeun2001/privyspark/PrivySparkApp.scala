@@ -4,13 +4,21 @@ import io.github.jonggeun2001.privyspark.DetectionAggregator.MatchCount
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
 import org.apache.hadoop.fs.Path
+import org.apache.spark.sql.catalyst.csv.CSVOptions
+import org.apache.spark.sql.execution.datasources.csv.CSVUtils
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, input_file_name}
 
+import java.io.{BufferedReader, InputStreamReader}
+import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.util.concurrent.Executors
 import java.nio.file.NoSuchFileException
+import com.univocity.parsers.csv.CsvParser
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.control.NonFatal
 
 object PrivySparkApp {
@@ -38,6 +46,10 @@ object PrivySparkApp {
   private[privyspark] val MaxFilesPerGroupBatchScan = 1000
   private[privyspark] val MaxFileReadAttempts = 2
   private[privyspark] val FileReadRetryDelayMillis = 200L
+  private val GroupParallelismConfKey = "spark.privyspark.groupParallelism"
+  private val DefaultGroupParallelism = 4
+  private val FileParallelismConfKey = "spark.privyspark.fileParallelism"
+  private val DefaultFileParallelism = 3
   private val DebugPropertyName = "privyspark.debug"
   private val DebugEnvName = "PRIVYSPARK_DEBUG"
   private val RetriableFileReadErrorSnippets = Seq(
@@ -48,19 +60,31 @@ object PrivySparkApp {
     "failed_read_file",
     "encountered error while reading file"
   )
+  @volatile private var debugLoggingEnabledCache: java.lang.Boolean = _
 
   private def logDriver(message: String): Unit = {
     System.err.println(s"[PrivySpark] $message")
   }
 
   private def isDebugLoggingEnabled: Boolean = {
-    val rawValue = sys.props.get(DebugPropertyName).orElse(sys.env.get(DebugEnvName))
-    rawValue.exists { value =>
-      value.trim.toLowerCase match {
-        case "1" | "true" | "yes" | "on" => true
-        case _ => false
+    val cached = debugLoggingEnabledCache
+    if (cached != null) {
+      cached.booleanValue()
+    } else {
+      val rawValue = sys.props.get(DebugPropertyName).orElse(sys.env.get(DebugEnvName))
+      val enabled = rawValue.exists { value =>
+        value.trim.toLowerCase match {
+          case "1" | "true" | "yes" | "on" => true
+          case _ => false
+        }
       }
+      debugLoggingEnabledCache = java.lang.Boolean.valueOf(enabled)
+      enabled
     }
+  }
+
+  private[privyspark] def resetDebugCache(): Unit = {
+    debugLoggingEnabledCache = null
   }
 
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
@@ -253,6 +277,34 @@ object PrivySparkApp {
     attempt(1)
   }
 
+  private def resolveParallelism(itemCount: Int, configured: Int): Int = {
+    if (itemCount <= 1) 1 else math.max(1, math.min(itemCount, configured))
+  }
+
+  private[privyspark] def resolveGroupParallelism(spark: SparkSession, groupCount: Int): Int = {
+    resolveParallelism(groupCount, spark.sparkContext.getConf.getInt(GroupParallelismConfKey, DefaultGroupParallelism))
+  }
+
+  private[privyspark] def resolveFileParallelism(spark: SparkSession, fileCount: Int): Int = {
+    resolveParallelism(fileCount, spark.sparkContext.getConf.getInt(FileParallelismConfKey, DefaultFileParallelism))
+  }
+
+  private def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
+    if (tasks.isEmpty) {
+      Seq.empty
+    } else if (parallelism <= 1 || tasks.size <= 1) {
+      tasks.map(task => task())
+    } else {
+      val pool = Executors.newFixedThreadPool(parallelism)
+      implicit val ec: ExecutionContext = ExecutionContext.fromExecutorService(pool)
+      try {
+        Await.result(Future.sequence(tasks.map(task => Future(task()))), Duration.Inf)
+      } finally {
+        pool.shutdown()
+      }
+    }
+  }
+
   def main(args: Array[String]): Unit = {
     val normalizedArgs = if (args.headOption.contains("scan")) args.drop(1) else args
 
@@ -308,27 +360,17 @@ object PrivySparkApp {
     val results = ArrayBuffer.empty[ScanResult]
     val errors = ArrayBuffer.empty[ScanError] ++ scanPlan.errors
 
-    scanPlan.groups.foreach { group =>
-      logDebug(
-        "group_scan_dispatch",
-        "directory" -> group.directoryPath,
-        "format" -> group.format,
-        "schema" -> group.schemaSignature,
-        "files" -> group.filePaths.size,
-        "use_directory_identifier" -> group.useDirectoryIdentifier
-      )
-      val (groupResults, groupErrors) =
-        scanGroup(spark, config.inputPath, group, rules, config.sampleRatio, timestamp)
-      results ++= groupResults
-      errors ++= groupErrors
-      logDebug(
-        "group_scan_recorded",
-        "directory" -> group.directoryPath,
-        "format" -> group.format,
-        "schema" -> group.schemaSignature,
-        "result_rows" -> groupResults.size,
-        "error_rows" -> groupErrors.size
-      )
+    scanGroups(
+      spark,
+      config.inputPath,
+      scanPlan.groups,
+      rules,
+      config.sampleRatio,
+      timestamp
+    ).foreach {
+      case (_, groupResults, groupErrors) =>
+        results ++= groupResults
+        errors ++= groupErrors
     }
 
     logDebug("report_write_start", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
@@ -338,6 +380,52 @@ object PrivySparkApp {
     println(
       s"[PrivySpark] scanned_files=${scanPlan.totalFiles}, grouped_dirs=${scanPlan.directoryCount}, groups=${scanPlan.groups.size}, detections=${results.size}, errors=${errors.size}"
     )
+  }
+
+  private[privyspark] def scanGroups(
+    spark: SparkSession,
+    datasetPath: String,
+    groups: Seq[ScanGroup],
+    rules: Seq[PiiRule],
+    sampleRatio: Double,
+    timestamp: String,
+    groupParallelism: Int = -1
+  ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] = {
+    if (groups.isEmpty) {
+      return Seq.empty
+    }
+
+    val parallelism = if (groupParallelism > 0) {
+      resolveParallelism(groups.size, groupParallelism)
+    } else {
+      resolveGroupParallelism(spark, groups.size)
+    }
+    logDebug("group_scan_parallelism", "groups" -> groups.size, "parallelism" -> parallelism)
+
+    executeInParallel(parallelism, groups.map { group =>
+      () => {
+        logDebug(
+          "group_scan_dispatch",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "files" -> group.filePaths.size,
+          "use_directory_identifier" -> group.useDirectoryIdentifier,
+          "parallelism" -> parallelism
+        )
+        val (groupResults, groupErrors) =
+          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp)
+        logDebug(
+          "group_scan_recorded",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "result_rows" -> groupResults.size,
+          "error_rows" -> groupErrors.size
+        )
+        (group, groupResults, groupErrors)
+      }
+    })
   }
 
   private[privyspark] def scanDirectoryStructure(
@@ -486,7 +574,13 @@ object PrivySparkApp {
     val errors = ArrayBuffer.empty[ScanError]
 
     group.filePaths.foreach { filePath =>
-      inferSchemaSignature(spark, group.format, filePath) match {
+      val schemaResult = if (group.format == "csv") {
+        inferCsvHeaderSignature(spark, filePath)
+      } else {
+        inferSchemaSignature(spark, group.format, filePath)
+      }
+
+      schemaResult match {
         case Right(schemaSignature) =>
           val groupedFiles = filesBySchema.getOrElseUpdate(schemaSignature, ArrayBuffer.empty[String])
           groupedFiles += filePath
@@ -531,7 +625,78 @@ object PrivySparkApp {
     (groups, errors.toSeq)
   }
 
-  private def inferSchemaSignature(
+  private[privyspark] def parseHeaderFields(line: String): Seq[String] = {
+    val sanitizedLine = Option(line).getOrElse("").stripPrefix("\uFEFF")
+    val fields = ArrayBuffer.empty[String]
+    val buffer = new java.lang.StringBuilder
+    var index = 0
+    var inQuotes = false
+
+    while (index < sanitizedLine.length) {
+      val ch = sanitizedLine.charAt(index)
+      if (ch == '"') {
+        val nextIsEscapedQuote = inQuotes && index + 1 < sanitizedLine.length && sanitizedLine.charAt(index + 1) == '"'
+        if (nextIsEscapedQuote) {
+          buffer.append('"')
+          index += 1
+        } else {
+          inQuotes = !inQuotes
+        }
+      } else if (ch == ',' && !inQuotes) {
+        fields += buffer.toString()
+        buffer.setLength(0)
+      } else {
+        buffer.append(ch)
+      }
+      index += 1
+    }
+
+    fields += buffer.toString()
+    fields.toSeq
+  }
+
+  private[privyspark] def inferCsvHeaderSignature(
+    spark: SparkSession,
+    filePath: String
+  ): Either[String, String] = {
+    try {
+      val signature = withFileReadRetry(spark, Seq(filePath), "csv_header_signature") {
+        val csvOptions = new CSVOptions(
+          scala.collection.immutable.Map("header" -> "true", "inferSchema" -> "false"),
+          false,
+          spark.sessionState.conf.sessionLocalTimeZone,
+          spark.sessionState.conf.columnNameOfCorruptRecord
+        )
+        val parser = new CsvParser(csvOptions.asParserSettings)
+        val path = new Path(filePath)
+        val fs = path.getFileSystem(spark.sparkContext.hadoopConfiguration)
+        val reader = new BufferedReader(new InputStreamReader(fs.open(path), StandardCharsets.UTF_8))
+        try {
+          var headerLine = reader.readLine()
+          while (headerLine != null && headerLine.trim.isEmpty) {
+            headerLine = reader.readLine()
+          }
+          if (headerLine == null || headerLine.trim.isEmpty) {
+            throw new IllegalArgumentException("Empty or missing CSV header")
+          }
+          val headerColumns = CSVUtils.makeSafeHeader(
+            parser.parseLine(Option(headerLine).getOrElse("").stripPrefix("\uFEFF")),
+            spark.sessionState.conf.caseSensitiveAnalysis,
+            csvOptions
+          )
+          headerColumns.map(_.toLowerCase).mkString("|")
+        } finally {
+          reader.close()
+        }
+      }
+      Right(signature)
+    } catch {
+      case NonFatal(e) =>
+        Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+    }
+  }
+
+  private[privyspark] def inferSchemaSignature(
     spark: SparkSession,
     format: String,
     filePath: String
@@ -672,30 +837,42 @@ object PrivySparkApp {
     }
   }
 
-  private def scanGroupByFile(
+  private[privyspark] def scanGroupByFile(
     spark: SparkSession,
     datasetPath: String,
     group: ScanGroup,
     rules: Seq[PiiRule],
     sampleRatio: Double,
-    timestamp: String
+    timestamp: String,
+    fileParallelism: Int = -1
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logDriver(
       s"group_scan_fallback_execute directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} mode=file_scan"
     )
+    val parallelism = if (fileParallelism > 0) {
+      resolveParallelism(group.filePaths.size, fileParallelism)
+    } else {
+      resolveFileParallelism(spark, group.filePaths.size)
+    }
     logDebug(
       "group_scan_fallback_execute",
       "directory" -> group.directoryPath,
       "format" -> group.format,
       "schema" -> group.schemaSignature,
       "files" -> group.filePaths.size,
-      "use_directory_identifier" -> group.useDirectoryIdentifier
+      "use_directory_identifier" -> group.useDirectoryIdentifier,
+      "parallelism" -> parallelism
     )
     val successfulFileMetrics = ArrayBuffer.empty[FileScanMetrics]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
-    group.filePaths.foreach { filePath =>
-      logDebug("group_scan_fallback_file_start", "file" -> filePath, "directory" -> group.directoryPath)
-      scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp) match {
+    executeInParallel(parallelism, group.filePaths.map { filePath =>
+      () => {
+        logDebug("group_scan_fallback_file_start", "file" -> filePath, "directory" -> group.directoryPath)
+        filePath -> scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp)
+      }
+    }).foreach {
+      case (filePath, fileResult) =>
+        fileResult match {
         case Right(fileMetrics) =>
           successfulFileMetrics += fileMetrics
           logDebug(
@@ -713,7 +890,7 @@ object PrivySparkApp {
             "file_identifier" -> error.file_identifier,
             "reason" -> error.error_message
           )
-      }
+        }
     }
 
     val fallbackResults = if (group.useDirectoryIdentifier && fallbackErrors.isEmpty) {
@@ -896,7 +1073,7 @@ object PrivySparkApp {
             }
         }
       } finally {
-        sampledDf.unpersist(blocking = true)
+        sampledDf.unpersist(blocking = false)
       }
     }
   }
@@ -946,7 +1123,7 @@ object PrivySparkApp {
             Right(FileScanMetrics(fileIdentifier, sampledRowCount, matchCounts))
           }
         } finally {
-          sampledDf.unpersist(blocking = true)
+          sampledDf.unpersist(blocking = false)
         }
       }
     } catch {
@@ -984,7 +1161,7 @@ object PrivySparkApp {
       case "csv" =>
         spark.read
           .option("header", "true")
-          .option("inferSchema", "true")
+          .option("inferSchema", "false")
           .option("mode", "PERMISSIVE")
           .csv(filePaths: _*)
       case "json" =>
@@ -1010,26 +1187,31 @@ object PrivySparkApp {
 
     val root = outputRoot.stripSuffix("/")
     logDebug("write_reports_materialize", "output_root" -> root, "results" -> results.size, "errors" -> errors.size)
-    val resultDf = spark.createDataset(results).toDF().coalesce(1)
-    val errorDf = spark.createDataset(errors).toDF().coalesce(1)
+    val resultDf = spark.createDataset(results).toDF().coalesce(1).cache()
+    val errorDf = spark.createDataset(errors).toDF().coalesce(1).cache()
 
     val resultParquetPath = s"$root/parquet/scan_results"
     val errorParquetPath = s"$root/parquet/scan_errors"
     val resultCsvPath = s"$root/csv/scan_results"
     val errorCsvPath = s"$root/csv/scan_errors"
 
-    resultDf.write.mode("overwrite").parquet(resultParquetPath)
-    errorDf.write.mode("overwrite").parquet(errorParquetPath)
+    try {
+      resultDf.write.mode("overwrite").parquet(resultParquetPath)
+      errorDf.write.mode("overwrite").parquet(errorParquetPath)
 
-    resultDf.write
-      .option("header", "true")
-      .mode("overwrite")
-      .csv(resultCsvPath)
+      resultDf.write
+        .option("header", "true")
+        .mode("overwrite")
+        .csv(resultCsvPath)
 
-    errorDf.write
-      .option("header", "true")
-      .mode("overwrite")
-      .csv(errorCsvPath)
+      errorDf.write
+        .option("header", "true")
+        .mode("overwrite")
+        .csv(errorCsvPath)
+    } finally {
+      resultDf.unpersist(blocking = false)
+      errorDf.unpersist(blocking = false)
+    }
 
     logDebug(
       "write_reports_complete",
