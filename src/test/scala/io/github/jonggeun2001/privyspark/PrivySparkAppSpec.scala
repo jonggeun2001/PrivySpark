@@ -362,6 +362,28 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules rounds probability fields to two decimal places") {
+    val inputDir = Files.createTempDirectory("privyspark-rounded-probability-")
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("customers.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n" +
+          "bob,not-an-email\n" +
+          "carol,carol@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(_.match_ratio).toSet == Set(0.67))
+      assert(results.map(_.confidence).toSet == Set(0.67))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules uses dot for the root directory group identifier to avoid nested collisions") {
     val parentDir = Files.createTempDirectory("privyspark-root-directory-group-")
     val datasetDir = Files.createDirectories(parentDir.resolve("users"))
@@ -794,6 +816,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errorCsvDf.count() == 1L)
       assert(resultCsvDf.columns.toSet.contains("file_identifier"))
       assert(errorCsvDf.columns.toSet.contains("error_message"))
+      assert(countPartFiles(outputDir.resolve("csv/scan_results")) == 1L)
+      assert(countPartFiles(outputDir.resolve("csv/scan_errors")) == 1L)
+      assert(countPartFiles(outputDir.resolve("parquet/scan_results")) == 1L)
+      assert(countPartFiles(outputDir.resolve("parquet/scan_errors")) == 1L)
     } finally {
       deleteRecursively(outputDir)
     }
@@ -897,6 +923,27 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       found
     } finally {
       stream.close()
+    }
+  }
+
+  private def countPartFiles(root: Path): Long = {
+    if (!Files.exists(root)) {
+      0L
+    } else {
+      val stream = Files.walk(root)
+      try {
+        val iter = stream.iterator()
+        var count = 0L
+        while (iter.hasNext) {
+          val candidate = iter.next()
+          if (Files.isRegularFile(candidate) && candidate.getFileName.toString.startsWith("part-")) {
+            count += 1L
+          }
+        }
+        count
+      } finally {
+        stream.close()
+      }
     }
   }
 
