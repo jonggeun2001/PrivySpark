@@ -19,6 +19,7 @@
 - 확장자 기반 자동 감지(`csv`, `json/jsonl/ndjson`, `parquet`, `orc`).
 - 미지원 확장자는 해당 파일을 실패로 기록하고 오류 리포트에 포함.
 - 스캔 단위는 파일 단위를 기본으로 하며, 동일 스키마 파일이 하나의 디렉토리 그룹이면 디렉토리 식별자로 결과를 집계할 수 있다.
+- CSV 스키마 그룹핑은 전체 파일 타입 추론이 아니라 헤더 라인 파싱으로 판단한다.
 
 ### 2.3 탐지
 - MVP는 정규식 매칭만 사용.
@@ -42,6 +43,7 @@
 - 파일별 실패는 전체 중단 없이 계속 처리.
 - 실패 파일은 별도 오류 리포트로 저장.
 - 스키마 판별/그룹 배치 스캔/파일 폴백 스캔 중 파일이 일시적으로 교체되거나 삭제되어 읽기 오류가 나면 내부 재시도 후 계속 진행하고, 재시도 이후에도 실패하면 해당 파일/그룹 오류로 기록한다.
+- 운영자는 `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 설정으로 그룹/파일 폴백 병렬도를 조정할 수 있다.
 - `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`가 설정되면 드라이버 debug 로그에는 스캔 계획, 그룹/파일 스캔 진행, 폴백 여부를 남겨 운영 중 분석 진행상황과 버그 확인이 가능해야 한다.
 - 종료 코드는 실행 성공/실패 기준이며, PII 발견 여부와 무관.
 

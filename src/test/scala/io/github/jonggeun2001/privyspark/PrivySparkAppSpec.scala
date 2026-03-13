@@ -166,6 +166,30 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("parseHeaderFields handles quoted commas and escaped quotes") {
+    val fields = PrivySparkApp.parseHeaderFields("\"Last, First\",\"He said \"\"Hello\"\"\",email")
+
+    assert(fields == Seq("Last, First", "He said \"Hello\"", "email"))
+  }
+
+  test("inferCsvHeaderSignature matches Spark schema signature for quoted CSV headers") {
+    val inputDir = Files.createTempDirectory("privyspark-quoted-header-")
+
+    try {
+      val file = inputDir.resolve("quoted.csv")
+      writeText(file,
+        "\"Last, First\",\"He said \"\"Hello\"\"\",email\n" +
+          "\"Alice, Kim\",greeting,alice@example.com\n")
+
+      val fastPathSignature = PrivySparkApp.inferCsvHeaderSignature(spark, file.toString)
+      val sparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", file.toString)
+
+      assert(fastPathSignature == sparkSignature)
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure throws when input path does not exist") {
     val missingPath = s"/tmp/privyspark-missing-${System.nanoTime()}"
 
@@ -614,6 +638,56 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroupByFile parallel should match sequential fallback results") {
+    val inputDir = Files.createTempDirectory("privyspark-file-fallback-parallel-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      val file1 = groupedDir.resolve("part-a.csv")
+      val file2 = groupedDir.resolve("part-b.csv")
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString),
+        useDirectoryIdentifier = true
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val sequential = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp,
+        fileParallelism = 1
+      )
+      val parallel = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp,
+        fileParallelism = 2
+      )
+
+      assert(normalizeResults(sequential._1) == normalizeResults(parallel._1))
+      assert(normalizeErrors(sequential._2) == normalizeErrors(parallel._2))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroupBatch keeps scanning source column even when internal identifier column exists") {
     val inputDir = Files.createTempDirectory("privyspark-file-id-column-")
 
@@ -686,6 +760,55 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(logs.contains("[PrivySpark][DEBUG] read_source_start"))
       assert(logs.contains("[PrivySpark][DEBUG] group_scan_batch_source_ready"))
       assert(logs.contains("[PrivySpark][DEBUG] group_scan_batch_complete"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroups parallel should match sequential results") {
+    val inputDir = Files.createTempDirectory("privyspark-group-parallel-scan-")
+    val customersDir = Files.createDirectories(inputDir.resolve("customers"))
+    val membersDir = Files.createDirectories(inputDir.resolve("members"))
+    val contactsDir = Files.createDirectories(inputDir.resolve("contacts"))
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      writeText(customersDir.resolve("customers.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(membersDir.resolve("members.csv"),
+        "name,phone\n" +
+          "bob,010-1234-5678\n")
+      writeText(contactsDir.resolve("contacts.jsonl"),
+        "{\"email\":\"carol@example.com\",\"phone\":\"031-555-7777\"}\n")
+
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+      )
+      val plan = PrivySparkApp.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
+
+      val sequential = PrivySparkApp.scanGroups(
+        spark,
+        inputDir.toString,
+        plan.groups,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp,
+        groupParallelism = 1
+      )
+      val parallel = PrivySparkApp.scanGroups(
+        spark,
+        inputDir.toString,
+        plan.groups,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp,
+        groupParallelism = 2
+      )
+
+      assert(normalizeOutcomeResults(sequential) == normalizeOutcomeResults(parallel))
+      assert(normalizeOutcomeErrors(sequential) == normalizeOutcomeErrors(parallel))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -845,6 +968,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def withDebugLoggingEnabled[A](block: => A): A = {
     val previous = sys.props.get("privyspark.debug")
+    PrivySparkApp.resetDebugCache()
     System.setProperty("privyspark.debug", "true")
     try {
       block
@@ -853,6 +977,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         case Some(value) => System.setProperty("privyspark.debug", value)
         case None => System.clearProperty("privyspark.debug")
       }
+      PrivySparkApp.resetDebugCache()
     }
   }
 
@@ -945,6 +1070,39 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         stream.close()
       }
     }
+  }
+
+  private def normalizeResults(results: Seq[ScanResult]): Seq[(String, String, String, Long, Double, Double)] = {
+    results
+      .map(result =>
+        (
+          result.file_identifier,
+          result.column_name,
+          result.pii_type,
+          result.match_count,
+          result.match_ratio,
+          result.confidence
+        )
+      )
+      .sortBy(identity)
+  }
+
+  private def normalizeErrors(errors: Seq[ScanError]): Seq[(String, String)] = {
+    errors
+      .map(error => (error.file_identifier, error.error_message))
+      .sortBy(identity)
+  }
+
+  private def normalizeOutcomeResults(
+    outcomes: Seq[(PrivySparkApp.ScanGroup, Seq[ScanResult], Seq[ScanError])]
+  ): Seq[(String, String, String, Long, Double, Double)] = {
+    normalizeResults(outcomes.flatMap(_._2))
+  }
+
+  private def normalizeOutcomeErrors(
+    outcomes: Seq[(PrivySparkApp.ScanGroup, Seq[ScanResult], Seq[ScanError])]
+  ): Seq[(String, String)] = {
+    normalizeErrors(outcomes.flatMap(_._3))
   }
 
   private def resolveResourcePath(resource: String): Path = {
