@@ -87,22 +87,21 @@ object DetectionAggregator {
     logDebug("detection_aggregation_metrics_built", "scope" -> "dataset", "metrics" -> metrics.size)
 
     if (metrics.size > config.legacyFallbackThreshold) {
-      logFallback("dataset", metrics.size, s"metric_threshold_exceeded(${config.legacyFallbackThreshold})")
-      val results = try {
-        aggregateThresholdFallback(sampledDf, metrics)
-      } catch {
-        case NonFatal(e) =>
-          logFallback("dataset", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
-          aggregateLegacy(sampledDf, metrics)
-      }
+      val fallback = executeThresholdFallback(
+        "dataset",
+        metrics.size,
+        config.legacyFallbackThreshold,
+        aggregateThresholdFallback(sampledDf, metrics),
+        aggregateLegacy(sampledDf, metrics)
+      )
       logDebug(
         "detection_aggregation_complete",
         "scope" -> "dataset",
         "metrics" -> metrics.size,
-        "results" -> results.size,
-        "mode" -> "threshold_fallback"
+        "results" -> fallback._1.size,
+        "mode" -> fallback._2
       )
-      return results
+      return fallback._1
     }
 
     try {
@@ -164,22 +163,21 @@ object DetectionAggregator {
     logDebug("detection_aggregation_metrics_built", "scope" -> "file", "metrics" -> metrics.size)
 
     if (metrics.size > config.legacyFallbackThreshold) {
-      logFallback("file", metrics.size, s"metric_threshold_exceeded(${config.legacyFallbackThreshold})")
-      val results = try {
-        aggregateByFileThresholdFallback(sampledDf, fileIdentifierColumn, metrics)
-      } catch {
-        case NonFatal(e) =>
-          logFallback("file", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
-          aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
-      }
+      val fallback = executeThresholdFallback(
+        "file",
+        metrics.size,
+        config.legacyFallbackThreshold,
+        aggregateByFileThresholdFallback(sampledDf, fileIdentifierColumn, metrics),
+        aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
+      )
       logDebug(
         "detection_aggregation_complete",
         "scope" -> "file",
         "metrics" -> metrics.size,
-        "results" -> results.size,
-        "mode" -> "threshold_fallback"
+        "results" -> fallback._1.size,
+        "mode" -> fallback._2
       )
-      return results
+      return fallback._1
     }
 
     try {
@@ -254,6 +252,23 @@ object DetectionAggregator {
 
   private def aggregateThresholdFallback(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
     aggregateInBatches(sampledDf, metrics, LegacyFallbackBatchSize)
+  }
+
+  private[privyspark] def executeThresholdFallback[T](
+    scope: String,
+    metricsSize: Int,
+    threshold: Int,
+    batchedFallback: => Seq[T],
+    legacyFallback: => Seq[T]
+  ): (Seq[T], String) = {
+    logFallback(scope, metricsSize, s"metric_threshold_exceeded($threshold)")
+    try {
+      (batchedFallback, "threshold_fallback")
+    } catch {
+      case NonFatal(e) =>
+        logFallback(scope, metricsSize, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+        (legacyFallback, "legacy_fallback")
+    }
   }
 
   private def aggregateLegacy(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
