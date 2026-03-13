@@ -41,12 +41,13 @@
 
 ## 4. 출력 아키텍처
 - 결과 리포트
-  - Parquet: `<output>/parquet/scan_results`
-  - CSV: `<output>/csv/scan_results`
+  - Parquet: `<output>/parquet/scan_results` (`coalesce(1)`로 단일 data part file 저장)
+  - CSV: `<output>/csv/scan_results` (`coalesce(1)`로 단일 data part file 저장)
 - `file_identifier`는 입력 경로 기준 상대경로를 사용하며, pre-scan 오류가 없는 단일 디렉토리 그룹은 디렉토리 상대경로로 집계한다. 입력 루트 디렉토리 그룹은 `.`를 사용한다.
 - 오류 리포트
-  - Parquet: `<output>/parquet/scan_errors`
-  - CSV: `<output>/csv/scan_errors`
+  - Parquet: `<output>/parquet/scan_errors` (`coalesce(1)`로 단일 data part file 저장)
+  - CSV: `<output>/csv/scan_errors` (`coalesce(1)`로 단일 data part file 저장)
+- `match_ratio`, `confidence`는 결과 생성 시 소수점 둘째 자리까지 반올림한다.
 - 저장 데이터는 집계 메타데이터만 포함하고 원문 PII는 저장하지 않음
 
 ## 5. 운영 특성

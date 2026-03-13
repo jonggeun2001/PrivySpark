@@ -31,11 +31,11 @@
 - 비결정적 랜덤 샘플링(seed 고정 없음).
 
 ### 2.5 출력
-- 포맷: Parquet + CSV(Spark 기본 포맷).
+- 포맷: Parquet + CSV(Spark 기본 포맷, 각 출력 경로는 단일 data part file로 저장).
 - 결과 리포트는 아래 필드 포함:
   - `dataset_path`, `scan_timestamp`, `file_identifier`, `column_name`, `pii_type`, `match_count`, `match_ratio`, `confidence`
 - `file_identifier`는 입력 경로 기준 상대경로를 사용하며, 동일 스키마 파일이 pre-scan 오류 없이 하나의 디렉토리 그룹이면 해당 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 `.`를 사용한다.
-- MVP의 `confidence = match_ratio`.
+- `match_ratio`, `confidence`는 소수점 둘째 자리까지 반올림하며, MVP의 `confidence = match_ratio`.
 - 실제 매칭값(원문 PII)은 저장하지 않음.
 
 ### 2.6 오류 처리 및 종료 코드

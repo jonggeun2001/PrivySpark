@@ -140,7 +140,7 @@ object PrivySparkApp {
       Seq.empty
     } else {
       matchCounts.map { matchCount =>
-        val matchRatio = matchCount.count.toDouble / sampledRowCount.toDouble
+        val matchRatio = roundProbability(matchCount.count.toDouble / sampledRowCount.toDouble)
         ScanResult(
           dataset_path = datasetPath,
           scan_timestamp = timestamp,
@@ -153,6 +153,12 @@ object PrivySparkApp {
         )
       }
     }
+  }
+
+  private def roundProbability(value: Double): Double = {
+    BigDecimal.decimal(value)
+      .setScale(2, scala.math.BigDecimal.RoundingMode.HALF_UP)
+      .toDouble
   }
 
   @tailrec
@@ -1004,8 +1010,8 @@ object PrivySparkApp {
 
     val root = outputRoot.stripSuffix("/")
     logDebug("write_reports_materialize", "output_root" -> root, "results" -> results.size, "errors" -> errors.size)
-    val resultDf = spark.createDataset(results).toDF()
-    val errorDf = spark.createDataset(errors).toDF()
+    val resultDf = spark.createDataset(results).toDF().coalesce(1)
+    val errorDf = spark.createDataset(errors).toDF().coalesce(1)
 
     val resultParquetPath = s"$root/parquet/scan_results"
     val errorParquetPath = s"$root/parquet/scan_errors"
