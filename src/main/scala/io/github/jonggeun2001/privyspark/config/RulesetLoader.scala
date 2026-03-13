@@ -28,12 +28,13 @@ object RulesetLoader {
       val parsed = rawRules.asScala.map { item =>
         val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
         val regex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
+        val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
 
         if (piiType.isEmpty || regex.isEmpty) {
           throw new IllegalArgumentException("Each rule must include pii_type and regex")
         }
 
-        PiiRule(piiType, regex)
+        PiiRule(piiType, regex, columnHints)
       }.toSeq
 
       if (parsed.isEmpty) {
@@ -51,6 +52,16 @@ object RulesetLoader {
       defaultRulesetCandidates.find(path => Files.exists(path)).getOrElse(Paths.get(DefaultRulesetPath))
     } else {
       Paths.get(ruleset)
+    }
+  }
+
+  private def parseColumnHints(rawValue: Object): Seq[String] = {
+    rawValue match {
+      case values: java.util.List[_] =>
+        values.asScala.map(_.toString.trim).filter(_.nonEmpty).toSeq
+      case value =>
+        val hint = value.toString.trim
+        if (hint.isEmpty) Seq.empty else Seq(hint)
     }
   }
 

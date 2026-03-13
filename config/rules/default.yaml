@@ -3,17 +3,49 @@ rules:
     regex: '[가-힣]{2,4}'
   - pii_type: phone_number
     regex: '01[016789]-?[0-9]{3,4}-?[0-9]{4}'
+    column_hints:
+      - phone
+      - mobile
+      - tel
+      - contact
   - pii_type: email
     regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}'
+    column_hints:
+      - email
+      - mail
+      - e_mail
+      - contact
   - pii_type: resident_registration_number
     regex: '[0-9]{6}-?[1-4][0-9]{6}'
+    column_hints:
+      - resident
+      - registration
+      - rrn
+      - ssn
+      - jumin
   - pii_type: address
     regex: '[가-힣0-9\- ]+(시|도) [가-힣0-9\- ]+(구|군|시) [가-힣0-9\- ]+(로|길) [0-9\-]+'
+    column_hints:
+      - address
+      - addr
+      - location
   - pii_type: bank_account_number
     regex: '[0-9]{2,4}-[0-9]{2,6}-[0-9]{2,6}'
+    column_hints:
+      - account
+      - bank
+      - acct
   - pii_type: credit_card_number
     regex: '[0-9]{4}-?[0-9]{4}-?[0-9]{4}-?[0-9]{4}'
+    column_hints:
+      - card
+      - credit
   - pii_type: passport_number
     regex: '[MSROD][0-9]{8}'
+    column_hints:
+      - passport
   - pii_type: ip_address
     regex: '(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])){3}'
+    column_hints:
+      - ip
+      - ip_address

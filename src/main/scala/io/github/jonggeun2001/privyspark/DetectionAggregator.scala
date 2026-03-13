@@ -10,20 +10,32 @@ import scala.util.control.NonFatal
 object DetectionAggregator {
   final case class MatchCount(columnName: String, piiType: String, count: Long)
   final case class FileMatchCount(fileIdentifier: String, columnName: String, piiType: String, count: Long)
-  final case class AggregationConfig(maxExpressionsPerAgg: Int = 400, legacyFallbackThreshold: Int = 10000)
+  final case class AggregationConfig(maxExpressionsPerAgg: Int = 400, legacyFallbackThreshold: Int = 50000)
 
   private final case class Metric(alias: String, columnName: String, piiType: String, predicate: Column)
   private val DebugPropertyName = "privyspark.debug"
   private val DebugEnvName = "PRIVYSPARK_DEBUG"
+  private val LegacyFallbackBatchSize = 50
+  @volatile private var debugLoggingEnabledCache: java.lang.Boolean = _
 
   private def isDebugLoggingEnabled: Boolean = {
-    val rawValue = sys.props.get(DebugPropertyName).orElse(sys.env.get(DebugEnvName))
-    rawValue.exists { value =>
+    val cached = debugLoggingEnabledCache
+    if (cached != null) {
+      return cached.booleanValue()
+    }
+
+    val enabled = sys.props.get(DebugPropertyName).orElse(sys.env.get(DebugEnvName)).exists { value =>
       value.trim.toLowerCase match {
         case "1" | "true" | "yes" | "on" => true
         case _ => false
       }
     }
+    debugLoggingEnabledCache = java.lang.Boolean.valueOf(enabled)
+    enabled
+  }
+
+  private[privyspark] def resetDebugCache(): Unit = {
+    debugLoggingEnabledCache = null
   }
 
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
@@ -186,13 +198,20 @@ object DetectionAggregator {
   private def buildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[Metric] = {
     columns.zipWithIndex.flatMap {
       case (columnName, columnIndex) =>
-        rules.zipWithIndex.map {
+        val normalizedColumnName = columnName.toLowerCase
+        rules.zipWithIndex.flatMap {
           case (rule, ruleIndex) =>
-            val alias = s"m_${columnIndex}_${ruleIndex}"
-            val valueColumn = col(columnName).cast(StringType)
-            val predicate = valueColumn.isNotNull && valueColumn.rlike(rule.regex)
+            val shouldTestColumn =
+              rule.columnHints.isEmpty || rule.columnHints.exists(hint => normalizedColumnName.contains(hint.toLowerCase))
 
-            Metric(alias = alias, columnName = columnName, piiType = rule.piiType, predicate = predicate)
+            if (shouldTestColumn) {
+              val alias = s"m_${columnIndex}_${ruleIndex}"
+              val valueColumn = col(columnName).cast(StringType)
+              val predicate = valueColumn.isNotNull && valueColumn.rlike(rule.regex)
+              Some(Metric(alias = alias, columnName = columnName, piiType = rule.piiType, predicate = predicate))
+            } else {
+              None
+            }
         }
     }
   }
@@ -222,10 +241,7 @@ object DetectionAggregator {
   }
 
   private def aggregateLegacy(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
-    metrics.flatMap { metric =>
-      val count = sampledDf.filter(metric.predicate).count()
-      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
-    }
+    aggregateInBatches(sampledDf, metrics, LegacyFallbackBatchSize)
   }
 
   private def aggregateByFileInBatches(
@@ -258,22 +274,6 @@ object DetectionAggregator {
     fileIdentifierColumn: String,
     metrics: Seq[Metric]
   ): Seq[FileMatchCount] = {
-    metrics.flatMap { metric =>
-      val groupedRows = sampledDf
-        .filter(metric.predicate)
-        .groupBy(col(fileIdentifierColumn))
-        .count()
-        .collect()
-
-      groupedRows.flatMap { row =>
-        val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
-        val count = if (row.isNullAt(1)) 0L else row.getLong(1)
-        if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
-          None
-        } else {
-          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
-        }
-      }
-    }
+    aggregateByFileInBatches(sampledDf, fileIdentifierColumn, metrics, LegacyFallbackBatchSize)
   }
 }

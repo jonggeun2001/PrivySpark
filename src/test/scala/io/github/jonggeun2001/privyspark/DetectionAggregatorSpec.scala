@@ -114,6 +114,26 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_complete scope=dataset"))
   }
 
+  test("filters dataset metrics by column hints before aggregation") {
+    val df = Seq(
+      ("alpha@example.com", "010-1234-5678", "alpha@example.com"),
+      ("beta@example.com", "010-9999-8888", "010-9999-8888")
+    ).toDF("customer_email", "contact_phone", "notes")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", Seq("email", "mail")),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b", Seq("phone", "mobile"))
+    )
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
+    val expected = Seq(
+      MatchCount("contact_phone", "phone", 2L),
+      MatchCount("customer_email", "email", 2L)
+    )
+
+    assert(actual == sortByKey(expected))
+  }
+
   test("produces correct results when aggregation is split into batches") {
     val columnCount = 32
     val columns = (1 to columnCount).map(i => s"c$i")
@@ -239,6 +259,28 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_complete scope=file"))
   }
 
+  test("filters file metrics by column hints before aggregation") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678", "alpha@example.com"),
+      ("beta.csv", "beta@example.com", "010-9999-8888", "010-9999-8888")
+    ).toDF("file_id", "customer_email", "contact_phone", "notes")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", Seq("email", "mail")),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b", Seq("phone", "mobile"))
+    )
+
+    val actual = sortByFileKey(DetectionAggregator.aggregateByFile(df, "file_id", rules))
+    val expected = Seq(
+      FileMatchCount("alpha.csv", "contact_phone", "phone", 1L),
+      FileMatchCount("alpha.csv", "customer_email", "email", 1L),
+      FileMatchCount("beta.csv", "contact_phone", "phone", 1L),
+      FileMatchCount("beta.csv", "customer_email", "email", 1L)
+    )
+
+    assert(actual == sortByFileKey(expected))
+  }
+
   private def sortByKey(values: Seq[MatchCount]): Seq[MatchCount] = {
     values.sortBy(v => (v.columnName, v.piiType, v.count))
   }
@@ -263,6 +305,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def withDebugLoggingEnabled[A](block: => A): A = {
     val previous = sys.props.get("privyspark.debug")
+    DetectionAggregator.resetDebugCache()
     System.setProperty("privyspark.debug", "true")
     try {
       block
@@ -271,6 +314,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
         case Some(value) => System.setProperty("privyspark.debug", value)
         case None => System.clearProperty("privyspark.debug")
       }
+      DetectionAggregator.resetDebugCache()
     }
   }
 
@@ -278,8 +322,12 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     df.columns.toSeq.flatMap { columnName =>
       val valueColumn = col(columnName).cast(StringType)
       rules.flatMap { rule =>
-        val count = df.filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex)).count()
-        if (count > 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
+        if (shouldApplyRule(columnName, rule)) {
+          val count = df.filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex)).count()
+          if (count > 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
+        } else {
+          None
+        }
       }
     }
   }
@@ -293,15 +341,19 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       val columnIndex = columns.indexOf(columnName)
       compiledRules.flatMap {
         case (rule, regex) =>
-          val count = rows.count { row =>
-            if (row.isNullAt(columnIndex)) {
-              false
-            } else {
-              regex.findFirstIn(row.getString(columnIndex)).nonEmpty
+          if (shouldApplyRule(columnName, rule)) {
+            val count = rows.count { row =>
+              if (row.isNullAt(columnIndex)) {
+                false
+              } else {
+                regex.findFirstIn(row.getString(columnIndex)).nonEmpty
+              }
             }
-          }
 
-          if (count > 0) Some(MatchCount(columnName, rule.piiType, count.toLong)) else None
+            if (count > 0) Some(MatchCount(columnName, rule.piiType, count.toLong)) else None
+          } else {
+            None
+          }
       }
     }
   }
@@ -317,22 +369,31 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       val valueColumn = col(columnName).cast(StringType)
 
       rules.flatMap { rule =>
-        val groupedRows = df
-          .filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex))
-          .groupBy(col(fileIdentifierColumn))
-          .count()
-          .collect()
+        if (shouldApplyRule(columnName, rule)) {
+          val groupedRows = df
+            .filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex))
+            .groupBy(col(fileIdentifierColumn))
+            .count()
+            .collect()
 
-        groupedRows.flatMap { row =>
-          val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
-          val count = if (row.isNullAt(1)) 0L else row.getLong(1)
-          if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
-            None
-          } else {
-            Some(FileMatchCount(fileIdentifier, columnName, rule.piiType, count))
+          groupedRows.flatMap { row =>
+            val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+            val count = if (row.isNullAt(1)) 0L else row.getLong(1)
+            if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
+              None
+            } else {
+              Some(FileMatchCount(fileIdentifier, columnName, rule.piiType, count))
+            }
           }
+        } else {
+          None
         }
       }
     }
+  }
+
+  private def shouldApplyRule(columnName: String, rule: PiiRule): Boolean = {
+    val normalizedColumnName = columnName.toLowerCase
+    rule.columnHints.isEmpty || rule.columnHints.exists(hint => normalizedColumnName.contains(hint.toLowerCase))
   }
 }
