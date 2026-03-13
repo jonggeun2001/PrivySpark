@@ -26,7 +26,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     super.afterAll()
   }
 
-  test("scanDirectoryStructure splits same directory files by schema signature") {
+  test("scanDirectoryStructure keeps same-directory files in one group using a representative schema") {
     val inputDir = Files.createTempDirectory("privyspark-schema-plan-")
 
     try {
@@ -47,8 +47,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val csvGroups = plan.groups.filter(_.format == "csv")
       assert(plan.totalFiles == 2)
       assert(plan.errors.isEmpty)
-      assert(csvGroups.size == 2)
-      assert(csvGroups.forall(_.filePaths.size == 1))
+      assert(csvGroups.size == 1)
+      assert(csvGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("users_email.csv", "users_phone.csv"))
+      assert(csvGroups.head.schemaSignature == "name|email")
+      assert(csvGroups.head.expectedSchema.nonEmpty)
     } finally {
       deleteRecursively(inputDir)
     }
@@ -104,7 +106,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
 
       assert(logs.contains("[PrivySpark][DEBUG] scan_directory_structure_start"))
-      assert(logs.contains("[PrivySpark][DEBUG] scan_group_schema_split_start"))
+      assert(logs.contains("[PrivySpark][DEBUG] scan_group_schema_probe_start"))
       assert(logs.contains("[PrivySpark][DEBUG] scan_group_planned"))
       assert(logs.contains("[PrivySpark][DEBUG] scan_directory_structure_complete"))
     } finally {
@@ -139,7 +141,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanDirectoryStructure splits CSV files when header order differs") {
+  test("scanDirectoryStructure keeps CSV files with different header order in one planned group") {
     val inputDir = Files.createTempDirectory("privyspark-schema-order-")
 
     try {
@@ -158,8 +160,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val csvGroups = plan.groups.filter(_.format == "csv")
-      assert(csvGroups.size == 2)
-      assert(csvGroups.forall(_.filePaths.size == 1))
+      assert(csvGroups.size == 1)
+      assert(csvGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("ordered_a.csv", "ordered_b.csv"))
+      assert(csvGroups.head.schemaSignature == "name|email")
     } finally {
       deleteRecursively(inputDir)
     }
@@ -434,6 +437,49 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errors.isEmpty)
       assert(results.map(_.file_identifier).toSet == Set("users"))
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet == Set(("users", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroup falls back to file identifiers when grouped CSV headers diverge") {
+    val inputDir = Files.createTempDirectory("privyspark-directory-schema-divergence-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+
+    try {
+      writeText(groupedDir.resolve("part-a.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(groupedDir.resolve("part-b.csv"),
+        "email,name\n" +
+          "bob@example.com,bob\n")
+
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("name", "alice|bob")
+      )
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-03-12T00:00:00Z"
+      )
+      val group = plan.groups.head
+
+      assert(group.useDirectoryIdentifier)
+
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-03-12T00:00:00Z"
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(_.file_identifier).toSet == Set("users/part-a.csv", "users/part-b.csv"))
+      assert(!results.exists(_.file_identifier == "users"))
     } finally {
       deleteRecursively(inputDir)
     }

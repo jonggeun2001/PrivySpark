@@ -7,10 +7,10 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - 입력/출력 경로는 절대경로(또는 URI)만 허용
 - 파일 단위 스캔을 기본으로 하되, 동일 스키마 파일 묶음은 디렉토리 그룹 기준으로 식별 가능
 - 디렉토리 구조 선스캔 후 `(디렉토리, 포맷)` 그룹 단위로 배치 처리
-- 그룹 내부는 파일별 스키마 시그니처로 재분할하고, 과대 그룹은 파일 단위로 자동 폴백
+- 각 `(디렉토리, 포맷)` 그룹은 대표 파일 1개로 스키마를 확정하고, 디렉토리 일괄 읽기에서 스키마 검증/읽기 오류가 발생하면 파일 단위로 자동 폴백
 - `file_identifier`는 입력 경로 기준 상대경로를 사용하고, 동일 스키마 파일이 pre-scan 오류 없이 하나의 디렉토리 그룹이면 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 충돌 방지를 위해 `.`로 표기한다.
 - 외부 규칙 파일 기반 정규식 탐지 (배치 집계 + 임계치 초과 시 안전 폴백)
-- `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`를 지정하거나, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 지정하면 드라이버 debug 로그에 스캔 계획, 스키마 분할, 그룹/파일 스캔, 리포트 저장 진행사항을 기록
+- `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`를 지정하거나, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 지정하면 드라이버 debug 로그에 스캔 계획, 대표 스키마 확정, 그룹/파일 스캔, 리포트 저장 진행사항을 기록
 - 그룹/집계 폴백 발생 시 원인과 실행 경로를 드라이버 로그에 기록
 - 지원 확장자: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc` (그 외 포맷은 오류 리포트로 분류)
 - 샘플링 지원(`--sample-ratio`, 기본값 `0.2`, 비결정적 랜덤)

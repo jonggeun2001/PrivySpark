@@ -18,7 +18,8 @@
 - 포맷 인자는 받지 않음.
 - 확장자 기반 자동 감지(`csv`, `json/jsonl/ndjson`, `parquet`, `orc`).
 - 미지원 확장자는 해당 파일을 실패로 기록하고 오류 리포트에 포함.
-- 스캔 단위는 파일 단위를 기본으로 하며, 동일 스키마 파일이 하나의 디렉토리 그룹이면 디렉토리 식별자로 결과를 집계할 수 있다.
+- 스캔 단위는 파일 단위를 기본으로 하며, 동일 `(디렉토리, 포맷)` 그룹은 대표 파일 1개로 스키마를 확정한 뒤 디렉토리 일괄 읽기를 시도한다.
+- 디렉토리 일괄 읽기에서 스키마 검증/읽기 오류가 발생하면 파일 단위로 재확인하고, 모든 성공 파일 스키마가 대표 스키마와 일치할 때만 디렉토리 식별자로 결과를 집계할 수 있다.
 
 ### 2.3 탐지
 - MVP는 정규식 매칭만 사용.
@@ -41,7 +42,7 @@
 ### 2.6 오류 처리 및 종료 코드
 - 파일별 실패는 전체 중단 없이 계속 처리.
 - 실패 파일은 별도 오류 리포트로 저장.
-- `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`가 설정되면 드라이버 debug 로그에는 스캔 계획, 그룹/파일 스캔 진행, 폴백 여부를 남겨 운영 중 분석 진행상황과 버그 확인이 가능해야 한다.
+- `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`가 설정되면 드라이버 debug 로그에는 스캔 계획, 대표 스키마 확정, 그룹/파일 스캔 진행, 폴백 여부를 남겨 운영 중 분석 진행상황과 버그 확인이 가능해야 한다.
 - 종료 코드는 실행 성공/실패 기준이며, PII 발견 여부와 무관.
 
 ## 3. 비목표 (MVP)

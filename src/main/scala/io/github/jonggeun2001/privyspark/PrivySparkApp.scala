@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.DetectionAggregator.MatchCount
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
 import org.apache.hadoop.fs.Path
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, input_file_name}
 
@@ -18,7 +19,8 @@ object PrivySparkApp {
     format: String,
     schemaSignature: String,
     filePaths: Seq[String],
-    useDirectoryIdentifier: Boolean = false
+    useDirectoryIdentifier: Boolean = false,
+    expectedSchema: Option[StructType] = None
   )
   private[privyspark] final case class DirectoryScanPlan(
     groups: Seq[ScanGroup],
@@ -29,7 +31,8 @@ object PrivySparkApp {
   private final case class FileScanMetrics(
     fileIdentifier: String,
     sampledRowCount: Long,
-    matchCounts: Seq[MatchCount]
+    matchCounts: Seq[MatchCount],
+    schemaSignature: String
   )
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
@@ -299,18 +302,18 @@ object PrivySparkApp {
 
     val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
     groupedByDirectoryAndFormat.foreach { group =>
-      val (splitGroups, splitErrors) = splitGroupBySchema(spark, datasetPath, timestamp, group)
-      schemaAwareGroups ++= splitGroups
-      errors ++= splitErrors
+      val (resolvedGroup, probeErrors) = resolveGroupSchema(spark, datasetPath, timestamp, group)
+      resolvedGroup.foreach(schemaAwareGroups += _)
+      errors ++= probeErrors
       logDebug(
-        "scan_directory_group_schema_split",
+        "scan_directory_group_schema_probe",
         "directory" -> group.directoryPath,
         "format" -> group.format,
         "input_files" -> group.filePaths.size,
-        "split_groups" -> splitGroups.size,
-        "split_errors" -> splitErrors.size
+        "resolved_group" -> resolvedGroup.isDefined,
+        "probe_errors" -> probeErrors.size
       )
-      if (splitErrors.nonEmpty) {
+      if (probeErrors.nonEmpty) {
         directoriesWithPreScanErrors += group.directoryPath
       }
     }
@@ -360,28 +363,27 @@ object PrivySparkApp {
     )
   }
 
-  private def splitGroupBySchema(
+  private def resolveGroupSchema(
     spark: SparkSession,
     datasetPath: String,
     timestamp: String,
     group: ScanGroup
-  ): (Seq[ScanGroup], Seq[ScanError]) = {
+  ): (Option[ScanGroup], Seq[ScanError]) = {
     logDebug(
-      "scan_group_schema_split_start",
+      "scan_group_schema_probe_start",
       "directory" -> group.directoryPath,
       "format" -> group.format,
       "files" -> group.filePaths.size
     )
-    val filesBySchema = scala.collection.mutable.Map.empty[String, ArrayBuffer[String]]
     val errors = ArrayBuffer.empty[ScanError]
+    var resolvedGroup: Option[ScanGroup] = None
 
-    group.filePaths.foreach { filePath =>
-      inferSchemaSignature(spark, group.format, filePath) match {
-        case Right(schemaSignature) =>
-          val groupedFiles = filesBySchema.getOrElseUpdate(schemaSignature, ArrayBuffer.empty[String])
-          groupedFiles += filePath
+    group.filePaths.iterator.takeWhile(_ => resolvedGroup.isEmpty).foreach { filePath =>
+      inferSchemaMetadata(spark, group.format, filePath) match {
+        case Right((schemaSignature, expectedSchema)) =>
+          resolvedGroup = Some(group.copy(schemaSignature = schemaSignature, expectedSchema = Some(expectedSchema)))
           logDebug(
-            "group_schema_signature_detected",
+            "group_schema_probe_resolved",
             "directory" -> group.directoryPath,
             "file" -> filePath,
             "format" -> group.format,
@@ -389,7 +391,7 @@ object PrivySparkApp {
           )
         case Left(errorMessage) =>
           logDebug(
-            "group_schema_signature_failed",
+            "group_schema_probe_failed",
             "directory" -> group.directoryPath,
             "file" -> filePath,
             "format" -> group.format,
@@ -404,41 +406,37 @@ object PrivySparkApp {
       }
     }
 
-    val groups = filesBySchema.toSeq
-      .sortBy { case (schemaSignature, _) => schemaSignature }
-      .map {
-        case (schemaSignature, groupedFiles) =>
-          group.copy(schemaSignature = schemaSignature, filePaths = groupedFiles.toSeq.sorted)
-      }
-
     logDebug(
-      "scan_group_schema_split_complete",
+      "scan_group_schema_probe_complete",
       "directory" -> group.directoryPath,
       "format" -> group.format,
-      "schema_groups" -> groups.size,
+      "resolved_group" -> resolvedGroup.isDefined,
       "errors" -> errors.size
     )
-    (groups, errors.toSeq)
+    (resolvedGroup, errors.toSeq)
   }
 
-  private def inferSchemaSignature(
+  private def inferSchemaMetadata(
     spark: SparkSession,
     format: String,
     filePath: String
-  ): Either[String, String] = {
+  ): Either[String, (String, StructType)] = {
     try {
       val schema = readSchemaSource(spark, format, filePath).schema
-      val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
-      val schemaSignature = if (format == "csv") {
-        // CSV는 헤더 순서가 데이터 매핑에 직접 영향을 주므로 순서를 유지한다.
-        normalizedFieldNames.mkString("|")
-      } else {
-        normalizedFieldNames.sorted.mkString("|")
-      }
-      Right(schemaSignature)
+      Right(schemaSignatureForSchema(format, schema) -> schema)
     } catch {
       case NonFatal(e) =>
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+    }
+  }
+
+  private def schemaSignatureForSchema(format: String, schema: StructType): String = {
+    val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
+    if (format == "csv") {
+      // CSV는 헤더 순서가 데이터 매핑에 직접 영향을 주므로 순서를 유지한다.
+      normalizedFieldNames.mkString("|")
+    } else {
+      normalizedFieldNames.sorted.mkString("|")
     }
   }
 
@@ -604,7 +602,13 @@ object PrivySparkApp {
       }
     }
 
-    val fallbackResults = if (group.useDirectoryIdentifier && fallbackErrors.isEmpty) {
+    val preserveDirectoryIdentifier =
+      group.useDirectoryIdentifier &&
+        fallbackErrors.isEmpty &&
+        successfulFileMetrics.nonEmpty &&
+        successfulFileMetrics.forall(_.schemaSignature == group.schemaSignature)
+
+    val fallbackResults = if (preserveDirectoryIdentifier) {
       val sampledRowCount = successfulFileMetrics.map(_.sampledRowCount).sum
       val aggregatedMatchCounts = successfulFileMetrics
         .flatMap(_.matchCounts)
@@ -635,6 +639,18 @@ object PrivySparkApp {
           "schema" -> group.schemaSignature,
           "failed_files" -> fallbackErrors.size
         )
+      } else if (group.useDirectoryIdentifier && successfulFileMetrics.nonEmpty) {
+        val actualSchemas = successfulFileMetrics.map(_.schemaSignature).distinct.sorted.mkString(",")
+        logDriver(
+          s"group_scan_schema_divergence directory=${group.directoryPath} format=${group.format} expected_schema=${group.schemaSignature} actual_schemas=$actualSchemas mode=file_identifier_preserved"
+        )
+        logDebug(
+          "group_scan_schema_divergence",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "expected_schema" -> group.schemaSignature,
+          "actual_schemas" -> actualSchemas
+        )
       }
       successfulFileMetrics.flatMap { fileMetrics =>
         buildScanResults(
@@ -654,7 +670,8 @@ object PrivySparkApp {
       "schema" -> group.schemaSignature,
       "successful_files" -> successfulFileMetrics.size,
       "failed_files" -> fallbackErrors.size,
-      "result_rows" -> fallbackResults.size
+      "result_rows" -> fallbackResults.size,
+      "directory_identifier_preserved" -> preserveDirectoryIdentifier
     )
     (fallbackResults.toSeq, fallbackErrors.toSeq)
   }
@@ -676,7 +693,7 @@ object PrivySparkApp {
       "sample_ratio" -> sampleRatio,
       "use_directory_identifier" -> group.useDirectoryIdentifier
     )
-    val baseDf = readSource(spark, group.format, group.filePaths)
+    val baseDf = readSource(spark, group.format, group.filePaths, group.expectedSchema)
     val fileIdentifierColumn = if (group.useDirectoryIdentifier) {
       None
     } else {
@@ -805,6 +822,7 @@ object PrivySparkApp {
       }
 
       val sourceDf = readSource(spark, format, Seq(filePath))
+      val schemaSignature = schemaSignatureForSchema(format, sourceDf.schema)
       val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
 
       sampledDf.cache()
@@ -819,7 +837,7 @@ object PrivySparkApp {
 
         if (sampledRowCount == 0L) {
           logDebug("scan_file_complete", "file" -> filePath, "file_identifier" -> fileIdentifier, "matches" -> 0)
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, Seq.empty))
+          Right(FileScanMetrics(fileIdentifier, sampledRowCount, Seq.empty, schemaSignature))
         } else {
           val matchCounts = DetectionAggregator.aggregate(sampledDf, rules)
           logDebug(
@@ -828,7 +846,7 @@ object PrivySparkApp {
             "file_identifier" -> fileIdentifier,
             "matches" -> matchCounts.size
           )
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, matchCounts))
+          Right(FileScanMetrics(fileIdentifier, sampledRowCount, matchCounts, schemaSignature))
         }
       } finally {
         sampledDf.unpersist(blocking = true)
@@ -860,25 +878,51 @@ object PrivySparkApp {
     }
   }
 
-  private def readSource(spark: SparkSession, format: String, filePaths: Seq[String]): DataFrame = {
+  private def readSource(
+    spark: SparkSession,
+    format: String,
+    filePaths: Seq[String],
+    expectedSchema: Option[StructType] = None
+  ): DataFrame = {
     require(filePaths.nonEmpty, "filePaths must not be empty")
     logDebug("read_source_start", "format" -> format, "files" -> filePaths.size, "first_file" -> filePaths.head)
 
     format match {
       case "csv" =>
-        spark.read
+        val reader = spark.read
           .option("header", "true")
-          .option("inferSchema", "true")
           .option("mode", "PERMISSIVE")
-          .csv(filePaths: _*)
+
+        expectedSchema match {
+          case Some(schema) =>
+            reader
+              .option("inferSchema", "false")
+              .option("enforceSchema", "false")
+              .schema(schema)
+              .csv(filePaths: _*)
+          case None =>
+            reader
+              .option("inferSchema", "true")
+              .csv(filePaths: _*)
+        }
       case "json" =>
-        spark.read
+        val reader = spark.read
           .option("mode", "PERMISSIVE")
-          .json(filePaths: _*)
+
+        expectedSchema match {
+          case Some(schema) => reader.schema(schema).json(filePaths: _*)
+          case None => reader.json(filePaths: _*)
+        }
       case "parquet" =>
-        spark.read.parquet(filePaths: _*)
+        expectedSchema match {
+          case Some(schema) => spark.read.schema(schema).parquet(filePaths: _*)
+          case None => spark.read.parquet(filePaths: _*)
+        }
       case "orc" =>
-        spark.read.orc(filePaths: _*)
+        expectedSchema match {
+          case Some(schema) => spark.read.schema(schema).orc(filePaths: _*)
+          case None => spark.read.orc(filePaths: _*)
+        }
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
