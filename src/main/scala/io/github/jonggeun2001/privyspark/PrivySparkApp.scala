@@ -672,7 +672,10 @@ object PrivySparkApp {
         val fs = path.getFileSystem(spark.sparkContext.hadoopConfiguration)
         val reader = new BufferedReader(new InputStreamReader(fs.open(path), StandardCharsets.UTF_8))
         try {
-          val headerLine = reader.readLine()
+          var headerLine = reader.readLine()
+          while (headerLine != null && headerLine.trim.isEmpty) {
+            headerLine = reader.readLine()
+          }
           if (headerLine == null || headerLine.trim.isEmpty) {
             throw new IllegalArgumentException("Empty or missing CSV header")
           }

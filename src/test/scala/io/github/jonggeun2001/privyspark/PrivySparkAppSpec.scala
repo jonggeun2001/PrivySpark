@@ -224,6 +224,32 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("inferCsvHeaderSignature skips leading blank lines like Spark schema detection") {
+    val inputDir = Files.createTempDirectory("privyspark-leading-blank-header-")
+
+    try {
+      val file = inputDir.resolve("blank-prefix.csv")
+      writeText(file,
+        "\n\nname,email\n" +
+          "alice,alice@example.com\n")
+
+      val fastPathSignature = PrivySparkApp.inferCsvHeaderSignature(spark, file.toString)
+      val sparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", file.toString)
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-03-13T00:00:00Z"
+      )
+
+      assert(fastPathSignature == sparkSignature)
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.filter(_.format == "csv").size == 1)
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure throws when input path does not exist") {
     val missingPath = s"/tmp/privyspark-missing-${System.nanoTime()}"
 
