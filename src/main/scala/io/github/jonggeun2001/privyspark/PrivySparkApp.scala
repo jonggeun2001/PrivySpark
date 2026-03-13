@@ -9,6 +9,8 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, input_file_name}
 
 import java.time.Instant
+import java.nio.file.NoSuchFileException
+import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
@@ -37,8 +39,18 @@ object PrivySparkApp {
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
   private[privyspark] val MaxFilesPerGroupBatchScan = 1000
+  private[privyspark] val MaxFileReadAttempts = 2
+  private[privyspark] val FileReadRetryDelayMillis = 200L
   private val DebugPropertyName = "privyspark.debug"
   private val DebugEnvName = "PRIVYSPARK_DEBUG"
+  private val RetriableFileReadErrorSnippets = Seq(
+    "path does not exist",
+    "file does not exist",
+    "no such file",
+    "underlying files have been updated",
+    "failed_read_file",
+    "encountered error while reading file"
+  )
 
   private def logDriver(message: String): Unit = {
     System.err.println(s"[PrivySpark] $message")
@@ -144,6 +156,98 @@ object PrivySparkApp {
         )
       }
     }
+  }
+
+  @tailrec
+  private def collectThrowableChain(current: Throwable, acc: Vector[Throwable] = Vector.empty): Vector[Throwable] = {
+    if (current == null || acc.contains(current)) {
+      acc
+    } else {
+      collectThrowableChain(current.getCause, acc :+ current)
+    }
+  }
+
+  private def formatThrowableSummary(error: Throwable): String = {
+    collectThrowableChain(error)
+      .flatMap { cause =>
+        Option(cause.getMessage)
+          .filter(_.trim.nonEmpty)
+          .map(message => s"${cause.getClass.getSimpleName}: ${message.trim}")
+      }
+      .headOption
+      .getOrElse(error.getClass.getSimpleName)
+  }
+
+  private def isRetriableFileReadFailure(error: Throwable): Boolean = {
+    collectThrowableChain(error).exists {
+      case _: java.io.FileNotFoundException => true
+      case _: NoSuchFileException => true
+      case cause =>
+        val normalizedMessage = Option(cause.getMessage).map(_.toLowerCase).getOrElse("")
+        RetriableFileReadErrorSnippets.exists(normalizedMessage.contains)
+    }
+  }
+
+  private def refreshReadPaths(spark: SparkSession, filePaths: Seq[String]): Unit = {
+    val refreshTargets = filePaths.distinct.flatMap { path =>
+      Seq(Some(path), Option(new Path(path).getParent).map(_.toString)).flatten
+    }.distinct
+
+    refreshTargets.foreach { path =>
+      try {
+        spark.catalog.refreshByPath(path)
+      } catch {
+        case NonFatal(_) => ()
+      }
+    }
+  }
+
+  private def pauseBeforeRetry(delayMs: Long): Unit = {
+    if (delayMs > 0L) {
+      try {
+        Thread.sleep(delayMs)
+      } catch {
+        case _: InterruptedException =>
+          Thread.currentThread().interrupt()
+          throw new IllegalStateException("File read retry interrupted")
+      }
+    }
+  }
+
+  private[privyspark] def withFileReadRetry[A](
+    spark: SparkSession,
+    filePaths: Seq[String],
+    operationName: String,
+    maxAttempts: Int = MaxFileReadAttempts,
+    retryDelayMs: Long = FileReadRetryDelayMillis
+  )(block: => A): A = {
+    require(maxAttempts >= 1, "maxAttempts must be >= 1")
+
+    def attempt(attemptNumber: Int): A = {
+      try {
+        block
+      } catch {
+        case NonFatal(error) if attemptNumber < maxAttempts && isRetriableFileReadFailure(error) =>
+          val nextAttempt = attemptNumber + 1
+          val reason = formatThrowableSummary(error)
+          logDriver(
+            s"file_read_retry operation=$operationName attempt=$nextAttempt/$maxAttempts files=${filePaths.size} reason=$reason"
+          )
+          logDebug(
+            "file_read_retry",
+            "operation" -> operationName,
+            "attempt" -> nextAttempt,
+            "max_attempts" -> maxAttempts,
+            "files" -> filePaths.size,
+            "reason" -> reason
+          )
+          refreshReadPaths(spark, filePaths)
+          pauseBeforeRetry(retryDelayMs)
+          attempt(nextAttempt)
+      }
+    }
+
+    attempt(1)
   }
 
   def main(args: Array[String]): Unit = {
@@ -431,7 +535,9 @@ object PrivySparkApp {
     filePath: String
   ): Either[String, (String, StructType)] = {
     try {
-      val schema = readSchemaSource(spark, format, filePath).schema
+      val schema = withFileReadRetry(spark, Seq(filePath), "schema_detection") {
+        readSchemaSource(spark, format, filePath).schema
+      }
       Right(schemaSignatureForSchema(format, schema) -> schema)
     } catch {
       case NonFatal(e) =>
@@ -734,115 +840,117 @@ object PrivySparkApp {
       "sample_ratio" -> sampleRatio,
       "use_directory_identifier" -> group.useDirectoryIdentifier
     )
-    val baseDf = readSource(spark, group.format, group.filePaths, group.expectedSchema)
-    verifyBatchSchemaConsistency(spark, group)
-    val fileIdentifierColumn = if (group.useDirectoryIdentifier) {
-      None
-    } else {
-      Some(resolveFileIdentifierColumn(baseDf.columns.toSeq))
-    }
-    val sourceDf = fileIdentifierColumn match {
-      case Some(columnName) => baseDf.withColumn(columnName, input_file_name())
-      case None => baseDf
-    }
-    logDebug(
-      "group_scan_batch_source_ready",
-      "directory" -> group.directoryPath,
-      "format" -> group.format,
-      "columns" -> sourceDf.columns.length,
-      "file_identifier_mode" -> fileIdentifierColumn.fold("directory")(identity)
-    )
-
-    val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
-
-    sampledDf.cache()
-    try {
-      fileIdentifierColumn match {
-        case None =>
-          val sampledRowCount = sampledDf.count()
-          logDebug(
-            "group_scan_batch_sampled_rows",
-            "directory" -> group.directoryPath,
-            "sampled_rows" -> sampledRowCount,
-            "mode" -> "directory_identifier"
-          )
-          if (sampledRowCount == 0L) {
-            logDebug(
-              "group_scan_batch_complete",
-              "directory" -> group.directoryPath,
-              "result_rows" -> 0,
-              "mode" -> "directory_identifier"
-            )
-            Seq.empty
-          } else {
-            val results = buildScanResults(
-              datasetPath,
-              timestamp,
-              resolveDirectoryIdentifier(datasetPath, group.directoryPath),
-              sampledRowCount,
-              DetectionAggregator.aggregate(sampledDf, rules)
-            )
-            logDebug(
-              "group_scan_batch_complete",
-              "directory" -> group.directoryPath,
-              "result_rows" -> results.size,
-              "mode" -> "directory_identifier"
-            )
-            results
-          }
-        case Some(columnName) =>
-          val sampledRowsByFile = sampledDf
-            .groupBy(col(columnName))
-            .count()
-            .collect()
-            .flatMap { row =>
-              val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
-              val rowCount = if (row.isNullAt(1)) 0L else row.getLong(1)
-              if (fileIdentifier == null || fileIdentifier.isEmpty || rowCount <= 0L) {
-                None
-              } else {
-                Some(fileIdentifier -> rowCount)
-              }
-            }
-            .toMap
-          logDebug(
-            "group_scan_batch_sampled_file_rows",
-            "directory" -> group.directoryPath,
-            "files_with_rows" -> sampledRowsByFile.size,
-            "mode" -> "file_identifier"
-          )
-
-          if (sampledRowsByFile.isEmpty) {
-            logDebug(
-              "group_scan_batch_complete",
-              "directory" -> group.directoryPath,
-              "result_rows" -> 0,
-              "mode" -> "file_identifier"
-            )
-            Seq.empty
-          } else {
-            val results = DetectionAggregator.aggregateByFile(sampledDf, columnName, rules).flatMap { matchCount =>
-              sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
-                buildScanResults(
-                  datasetPath,
-                  timestamp,
-                  resolveRelativeIdentifier(datasetPath, matchCount.fileIdentifier),
-                  sampledRowCount,
-                  Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count))
-                ).headOption
-              }
-            }
-            logDebug(
-              "group_scan_batch_complete",
-              "directory" -> group.directoryPath,
-              "result_rows" -> results.size,
-              "mode" -> "file_identifier"
-            )
-            results
-          }
+    withFileReadRetry(spark, group.filePaths, "group_batch_scan") {
+      val baseDf = readSource(spark, group.format, group.filePaths, group.expectedSchema)
+      verifyBatchSchemaConsistency(spark, group)
+      val fileIdentifierColumn = if (group.useDirectoryIdentifier) {
+        None
+      } else {
+        Some(resolveFileIdentifierColumn(baseDf.columns.toSeq))
       }
-    } finally {
-      sampledDf.unpersist(blocking = true)
+      val sourceDf = fileIdentifierColumn match {
+        case Some(columnName) => baseDf.withColumn(columnName, input_file_name())
+        case None => baseDf
+      }
+      logDebug(
+        "group_scan_batch_source_ready",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "columns" -> sourceDf.columns.length,
+        "file_identifier_mode" -> fileIdentifierColumn.fold("directory")(identity)
+      )
+
+      val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
+
+      sampledDf.cache()
+      try {
+        fileIdentifierColumn match {
+          case None =>
+            val sampledRowCount = sampledDf.count()
+            logDebug(
+              "group_scan_batch_sampled_rows",
+              "directory" -> group.directoryPath,
+              "sampled_rows" -> sampledRowCount,
+              "mode" -> "directory_identifier"
+            )
+            if (sampledRowCount == 0L) {
+              logDebug(
+                "group_scan_batch_complete",
+                "directory" -> group.directoryPath,
+                "result_rows" -> 0,
+                "mode" -> "directory_identifier"
+              )
+              Seq.empty
+            } else {
+              val results = buildScanResults(
+                datasetPath,
+                timestamp,
+                resolveDirectoryIdentifier(datasetPath, group.directoryPath),
+                sampledRowCount,
+                DetectionAggregator.aggregate(sampledDf, rules)
+              )
+              logDebug(
+                "group_scan_batch_complete",
+                "directory" -> group.directoryPath,
+                "result_rows" -> results.size,
+                "mode" -> "directory_identifier"
+              )
+              results
+            }
+          case Some(columnName) =>
+            val sampledRowsByFile = sampledDf
+              .groupBy(col(columnName))
+              .count()
+              .collect()
+              .flatMap { row =>
+                val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+                val rowCount = if (row.isNullAt(1)) 0L else row.getLong(1)
+                if (fileIdentifier == null || fileIdentifier.isEmpty || rowCount <= 0L) {
+                  None
+                } else {
+                  Some(fileIdentifier -> rowCount)
+                }
+              }
+              .toMap
+            logDebug(
+              "group_scan_batch_sampled_file_rows",
+              "directory" -> group.directoryPath,
+              "files_with_rows" -> sampledRowsByFile.size,
+              "mode" -> "file_identifier"
+            )
+
+            if (sampledRowsByFile.isEmpty) {
+              logDebug(
+                "group_scan_batch_complete",
+                "directory" -> group.directoryPath,
+                "result_rows" -> 0,
+                "mode" -> "file_identifier"
+              )
+              Seq.empty
+            } else {
+              val results = DetectionAggregator.aggregateByFile(sampledDf, columnName, rules).flatMap { matchCount =>
+                sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
+                  buildScanResults(
+                    datasetPath,
+                    timestamp,
+                    resolveRelativeIdentifier(datasetPath, matchCount.fileIdentifier),
+                    sampledRowCount,
+                    Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count))
+                  ).headOption
+                }
+              }
+              logDebug(
+                "group_scan_batch_complete",
+                "directory" -> group.directoryPath,
+                "result_rows" -> results.size,
+                "mode" -> "file_identifier"
+              )
+              results
+            }
+        }
+      } finally {
+        sampledDf.unpersist(blocking = true)
+      }
     }
   }
 
@@ -858,40 +966,42 @@ object PrivySparkApp {
     logDebug("scan_file_start", "file" -> filePath, "file_identifier" -> fileIdentifier, "sample_ratio" -> sampleRatio)
 
     try {
-      val format = FormatDetector.infer(filePath).getOrElse {
-        logDebug("scan_file_error", "file" -> filePath, "file_identifier" -> fileIdentifier, "reason" -> "Unsupported file format")
-        return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $filePath"))
-      }
+      withFileReadRetry(spark, Seq(filePath), "file_scan") {
+        val format = FormatDetector.infer(filePath).getOrElse {
+          logDebug("scan_file_error", "file" -> filePath, "file_identifier" -> fileIdentifier, "reason" -> "Unsupported file format")
+          return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $filePath"))
+        }
 
-      val sourceDf = readSource(spark, format, Seq(filePath))
-      val schemaSignature = schemaSignatureForSchema(format, sourceDf.schema)
-      val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
+        val sourceDf = readSource(spark, format, Seq(filePath))
+        val schemaSignature = schemaSignatureForSchema(format, sourceDf.schema)
+        val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
 
-      sampledDf.cache()
-      try {
-        val sampledRowCount = sampledDf.count()
-        logDebug(
-          "scan_file_sampled_rows",
-          "file" -> filePath,
-          "file_identifier" -> fileIdentifier,
-          "sampled_rows" -> sampledRowCount
-        )
-
-        if (sampledRowCount == 0L) {
-          logDebug("scan_file_complete", "file" -> filePath, "file_identifier" -> fileIdentifier, "matches" -> 0)
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, Seq.empty, schemaSignature))
-        } else {
-          val matchCounts = DetectionAggregator.aggregate(sampledDf, rules)
+        sampledDf.cache()
+        try {
+          val sampledRowCount = sampledDf.count()
           logDebug(
-            "scan_file_complete",
+            "scan_file_sampled_rows",
             "file" -> filePath,
             "file_identifier" -> fileIdentifier,
-            "matches" -> matchCounts.size
+            "sampled_rows" -> sampledRowCount
           )
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, matchCounts, schemaSignature))
+
+          if (sampledRowCount == 0L) {
+            logDebug("scan_file_complete", "file" -> filePath, "file_identifier" -> fileIdentifier, "matches" -> 0)
+            Right(FileScanMetrics(fileIdentifier, sampledRowCount, Seq.empty, schemaSignature))
+          } else {
+            val matchCounts = DetectionAggregator.aggregate(sampledDf, rules)
+            logDebug(
+              "scan_file_complete",
+              "file" -> filePath,
+              "file_identifier" -> fileIdentifier,
+              "matches" -> matchCounts.size
+            )
+            Right(FileScanMetrics(fileIdentifier, sampledRowCount, matchCounts, schemaSignature))
+          }
+        } finally {
+          sampledDf.unpersist(blocking = true)
         }
-      } finally {
-        sampledDf.unpersist(blocking = true)
       }
     } catch {
       case NonFatal(e) =>

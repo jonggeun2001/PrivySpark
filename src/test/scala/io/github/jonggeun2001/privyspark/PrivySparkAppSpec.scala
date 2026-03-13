@@ -114,6 +114,27 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("withFileReadRetry retries retriable file read failures") {
+    var attempts = 0
+
+    val result = PrivySparkApp.withFileReadRetry(
+      spark,
+      Seq("/tmp/privyspark-retry-placeholder"),
+      operationName = "schema_detection",
+      maxAttempts = 2,
+      retryDelayMs = 0L
+    ) {
+      attempts += 1
+      if (attempts == 1) {
+        throw new java.io.FileNotFoundException("transient read miss")
+      }
+      "ok"
+    }
+
+    assert(result == "ok")
+    assert(attempts == 2)
+  }
+
   test("scanDirectoryStructure marks a multi-file directory group to use directory identifier") {
     val inputDir = Files.createTempDirectory("privyspark-directory-identifier-plan-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
