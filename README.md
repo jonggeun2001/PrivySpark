@@ -9,7 +9,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - 디렉토리 구조 선스캔 후 `(디렉토리, 포맷)` 그룹 단위로 배치 처리
 - 그룹 내부는 파일별 스키마 시그니처로 재분할하고, 과대 그룹은 파일 단위로 자동 폴백
 - `file_identifier`는 입력 경로 기준 상대경로를 사용하고, 동일 스키마 파일이 pre-scan 오류 없이 하나의 디렉토리 그룹이면 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 충돌 방지를 위해 `.`로 표기한다.
-- 외부 규칙 파일 기반 정규식 탐지 (배치 집계 + 임계치 초과 시 안전 폴백)
+- 외부 규칙 파일 기반 정규식 탐지 (선택적 `column_hints` 지원 + 배치 집계 + 메트릭 50,000 초과 시 소배치 폴백 + 집계 예외 시 안전 legacy 폴백)
 - `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`를 지정하거나, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 지정하면 드라이버 debug 로그에 스캔 계획, 스키마 분할, 그룹/파일 스캔, 리포트 저장 진행사항을 기록
 - 그룹/집계 폴백 발생 시 원인과 실행 경로를 드라이버 로그에 기록
 - 지원 확장자: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc` (그 외 포맷은 오류 리포트로 분류)
@@ -97,4 +97,9 @@ git push origin 0.1.3
 rules:
   - pii_type: email
     regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}'
+    column_hints:
+      - email
+      - mail
 ```
+
+`column_hints`는 커스텀 ruleset에서 선택적으로 사용하는 필드입니다. 지정하면 컬럼명에 해당 힌트가 포함된 컬럼에만 규칙을 적용하고, 생략하면 기존처럼 모든 컬럼을 검사합니다. 기본 ruleset은 기존 호환성을 위해 모든 컬럼을 검사합니다.
