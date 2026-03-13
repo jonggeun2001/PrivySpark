@@ -11,6 +11,7 @@ import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.util.Comparator
+import java.util.concurrent.atomic.AtomicReference
 import scala.collection.mutable.ArrayBuffer
 
 @RunWith(classOf[JUnitRunner])
@@ -207,6 +208,27 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("withFileReadRetry retries transient missing file failures") {
+    var attempts = 0
+
+    val result = PrivySparkApp.withFileReadRetry(
+      spark,
+      Seq("/tmp/privyspark-transient.csv"),
+      operationName = "test_retry",
+      maxAttempts = 2,
+      retryDelayMs = 0L
+    ) {
+      attempts += 1
+      if (attempts == 1) {
+        throw new RuntimeException("Path does not exist: /tmp/privyspark-transient.csv")
+      }
+      "ok"
+    }
+
+    assert(result == "ok")
+    assert(attempts == 2)
+  }
+
   test("scanGroupBatch returns file-level detections for grouped files") {
     val inputDir = Files.createTempDirectory("privyspark-group-batch-")
 
@@ -242,6 +264,55 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(results.map(_.file_identifier).toSet == Set("part-0001.csv", "part-0002.csv"))
       assert(results.forall(_.pii_type == "email"))
     } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupBatch retries when a transiently missing file becomes readable") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-retry-")
+    val file = inputDir.resolve("part-0001.csv")
+    val writerError = new AtomicReference[Throwable]()
+
+    val writer = new Thread(new Runnable {
+      override def run(): Unit = {
+        try {
+          Thread.sleep(50L)
+          writeText(file,
+            "name,email\n" +
+              "alice,alice@example.com\n")
+        } catch {
+          case error: Throwable =>
+            writerError.set(error)
+        }
+      }
+    })
+
+    writer.start()
+
+    try {
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val results = PrivySparkApp.scanGroupBatch(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-03-13T00:00:00Z"
+      )
+
+      writer.join(1000L)
+      assert(writerError.get() == null, Option(writerError.get()).map(_.getMessage).getOrElse("unexpected writer error"))
+      assert(results.map(_.file_identifier).toSet == Set("part-0001.csv"))
+      assert(results.map(result => (result.column_name, result.match_count)).toSet == Set(("email", 1L)))
+    } finally {
+      writer.join(1000L)
       deleteRecursively(inputDir)
     }
   }
