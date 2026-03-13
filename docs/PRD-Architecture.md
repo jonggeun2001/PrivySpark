@@ -20,15 +20,20 @@
 1. 입력 경로 검증(절대경로/URI)
 2. 디렉토리 구조 선스캔 및 파일 목록 수집
 3. `(directory, format)` 기준 1차 그룹화
-4. 그룹 내 파일별 스키마 시그니처 기준 2차 분할
+4. 그룹 내 대표 파일 1개 기준 스키마 샘플링
 5. 그룹 단위 배치 스캔 수행
-6. 그룹 실패/과대 그룹 시 파일 단위 폴백
-7. 결과/오류 리포트 저장
+6. sampled group 실패 시 전체 파일 exact split 후 서브그룹 재스캔
+7. 그룹 실패/과대 그룹 시 파일 단위 폴백
+8. 결과/오류 리포트 저장
 
 ### 3.2 그룹 전략
 - 그룹 키: `directoryPath`, `format`, `schemaSignature`
-- CSV는 Spark DataFrame 생성 대신 헤더 라인을 직접 읽어 헤더 순서를 유지한 시그니처를 만든다
-- 동일 스키마 파일이 pre-scan 오류 없이 하나의 디렉토리 그룹이면 결과 `file_identifier`는 파일명이 아니라 디렉토리 상대경로를 사용하며, 입력 루트 디렉토리 그룹은 `.`로 표기
+- 다중 파일 그룹은 대표 파일 1개로 스키마를 샘플링하고 `schemaSampled=true`로 표시한다
+- sampled group은 exact split으로 동질성이 확인되기 전까지 `useDirectoryIdentifier=false`로 유지한다
+- CSV sampled group은 대표 파일의 헤더 유무 판정을 전체에 전파하지 않도록 batch scan 전에 exact split으로 재확인한다
+- sampled group 배치 읽기 실패 시 전체 파일 exact split으로 재분류하고, 여러 서브그룹으로 갈라지면 `useDirectoryIdentifier=false`로 강등한다
+- CSV는 헤더 유무를 자동 감지한다. 헤더가 있으면 헤더 순서를 유지한 시그니처를 만들고, 헤더가 없으면 컬럼 수 기반 시그니처(`cols:N`)를 사용한다. plain-text 2행 tie-case는 header 쪽으로 처리한다
+- exact split으로 동일 스키마가 확인되고 pre-scan 오류가 없는 단일 디렉토리 그룹이면 결과 `file_identifier`는 파일명이 아니라 디렉토리 상대경로를 사용하며, 입력 루트 디렉토리 그룹은 `.`로 표기
 - 과대 그룹(`MaxFilesPerGroupBatchScan`)은 드라이버 메모리 위험 회피를 위해 파일 단위로 전환
 
 ### 3.3 탐지 집계 전략

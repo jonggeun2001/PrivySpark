@@ -18,8 +18,9 @@
 - 포맷 인자는 받지 않음.
 - 확장자 기반 자동 감지(`csv`, `json/jsonl/ndjson`, `parquet`, `orc`).
 - 미지원 확장자는 해당 파일을 실패로 기록하고 오류 리포트에 포함.
-- 스캔 단위는 파일 단위를 기본으로 하며, 동일 스키마 파일이 하나의 디렉토리 그룹이면 디렉토리 식별자로 결과를 집계할 수 있다.
-- CSV 스키마 그룹핑은 전체 파일 타입 추론이 아니라 헤더 라인 파싱으로 판단한다.
+- 스캔 단위는 파일 단위를 기본으로 하며, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 디렉토리 식별자로 결과를 집계할 수 있다.
+- CSV 스키마 그룹핑은 전체 파일 타입 추론이 아니라 헤더 자동 감지 후 헤더 라인 파싱 또는 컬럼 수 기준으로 판단한다. plain-text 2행 tie-case는 header 쪽으로 처리한다.
+- 다중 파일 디렉토리 그룹은 대표 파일 1개로 스키마를 우선 샘플링할 수 있고, sampled group은 우선 파일 식별자를 유지한 채 배치 스캔을 시도한다. 단, CSV sampled group은 헤더 유무가 파일마다 다를 수 있으므로 batch scan 전에 exact split으로 재확인한다. sampled group 배치 스캔 실패 시 전체 파일 exact split 후 재시도한다.
 
 ### 2.3 탐지
 - MVP는 정규식 매칭만 사용.
@@ -36,7 +37,7 @@
 - 포맷: Parquet + CSV(Spark 기본 포맷, 각 출력 경로는 단일 data part file로 저장).
 - 결과 리포트는 아래 필드 포함:
   - `dataset_path`, `scan_timestamp`, `file_identifier`, `column_name`, `pii_type`, `match_count`, `match_ratio`, `confidence`
-- `file_identifier`는 입력 경로 기준 상대경로를 사용하며, 동일 스키마 파일이 pre-scan 오류 없이 하나의 디렉토리 그룹이면 해당 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 `.`를 사용한다.
+- `file_identifier`는 입력 경로 기준 상대경로를 사용하며, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 해당 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 `.`를 사용한다.
 - `match_ratio`, `confidence`는 소수점 둘째 자리까지 반올림하며, MVP의 `confidence = match_ratio`.
 - 실제 매칭값(원문 PII)은 저장하지 않음.
 
@@ -44,6 +45,7 @@
 - 파일별 실패는 전체 중단 없이 계속 처리.
 - 실패 파일은 별도 오류 리포트로 저장.
 - 스키마 판별/그룹 배치 스캔/파일 폴백 스캔 중 파일이 일시적으로 교체되거나 삭제되어 읽기 오류가 나면 내부 재시도 후 계속 진행하고, 재시도 이후에도 실패하면 해당 파일/그룹 오류로 기록한다.
+- sampled group 배치 스캔 실패 시에는 전체 파일 exact split으로 재분류한 뒤 서브그룹을 다시 스캔하고, 재분류 이후에도 실패하면 파일 단위 폴백으로 전환한다.
 - 운영자는 `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 설정으로 그룹/파일 폴백 병렬도를 조정할 수 있다.
 - `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`가 설정되면 드라이버 debug 로그에는 스캔 계획, 그룹/파일 스캔 진행, 폴백 여부를 남겨 운영 중 분석 진행상황과 버그 확인이 가능해야 한다.
 - 종료 코드는 실행 성공/실패 기준이며, PII 발견 여부와 무관.
