@@ -523,6 +523,7 @@ object PrivySparkApp {
       val useDirectoryIdentifier =
         groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 &&
           group.filePaths.size > 1 &&
+          !group.schemaSampled &&
           !directoriesWithPreScanErrors.contains(group.directoryPath)
       val finalizedGroup = group.copy(useDirectoryIdentifier = useDirectoryIdentifier)
       logDebug(
@@ -759,11 +760,21 @@ object PrivySparkApp {
       val allNumericFields = firstRowFields.nonEmpty && firstRowFields.forall(isNumericLikeField)
       val firstRowFieldKinds = firstRowFields.map(classifyCsvField)
       val secondRowFieldKinds = secondRowFields.map(classifyCsvField)
-      val hasStrongDataPattern =
-        firstRowFieldKinds.exists(kind => kind != "plain_text" && kind != "empty") &&
-          firstRowFieldKinds == secondRowFieldKinds
+      val firstRowHasStructuredData = firstRowFieldKinds.exists(isStructuredCsvFieldKind)
+      val looksLikeHeaderRow = firstRowFields.forall(looksLikeCsvHeaderField)
+      val sameFieldKinds = firstRowFieldKinds == secondRowFieldKinds
+      val secondRowShowsStructuredData = firstRowFieldKinds.zip(secondRowFieldKinds).exists {
+        case ("plain_text", secondKind) => isStructuredCsvFieldKind(secondKind)
+        case ("empty", secondKind) => isStructuredCsvFieldKind(secondKind)
+        case _ => false
+      }
 
-      !(hasDuplicateFields || allNumericFields || hasStrongDataPattern)
+      !hasDuplicateFields &&
+      !allNumericFields &&
+      !sameFieldKinds &&
+      !firstRowHasStructuredData &&
+      looksLikeHeaderRow &&
+      secondRowShowsStructuredData
     }
   }
 
@@ -931,12 +942,15 @@ object PrivySparkApp {
             timestamp,
             group.copy(schemaSampled = false)
           )
+          val exactSplitCanUseDirectoryIdentifier =
+            splitGroups.size == 1 &&
+              splitErrors.isEmpty &&
+              splitGroups.head.filePaths.size > 1
           val rescannedGroups =
-            if (splitGroups.size <= 1) {
-              splitGroups.map(_.copy(useDirectoryIdentifier = group.useDirectoryIdentifier, schemaSampled = false))
-            } else {
-              splitGroups.map(_.copy(useDirectoryIdentifier = false, schemaSampled = false))
-            }
+            splitGroups.map(_.copy(
+              useDirectoryIdentifier = exactSplitCanUseDirectoryIdentifier,
+              schemaSampled = false
+            ))
 
           val rescannedResults = ArrayBuffer.empty[ScanResult]
           val rescannedErrors = ArrayBuffer.empty[ScanError] ++ splitErrors
@@ -1011,7 +1025,9 @@ object PrivySparkApp {
     executeInParallel(parallelism, group.filePaths.map { filePath =>
       () => {
         logDebug("group_scan_fallback_file_start", "file" -> filePath, "directory" -> group.directoryPath)
-        filePath -> scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp, Some(group.csvHasHeader))
+        val csvHasHeaderOverride =
+          if (group.format == "csv" && group.schemaSampled) None else Some(group.csvHasHeader)
+        filePath -> scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp, csvHasHeaderOverride)
       }
     }).foreach {
       case (filePath, fileResult) =>
@@ -1390,6 +1406,21 @@ object PrivySparkApp {
     } else {
       "plain_text"
     }
+  }
+
+  private def isStructuredCsvFieldKind(kind: String): Boolean = {
+    kind match {
+      case "email" | "phone" | "numeric" | "mixed" => true
+      case _ => false
+    }
+  }
+
+  private def looksLikeCsvHeaderField(value: String): Boolean = {
+    val trimmed = Option(value).getOrElse("").trim
+    trimmed.nonEmpty &&
+      !trimmed.exists(_.isDigit) &&
+      !trimmed.contains("@") &&
+      trimmed.matches("[A-Za-z][A-Za-z_ ./-]*")
   }
 
   private[privyspark] def writeReports(
