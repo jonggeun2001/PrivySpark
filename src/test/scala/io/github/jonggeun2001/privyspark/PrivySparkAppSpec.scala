@@ -238,6 +238,36 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("detectCsvHasHeader returns true for generic plain-text headers when the first row is more header-like than the data row") {
+    val inputDir = Files.createTempDirectory("privyspark-generic-header-csv-")
+
+    try {
+      val file = inputDir.resolve("header.csv")
+      writeText(file,
+        "foo,bar\n" +
+          "alice,bob\n")
+
+      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("detectCsvHasHeader accepts header names that include trailing digits") {
+    val inputDir = Files.createTempDirectory("privyspark-digit-header-csv-")
+
+    try {
+      val file = inputDir.resolve("header.csv")
+      writeText(file,
+        "address1,address2\n" +
+          "home,office\n")
+
+      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("inferCsvSchemaSignature returns column-count signature for headerless CSV") {
     val inputDir = Files.createTempDirectory("privyspark-schema-signature-no-header-")
 
@@ -855,6 +885,100 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           ("users/part-a.csv", "email", 1L),
           ("users/part-b.csv", "_c1", 2L)
         ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroup exact-splits sampled mixed CSV header modes before batch scan") {
+    val inputDir = Files.createTempDirectory("privyspark-sampled-csv-exact-split-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      val headerFile = groupedDir.resolve("part-a.csv")
+      val headerlessFile = groupedDir.resolve("part-b.csv")
+
+      writeText(headerFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(headerlessFile,
+        "bob,bob@example.com\n" +
+          "carol,carol@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(headerFile.toString, headerlessFile.toString),
+        schemaSampled = true,
+        csvHasHeader = true,
+        directoryIdentifierEligible = true
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(
+          ("users/part-a.csv", "email", 1L),
+          ("users/part-b.csv", "_c1", 2L)
+        ))
+      assert(!results.exists(_.file_identifier == "users"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroup exact split restores directory identifier for eligible sampled CSV groups") {
+    val inputDir = Files.createTempDirectory("privyspark-sampled-csv-dir-id-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      val file1 = groupedDir.resolve("part-a.csv")
+      val file2 = groupedDir.resolve("part-b.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString),
+        useDirectoryIdentifier = false,
+        directoryIdentifierEligible = true,
+        schemaSampled = true,
+        csvHasHeader = true
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(_.file_identifier).toSet == Set("users"))
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("users", "email", 2L)))
     } finally {
       deleteRecursively(inputDir)
     }

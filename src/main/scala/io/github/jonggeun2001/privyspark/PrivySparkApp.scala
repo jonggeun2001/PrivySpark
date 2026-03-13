@@ -29,6 +29,7 @@ object PrivySparkApp {
     schemaSignature: String,
     filePaths: Seq[String],
     useDirectoryIdentifier: Boolean = false,
+    directoryIdentifierEligible: Boolean = false,
     schemaSampled: Boolean = false,
     csvHasHeader: Boolean = true
   )
@@ -560,12 +561,14 @@ object PrivySparkApp {
     }
 
     val finalizedGroups = schemaAwareGroups.map { group =>
-      val useDirectoryIdentifier =
+      val directoryIdentifierEligible =
         groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 &&
           group.filePaths.size > 1 &&
-          !group.schemaSampled &&
           !directoriesWithPreScanErrors.contains(group.directoryPath)
-      val finalizedGroup = group.copy(useDirectoryIdentifier = useDirectoryIdentifier)
+      val finalizedGroup = group.copy(
+        useDirectoryIdentifier = directoryIdentifierEligible && !group.schemaSampled,
+        directoryIdentifierEligible = directoryIdentifierEligible
+      )
       logDebug(
         "scan_group_planned",
         "directory" -> finalizedGroup.directoryPath,
@@ -794,8 +797,11 @@ object PrivySparkApp {
       val hasDuplicateFields = normalizedFields.nonEmpty && normalizedFields.distinct.size != normalizedFields.size
       val allNumericFields = firstRowFields.nonEmpty && firstRowFields.forall(isNumericLikeField)
       val firstRowFieldKinds = firstRowFields.map(classifyCsvField)
-      val firstRowHasStructuredData = firstRowFieldKinds.exists(isStructuredCsvFieldKind)
+      val firstRowHasStructuredData = firstRowFields.zip(firstRowFieldKinds).exists {
+        case (field, kind) => isStructuredCsvFieldForHeaderHeuristic(field, kind)
+      }
       val firstLooksLikeHeader = looksLikeCsvHeaderRow(firstRowFields)
+      val firstHasStrongHeaderSignal = firstRowFields.exists(hasStrongCsvHeaderSignal)
       val firstHeaderScore = scoreCsvHeaderRow(firstRowFields)
 
       if (lines.size <= 1) {
@@ -803,6 +809,7 @@ object PrivySparkApp {
         !allNumericFields &&
         !firstRowHasStructuredData &&
         firstLooksLikeHeader &&
+        firstHasStrongHeaderSignal &&
         firstHeaderScore >= firstRowFields.size * 2
       } else {
       val secondRowFields = parseCsvLine(spark, lines(1)).toSeq
@@ -818,12 +825,19 @@ object PrivySparkApp {
         case _ => false
       }
       val headerScoreGap = firstHeaderScore - secondHeaderScore
+      val firstRowAverageLength = averageCsvFieldLength(firstRowFields)
+      val secondRowAverageLength = averageCsvFieldLength(secondRowFields)
 
       !hasDuplicateFields &&
       !allNumericFields &&
       !firstRowHasStructuredData &&
       firstLooksLikeHeader &&
-      (secondRowShowsStructuredData || headerScoreGap >= 2)
+      (
+        secondRowShowsStructuredData ||
+          headerScoreGap >= 2 ||
+          (firstHasStrongHeaderSignal && headerScoreGap >= 0) ||
+          (headerScoreGap >= 0 && firstRowAverageLength + 0.5 < secondRowAverageLength)
+      )
       }
     }
   }
@@ -955,6 +969,27 @@ object PrivySparkApp {
       )
       return fallbackResult
     }
+    if (group.schemaSampled && group.format == "csv" && group.filePaths.size > 1) {
+      val exactSplitResult = rescanSampledGroupWithExactSplit(
+        spark,
+        datasetPath,
+        group,
+        rules,
+        sampleRatio,
+        timestamp,
+        "sampled_csv_exact_split"
+      )
+      logDebug(
+        "group_scan_complete",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "schema" -> group.schemaSignature,
+        "result_rows" -> exactSplitResult._1.size,
+        "error_rows" -> exactSplitResult._2.size,
+        "mode" -> "sampled_csv_exact_split"
+      )
+      return exactSplitResult
+    }
 
     try {
       val results = scanGroupBatch(spark, datasetPath, group, rules, sampleRatio, timestamp)
@@ -986,48 +1021,26 @@ object PrivySparkApp {
           logDriver(
             s"group_scan_fallback_execute directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} mode=schema_resplit"
           )
-          val (splitGroups, splitErrors) = splitGroupBySchema(
+          val exactSplitResult = rescanSampledGroupWithExactSplit(
             spark,
             datasetPath,
+            group,
+            rules,
+            sampleRatio,
             timestamp,
-            group.copy(schemaSampled = false)
+            "fallback_schema_resplit"
           )
-          val exactSplitCanUseDirectoryIdentifier =
-            splitGroups.size == 1 &&
-              splitErrors.isEmpty &&
-              splitGroups.head.filePaths.size > 1
-          val rescannedGroups =
-            splitGroups.map(_.copy(
-              useDirectoryIdentifier = exactSplitCanUseDirectoryIdentifier && group.useDirectoryIdentifier,
-              schemaSampled = false
-            ))
-
-          val rescannedResults = ArrayBuffer.empty[ScanResult]
-          val rescannedErrors = ArrayBuffer.empty[ScanError] ++ splitErrors
-          rescannedGroups.foreach { rescannedGroup =>
-            val (groupResults, groupErrors) = scanGroup(
-              spark,
-              datasetPath,
-              rescannedGroup,
-              rules,
-              sampleRatio,
-              timestamp,
-              maxFilesPerGroupBatchScan
-            )
-            rescannedResults ++= groupResults
-            rescannedErrors ++= groupErrors
-          }
 
           logDebug(
             "group_scan_complete",
             "directory" -> group.directoryPath,
             "format" -> group.format,
             "schema" -> group.schemaSignature,
-            "result_rows" -> rescannedResults.size,
-            "error_rows" -> rescannedErrors.size,
+            "result_rows" -> exactSplitResult._1.size,
+            "error_rows" -> exactSplitResult._2.size,
             "mode" -> "fallback_schema_resplit"
           )
-          (rescannedResults.toSeq, rescannedErrors.toSeq)
+          exactSplitResult
         } else {
           val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
           logDebug(
@@ -1465,15 +1478,30 @@ object PrivySparkApp {
     }
   }
 
+  private def isStructuredCsvFieldForHeaderHeuristic(value: String, kind: String): Boolean = {
+    if (kind == "mixed" && looksLikeCsvHeaderField(value)) {
+      false
+    } else {
+      isStructuredCsvFieldKind(kind)
+    }
+  }
+
   private def tokenizeCsvHeaderField(value: String): Seq[String] = {
-    Option(value).getOrElse("").trim.toLowerCase.split("[\\s_./-]+").filter(_.nonEmpty).toSeq
+    Option(value).getOrElse("").trim.toLowerCase
+      .split("[\\s_./-]+")
+      .filter(_.nonEmpty)
+      .flatMap { token =>
+        val normalizedToken = token.replaceAll("\\d+$", "")
+        if (normalizedToken.nonEmpty && normalizedToken != token) Seq(token, normalizedToken) else Seq(token)
+      }
+      .toSeq
   }
 
   private def looksLikeCsvHeaderField(value: String): Boolean = {
     val trimmed = Option(value).getOrElse("").trim
     trimmed.nonEmpty &&
       !trimmed.contains("@") &&
-      trimmed.matches("[A-Za-z][A-Za-z_ ./-]*")
+      trimmed.matches("[A-Za-z][A-Za-z0-9_ ./-]*")
   }
 
   private def hasStrongCsvHeaderSignal(value: String): Boolean = {
@@ -1485,9 +1513,10 @@ object PrivySparkApp {
 
   private def scoreCsvHeaderField(value: String): Int = {
     val trimmed = Option(value).getOrElse("").trim
+    val fieldKind = classifyCsvField(trimmed)
     if (trimmed.isEmpty) {
       -2
-    } else if (classifyCsvField(trimmed) != "plain_text") {
+    } else if (fieldKind != "plain_text" && !(fieldKind == "mixed" && looksLikeCsvHeaderField(trimmed))) {
       -2
     } else {
       val tokens = tokenizeCsvHeaderField(trimmed)
@@ -1507,8 +1536,71 @@ object PrivySparkApp {
 
   private def looksLikeCsvHeaderRow(fields: Seq[String]): Boolean = {
     fields.nonEmpty &&
-      fields.forall(looksLikeCsvHeaderField) &&
-      fields.exists(hasStrongCsvHeaderSignal)
+      fields.forall(looksLikeCsvHeaderField)
+  }
+
+  private def averageCsvFieldLength(fields: Seq[String]): Double = {
+    if (fields.isEmpty) {
+      0.0
+    } else {
+      fields.map(field => Option(field).getOrElse("").trim.length).sum.toDouble / fields.size.toDouble
+    }
+  }
+
+  private def rescanSampledGroupWithExactSplit(
+    spark: SparkSession,
+    datasetPath: String,
+    group: ScanGroup,
+    rules: Seq[PiiRule],
+    sampleRatio: Double,
+    timestamp: String,
+    mode: String,
+    maxFilesPerGroupBatchScan: Int = MaxFilesPerGroupBatchScan
+  ): (Seq[ScanResult], Seq[ScanError]) = {
+    val (splitGroups, splitErrors) = splitGroupBySchema(
+      spark,
+      datasetPath,
+      timestamp,
+      group.copy(schemaSampled = false)
+    )
+    val exactSplitCanUseDirectoryIdentifier =
+      group.directoryIdentifierEligible &&
+        splitGroups.size == 1 &&
+        splitErrors.isEmpty &&
+        splitGroups.head.filePaths.size > 1
+    val rescannedGroups = splitGroups.map(_.copy(
+      useDirectoryIdentifier = exactSplitCanUseDirectoryIdentifier,
+      directoryIdentifierEligible = group.directoryIdentifierEligible,
+      schemaSampled = false
+    ))
+
+    val rescannedResults = ArrayBuffer.empty[ScanResult]
+    val rescannedErrors = ArrayBuffer.empty[ScanError] ++ splitErrors
+    rescannedGroups.foreach { rescannedGroup =>
+      val (groupResults, groupErrors) = scanGroup(
+        spark,
+        datasetPath,
+        rescannedGroup,
+        rules,
+        sampleRatio,
+        timestamp,
+        maxFilesPerGroupBatchScan
+      )
+      rescannedResults ++= groupResults
+      rescannedErrors ++= groupErrors
+    }
+
+    logDebug(
+      "group_scan_exact_split_complete",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "schema" -> group.schemaSignature,
+      "split_groups" -> splitGroups.size,
+      "split_errors" -> splitErrors.size,
+      "use_directory_identifier" -> exactSplitCanUseDirectoryIdentifier,
+      "mode" -> mode
+    )
+    (rescannedResults.toSeq, rescannedErrors.toSeq)
   }
 
   private[privyspark] def writeReports(
