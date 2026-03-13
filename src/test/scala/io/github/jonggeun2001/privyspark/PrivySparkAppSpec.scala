@@ -27,29 +27,36 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     super.afterAll()
   }
 
-  test("scanDirectoryStructure splits same directory files by schema signature") {
+  test("splitGroupBySchema exact mode splits same directory files by schema signature") {
     val inputDir = Files.createTempDirectory("privyspark-schema-plan-")
 
     try {
-      writeText(inputDir.resolve("users_email.csv"),
+      val emailFile = inputDir.resolve("users_email.csv")
+      val phoneFile = inputDir.resolve("users_phone.csv")
+      writeText(emailFile,
         "name,email\n" +
           "alice,alice@example.com\n")
-      writeText(inputDir.resolve("users_phone.csv"),
+      writeText(phoneFile,
         "name,phone\n" +
           "bob,010-1234-5678\n")
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "",
+        filePaths = Seq(emailFile.toString, phoneFile.toString)
+      )
+      val (splitGroups, splitErrors) = PrivySparkApp.splitGroupBySchema(
         spark,
         inputDir.toString,
-        inputDir.toString,
-        "2026-03-05T00:00:00Z"
+        "2026-03-05T00:00:00Z",
+        group
       )
 
-      val csvGroups = plan.groups.filter(_.format == "csv")
-      assert(plan.totalFiles == 2)
-      assert(plan.errors.isEmpty)
-      assert(csvGroups.size == 2)
-      assert(csvGroups.forall(_.filePaths.size == 1))
+      assert(splitErrors.isEmpty)
+      assert(splitGroups.size == 2)
+      assert(splitGroups.forall(_.filePaths.size == 1))
+      assert(splitGroups.forall(!_.schemaSampled))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -77,6 +84,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(plan.errors.isEmpty)
       assert(csvGroups.size == 1)
       assert(csvGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("users_a.csv", "users_b.csv"))
+      assert(csvGroups.head.schemaSampled)
+      assert(csvGroups.head.csvHasHeader)
     } finally {
       deleteRecursively(inputDir)
     }
@@ -105,7 +114,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
 
       assert(logs.contains("[PrivySpark][DEBUG] scan_directory_structure_start"))
-      assert(logs.contains("[PrivySpark][DEBUG] scan_group_schema_split_start"))
+      assert(logs.contains("[PrivySpark][DEBUG] scan_group_schema_sample_start"))
       assert(logs.contains("[PrivySpark][DEBUG] scan_group_planned"))
       assert(logs.contains("[PrivySpark][DEBUG] scan_directory_structure_complete"))
     } finally {
@@ -135,32 +144,41 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val csvGroups = plan.groups.filter(_.format == "csv")
       assert(csvGroups.size == 1)
       assert(csvGroups.head.useDirectoryIdentifier)
+      assert(csvGroups.head.schemaSampled)
     } finally {
       deleteRecursively(inputDir)
     }
   }
 
-  test("scanDirectoryStructure splits CSV files when header order differs") {
+  test("splitGroupBySchema exact mode splits CSV files when header order differs") {
     val inputDir = Files.createTempDirectory("privyspark-schema-order-")
 
     try {
-      writeText(inputDir.resolve("ordered_a.csv"),
+      val firstFile = inputDir.resolve("ordered_a.csv")
+      val secondFile = inputDir.resolve("ordered_b.csv")
+      writeText(firstFile,
         "name,email\n" +
           "alice,alice@example.com\n")
-      writeText(inputDir.resolve("ordered_b.csv"),
+      writeText(secondFile,
         "email,name\n" +
           "bob@example.com,bob\n")
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "",
+        filePaths = Seq(firstFile.toString, secondFile.toString)
+      )
+      val (splitGroups, splitErrors) = PrivySparkApp.splitGroupBySchema(
         spark,
         inputDir.toString,
-        inputDir.toString,
-        "2026-03-05T00:00:00Z"
+        "2026-03-05T00:00:00Z",
+        group
       )
 
-      val csvGroups = plan.groups.filter(_.format == "csv")
-      assert(csvGroups.size == 2)
-      assert(csvGroups.forall(_.filePaths.size == 1))
+      assert(splitErrors.isEmpty)
+      assert(splitGroups.size == 2)
+      assert(splitGroups.forall(_.filePaths.size == 1))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -190,7 +208,37 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanDirectoryStructure preserves quoted CSV header whitespace in schema signatures") {
+  test("inferCsvSchemaSignature returns header-based signature for CSV with header") {
+    val inputDir = Files.createTempDirectory("privyspark-schema-signature-header-")
+
+    try {
+      val file = inputDir.resolve("header.csv")
+      writeText(file,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+
+      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("name|email", true)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("inferCsvSchemaSignature returns column-count signature for headerless CSV") {
+    val inputDir = Files.createTempDirectory("privyspark-schema-signature-no-header-")
+
+    try {
+      val file = inputDir.resolve("headerless.csv")
+      writeText(file,
+        "alice,alice@example.com\n" +
+          "bob,bob@example.com\n")
+
+      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("cols:2", false)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("splitGroupBySchema exact mode preserves quoted CSV header whitespace in schema signatures") {
     val inputDir = Files.createTempDirectory("privyspark-quoted-header-whitespace-")
 
     try {
@@ -208,17 +256,24 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val spacedSparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", spacedFile.toString)
       val compactFastPath = PrivySparkApp.inferCsvHeaderSignature(spark, compactFile.toString)
       val compactSparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", compactFile.toString)
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "",
+        filePaths = Seq(compactFile.toString, spacedFile.toString)
+      )
+      val (splitGroups, splitErrors) = PrivySparkApp.splitGroupBySchema(
         spark,
         inputDir.toString,
-        inputDir.toString,
-        "2026-03-13T00:00:00Z"
+        "2026-03-13T00:00:00Z",
+        group
       )
 
       assert(spacedFastPath == spacedSparkSignature)
       assert(compactFastPath == compactSparkSignature)
       assert(spacedFastPath != compactFastPath)
-      assert(plan.groups.filter(_.format == "csv").size == 2)
+      assert(splitErrors.isEmpty)
+      assert(splitGroups.size == 2)
     } finally {
       deleteRecursively(inputDir)
     }
@@ -287,6 +342,46 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(plan.errors.size == 1)
       assert(plan.errors.head.file_identifier == "unsupported.xlsx")
       assert(plan.errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure keeps a single CSV file unsampled and preserves headerless mode") {
+    val inputDir = Files.createTempDirectory("privyspark-single-headerless-csv-")
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("customers.csv"),
+        "alice,alice@example.com\n" +
+          "bob,bob@example.com\n")
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        timestamp
+      )
+
+      val group = plan.groups.head
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(!group.schemaSampled)
+      assert(!group.csvHasHeader)
+      assert(group.schemaSignature == "cols:2")
+      assert(errors.isEmpty)
+      assert(results.map(_.column_name).toSet == Set("_c1"))
+      assert(results.forall(_.file_identifier == "customers.csv"))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -693,6 +788,68 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(logs.contains("group_scan_fallback"))
       assert(logs.contains("group_scan_fallback_execute"))
       assert(logs.contains("mode=file_scan"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroup resplits a sampled parquet group when batched read fails") {
+    val inputDir = Files.createTempDirectory("privyspark-sampled-schema-fallback-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      import spark.implicits._
+
+      Seq(("alice@example.com", "010-1234-5678"))
+        .toDF("email", "phone")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq((42, 30))
+        .toDF("email", "age")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      val parquetFileA = findDataFile(leftWriteDir, ".parquet").get
+      val parquetFileB = findDataFile(rightWriteDir, ".parquet").get
+      val groupedDir = Files.createDirectory(inputDir.resolve("grouped"))
+      Files.move(parquetFileA, groupedDir.resolve("part-a.parquet"))
+      Files.move(parquetFileB, groupedDir.resolve("part-b.parquet"))
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        groupedDir.toString,
+        groupedDir.toString,
+        timestamp
+      )
+      val group = plan.groups.head
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+      )
+
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        groupedDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(group.schemaSampled)
+      assert(group.useDirectoryIdentifier)
+      assert(errors.isEmpty)
+      assert(results.map(_.file_identifier).toSet == Set("part-a.parquet"))
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("part-a.parquet", "email", 1L), ("part-a.parquet", "phone", 1L)))
+      assert(!results.exists(_.file_identifier == "."))
+      assert(!results.exists(_.file_identifier == "grouped"))
     } finally {
       deleteRecursively(inputDir)
     }

@@ -28,7 +28,9 @@ object PrivySparkApp {
     format: String,
     schemaSignature: String,
     filePaths: Seq[String],
-    useDirectoryIdentifier: Boolean = false
+    useDirectoryIdentifier: Boolean = false,
+    schemaSampled: Boolean = false,
+    csvHasHeader: Boolean = true
   )
   private[privyspark] final case class DirectoryScanPlan(
     groups: Seq[ScanGroup],
@@ -497,7 +499,7 @@ object PrivySparkApp {
 
     val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
     groupedByDirectoryAndFormat.foreach { group =>
-      val (splitGroups, splitErrors) = splitGroupBySchema(spark, datasetPath, timestamp, group)
+      val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group)
       schemaAwareGroups ++= splitGroups
       errors ++= splitErrors
       logDebug(
@@ -529,7 +531,9 @@ object PrivySparkApp {
         "format" -> finalizedGroup.format,
         "schema" -> finalizedGroup.schemaSignature,
         "files" -> finalizedGroup.filePaths.size,
-        "use_directory_identifier" -> finalizedGroup.useDirectoryIdentifier
+        "use_directory_identifier" -> finalizedGroup.useDirectoryIdentifier,
+        "schema_sampled" -> finalizedGroup.schemaSampled,
+        "csv_has_header" -> finalizedGroup.csvHasHeader
       )
       finalizedGroup
     }
@@ -558,7 +562,59 @@ object PrivySparkApp {
     )
   }
 
-  private def splitGroupBySchema(
+  private[privyspark] def splitGroupBySchemaFast(
+    spark: SparkSession,
+    datasetPath: String,
+    timestamp: String,
+    group: ScanGroup
+  ): (Seq[ScanGroup], Seq[ScanError]) = {
+    if (group.filePaths.size <= 1) {
+      splitGroupBySchema(spark, datasetPath, timestamp, group)
+    } else {
+      logDebug(
+        "scan_group_schema_sample_start",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "files" -> group.filePaths.size
+      )
+
+      val sampledSchemaResult = if (group.format == "csv") {
+        inferCsvSchemaSignature(spark, group.filePaths.head)
+      } else {
+        inferSchemaSignature(spark, group.format, group.filePaths.head).map(signature => (signature, true))
+      }
+
+      sampledSchemaResult match {
+        case Right((schemaSignature, csvHasHeader)) =>
+          val sampledGroup = group.copy(
+            schemaSignature = schemaSignature,
+            filePaths = group.filePaths.sorted,
+            schemaSampled = true,
+            csvHasHeader = csvHasHeader
+          )
+          logDebug(
+            "scan_group_schema_sample_complete",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "schema" -> schemaSignature,
+            "files" -> group.filePaths.size,
+            "csv_has_header" -> csvHasHeader
+          )
+          (Seq(sampledGroup), Seq.empty)
+        case Left(errorMessage) =>
+          logDebug(
+            "scan_group_schema_sample_fallback",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "files" -> group.filePaths.size,
+            "reason" -> errorMessage
+          )
+          splitGroupBySchema(spark, datasetPath, timestamp, group)
+      }
+    }
+  }
+
+  private[privyspark] def splitGroupBySchema(
     spark: SparkSession,
     datasetPath: String,
     timestamp: String,
@@ -570,26 +626,27 @@ object PrivySparkApp {
       "format" -> group.format,
       "files" -> group.filePaths.size
     )
-    val filesBySchema = scala.collection.mutable.Map.empty[String, ArrayBuffer[String]]
+    val filesBySchema = scala.collection.mutable.Map.empty[(String, Boolean), ArrayBuffer[String]]
     val errors = ArrayBuffer.empty[ScanError]
 
     group.filePaths.foreach { filePath =>
       val schemaResult = if (group.format == "csv") {
-        inferCsvHeaderSignature(spark, filePath)
+        inferCsvSchemaSignature(spark, filePath)
       } else {
-        inferSchemaSignature(spark, group.format, filePath)
+        inferSchemaSignature(spark, group.format, filePath).map(signature => (signature, true))
       }
 
       schemaResult match {
-        case Right(schemaSignature) =>
-          val groupedFiles = filesBySchema.getOrElseUpdate(schemaSignature, ArrayBuffer.empty[String])
+        case Right((schemaSignature, csvHasHeader)) =>
+          val groupedFiles = filesBySchema.getOrElseUpdate((schemaSignature, csvHasHeader), ArrayBuffer.empty[String])
           groupedFiles += filePath
           logDebug(
             "group_schema_signature_detected",
             "directory" -> group.directoryPath,
             "file" -> filePath,
             "format" -> group.format,
-            "schema" -> schemaSignature
+            "schema" -> schemaSignature,
+            "csv_has_header" -> csvHasHeader
           )
         case Left(errorMessage) =>
           logDebug(
@@ -609,10 +666,15 @@ object PrivySparkApp {
     }
 
     val groups = filesBySchema.toSeq
-      .sortBy { case (schemaSignature, _) => schemaSignature }
+      .sortBy { case ((schemaSignature, csvHasHeader), _) => (schemaSignature, csvHasHeader) }
       .map {
-        case (schemaSignature, groupedFiles) =>
-          group.copy(schemaSignature = schemaSignature, filePaths = groupedFiles.toSeq.sorted)
+        case ((schemaSignature, csvHasHeader), groupedFiles) =>
+          group.copy(
+            schemaSignature = schemaSignature,
+            filePaths = groupedFiles.toSeq.sorted,
+            schemaSampled = false,
+            csvHasHeader = csvHasHeader
+          )
       }
 
     logDebug(
@@ -661,35 +723,64 @@ object PrivySparkApp {
   ): Either[String, String] = {
     try {
       val signature = withFileReadRetry(spark, Seq(filePath), "csv_header_signature") {
-        val csvOptions = new CSVOptions(
-          scala.collection.immutable.Map("header" -> "true", "inferSchema" -> "false"),
-          false,
-          spark.sessionState.conf.sessionLocalTimeZone,
-          spark.sessionState.conf.columnNameOfCorruptRecord
+        val csvOptions = createCsvOptions(spark)
+        val headerLine = readFirstNonBlankCsvLines(spark, filePath, maxLines = 1).headOption
+          .getOrElse(throw new IllegalArgumentException("Empty or missing CSV header"))
+        val headerColumns = CSVUtils.makeSafeHeader(
+          parseCsvLine(spark, headerLine),
+          spark.sessionState.conf.caseSensitiveAnalysis,
+          csvOptions
         )
-        val parser = new CsvParser(csvOptions.asParserSettings)
-        val path = new Path(filePath)
-        val fs = path.getFileSystem(spark.sparkContext.hadoopConfiguration)
-        val reader = new BufferedReader(new InputStreamReader(fs.open(path), StandardCharsets.UTF_8))
-        try {
-          var headerLine = reader.readLine()
-          while (headerLine != null && headerLine.trim.isEmpty) {
-            headerLine = reader.readLine()
-          }
-          if (headerLine == null || headerLine.trim.isEmpty) {
-            throw new IllegalArgumentException("Empty or missing CSV header")
-          }
-          val headerColumns = CSVUtils.makeSafeHeader(
-            parser.parseLine(Option(headerLine).getOrElse("").stripPrefix("\uFEFF")),
-            spark.sessionState.conf.caseSensitiveAnalysis,
-            csvOptions
-          )
-          headerColumns.map(_.toLowerCase).mkString("|")
-        } finally {
-          reader.close()
-        }
+        headerColumns.map(_.toLowerCase).mkString("|")
       }
       Right(signature)
+    } catch {
+      case NonFatal(e) =>
+        Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+    }
+  }
+
+  private[privyspark] def detectCsvHasHeader(
+    spark: SparkSession,
+    filePath: String
+  ): Boolean = {
+    val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = 2)
+    if (lines.size <= 1) {
+      true
+    } else {
+      val firstRowFields = parseCsvLine(spark, lines.head).toSeq
+      val secondRowFields = parseCsvLine(spark, lines(1)).toSeq
+      if (firstRowFields.isEmpty || firstRowFields.size != secondRowFields.size) {
+        return true
+      }
+
+      val normalizedFields = firstRowFields.map(field => Option(field).getOrElse("").trim.toLowerCase)
+      val hasDuplicateFields = normalizedFields.nonEmpty && normalizedFields.distinct.size != normalizedFields.size
+      val allNumericFields = firstRowFields.nonEmpty && firstRowFields.forall(isNumericLikeField)
+      val firstRowFieldKinds = firstRowFields.map(classifyCsvField)
+      val secondRowFieldKinds = secondRowFields.map(classifyCsvField)
+      val hasStrongDataPattern =
+        firstRowFieldKinds.exists(kind => kind != "plain_text" && kind != "empty") &&
+          firstRowFieldKinds == secondRowFieldKinds
+
+      !(hasDuplicateFields || allNumericFields || hasStrongDataPattern)
+    }
+  }
+
+  private[privyspark] def inferCsvSchemaSignature(
+    spark: SparkSession,
+    filePath: String
+  ): Either[String, (String, Boolean)] = {
+    try {
+      val csvHasHeader = detectCsvHasHeader(spark, filePath)
+      if (csvHasHeader) {
+        inferCsvHeaderSignature(spark, filePath).map(signature => (signature, true))
+      } else {
+        val firstDataLine = readFirstNonBlankCsvLines(spark, filePath, maxLines = 1).headOption
+          .getOrElse(throw new IllegalArgumentException("Empty CSV file"))
+        val columnCount = parseCsvLine(spark, firstDataLine).length
+        Right((s"cols:$columnCount", false))
+      }
     } catch {
       case NonFatal(e) =>
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
@@ -732,12 +823,17 @@ object PrivySparkApp {
     candidate
   }
 
-  private def readSchemaSource(spark: SparkSession, format: String, filePath: String): DataFrame = {
+  private def readSchemaSource(
+    spark: SparkSession,
+    format: String,
+    filePath: String,
+    csvHasHeader: Boolean = true
+  ): DataFrame = {
     logDebug("read_schema_source_start", "format" -> format, "file" -> filePath)
     format match {
       case "csv" =>
         spark.read
-          .option("header", "true")
+          .option("header", csvHasHeader.toString)
           .option("inferSchema", "false")
           .option("mode", "PERMISSIVE")
           .csv(filePath)
@@ -770,7 +866,9 @@ object PrivySparkApp {
       "schema" -> group.schemaSignature,
       "files" -> group.filePaths.size,
       "sample_ratio" -> sampleRatio,
-      "use_directory_identifier" -> group.useDirectoryIdentifier
+      "use_directory_identifier" -> group.useDirectoryIdentifier,
+      "schema_sampled" -> group.schemaSampled,
+      "csv_has_header" -> group.csvHasHeader
     )
     if (group.filePaths.size > maxFilesPerGroupBatchScan) {
       logDriver(
@@ -823,17 +921,62 @@ object PrivySparkApp {
           "files" -> group.filePaths.size,
           "reason" -> errorMessage
         )
-        val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
-        logDebug(
-          "group_scan_complete",
-          "directory" -> group.directoryPath,
-          "format" -> group.format,
-          "schema" -> group.schemaSignature,
-          "result_rows" -> fallbackResult._1.size,
-          "error_rows" -> fallbackResult._2.size,
-          "mode" -> "fallback_file_scan"
-        )
-        fallbackResult
+        if (group.schemaSampled) {
+          logDriver(
+            s"group_scan_fallback_execute directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} mode=schema_resplit"
+          )
+          val (splitGroups, splitErrors) = splitGroupBySchema(
+            spark,
+            datasetPath,
+            timestamp,
+            group.copy(schemaSampled = false)
+          )
+          val rescannedGroups =
+            if (splitGroups.size <= 1) {
+              splitGroups.map(_.copy(useDirectoryIdentifier = group.useDirectoryIdentifier, schemaSampled = false))
+            } else {
+              splitGroups.map(_.copy(useDirectoryIdentifier = false, schemaSampled = false))
+            }
+
+          val rescannedResults = ArrayBuffer.empty[ScanResult]
+          val rescannedErrors = ArrayBuffer.empty[ScanError] ++ splitErrors
+          rescannedGroups.foreach { rescannedGroup =>
+            val (groupResults, groupErrors) = scanGroup(
+              spark,
+              datasetPath,
+              rescannedGroup,
+              rules,
+              sampleRatio,
+              timestamp,
+              maxFilesPerGroupBatchScan
+            )
+            rescannedResults ++= groupResults
+            rescannedErrors ++= groupErrors
+          }
+
+          logDebug(
+            "group_scan_complete",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "schema" -> group.schemaSignature,
+            "result_rows" -> rescannedResults.size,
+            "error_rows" -> rescannedErrors.size,
+            "mode" -> "fallback_schema_resplit"
+          )
+          (rescannedResults.toSeq, rescannedErrors.toSeq)
+        } else {
+          val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
+          logDebug(
+            "group_scan_complete",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "schema" -> group.schemaSignature,
+            "result_rows" -> fallbackResult._1.size,
+            "error_rows" -> fallbackResult._2.size,
+            "mode" -> "fallback_file_scan"
+          )
+          fallbackResult
+        }
     }
   }
 
@@ -868,7 +1011,7 @@ object PrivySparkApp {
     executeInParallel(parallelism, group.filePaths.map { filePath =>
       () => {
         logDebug("group_scan_fallback_file_start", "file" -> filePath, "directory" -> group.directoryPath)
-        filePath -> scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp)
+        filePath -> scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp, Some(group.csvHasHeader))
       }
     }).foreach {
       case (filePath, fileResult) =>
@@ -966,7 +1109,7 @@ object PrivySparkApp {
       "use_directory_identifier" -> group.useDirectoryIdentifier
     )
     withFileReadRetry(spark, group.filePaths, "group_batch_scan") {
-      val baseDf = readSource(spark, group.format, group.filePaths)
+      val baseDf = readSource(spark, group.format, group.filePaths, group.csvHasHeader)
       val fileIdentifierColumn = if (group.useDirectoryIdentifier) {
         None
       } else {
@@ -1084,7 +1227,8 @@ object PrivySparkApp {
     filePath: String,
     rules: Seq[PiiRule],
     sampleRatio: Double,
-    timestamp: String
+    timestamp: String,
+    csvHasHeaderOverride: Option[Boolean] = None
   ): Either[ScanError, FileScanMetrics] = {
     val fileIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
     logDebug("scan_file_start", "file" -> filePath, "file_identifier" -> fileIdentifier, "sample_ratio" -> sampleRatio)
@@ -1096,7 +1240,12 @@ object PrivySparkApp {
           return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $filePath"))
         }
 
-        val sourceDf = readSource(spark, format, Seq(filePath))
+        val csvHasHeader = if (format == "csv") {
+          csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, filePath))
+        } else {
+          true
+        }
+        val sourceDf = readSource(spark, format, Seq(filePath), csvHasHeader)
         val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
 
         sampledDf.cache()
@@ -1153,14 +1302,19 @@ object PrivySparkApp {
     }
   }
 
-  private def readSource(spark: SparkSession, format: String, filePaths: Seq[String]): DataFrame = {
+  private def readSource(
+    spark: SparkSession,
+    format: String,
+    filePaths: Seq[String],
+    csvHasHeader: Boolean = true
+  ): DataFrame = {
     require(filePaths.nonEmpty, "filePaths must not be empty")
     logDebug("read_source_start", "format" -> format, "files" -> filePaths.size, "first_file" -> filePaths.head)
 
     format match {
       case "csv" =>
         spark.read
-          .option("header", "true")
+          .option("header", csvHasHeader.toString)
           .option("inferSchema", "false")
           .option("mode", "PERMISSIVE")
           .csv(filePaths: _*)
@@ -1174,6 +1328,67 @@ object PrivySparkApp {
         spark.read.orc(filePaths: _*)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
+    }
+  }
+
+  private def createCsvOptions(spark: SparkSession): CSVOptions = {
+    new CSVOptions(
+      scala.collection.immutable.Map("header" -> "true", "inferSchema" -> "false"),
+      false,
+      spark.sessionState.conf.sessionLocalTimeZone,
+      spark.sessionState.conf.columnNameOfCorruptRecord
+    )
+  }
+
+  private def parseCsvLine(spark: SparkSession, line: String): Array[String] = {
+    val parser = new CsvParser(createCsvOptions(spark).asParserSettings)
+    Option(parser.parseLine(Option(line).getOrElse("").stripPrefix("\uFEFF"))).getOrElse(Array.empty[String])
+  }
+
+  private def readFirstNonBlankCsvLines(
+    spark: SparkSession,
+    filePath: String,
+    maxLines: Int
+  ): Seq[String] = {
+    withFileReadRetry(spark, Seq(filePath), "csv_line_sample") {
+      val path = new Path(filePath)
+      val fs = path.getFileSystem(spark.sparkContext.hadoopConfiguration)
+      val reader = new BufferedReader(new InputStreamReader(fs.open(path), StandardCharsets.UTF_8))
+      try {
+        val lines = ArrayBuffer.empty[String]
+        var line: String = reader.readLine()
+        while (line != null && lines.size < maxLines) {
+          if (line.trim.nonEmpty) {
+            lines += line
+          }
+          line = reader.readLine()
+        }
+        lines.toSeq
+      } finally {
+        reader.close()
+      }
+    }
+  }
+
+  private def isNumericLikeField(value: String): Boolean = {
+    val trimmed = Option(value).getOrElse("").trim
+    trimmed.nonEmpty && trimmed.matches("[-+]?\\d+(\\.\\d+)?")
+  }
+
+  private def classifyCsvField(value: String): String = {
+    val trimmed = Option(value).getOrElse("").trim
+    if (trimmed.isEmpty) {
+      "empty"
+    } else if (trimmed.matches("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")) {
+      "email"
+    } else if (trimmed.matches("\\d{2,3}-\\d{3,4}-\\d{4}")) {
+      "phone"
+    } else if (isNumericLikeField(trimmed)) {
+      "numeric"
+    } else if (trimmed.exists(_.isDigit)) {
+      "mixed"
+    } else {
+      "plain_text"
     }
   }
 
