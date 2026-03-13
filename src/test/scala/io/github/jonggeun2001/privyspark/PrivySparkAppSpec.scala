@@ -284,6 +284,38 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("detectCsvHasHeader returns true for plain-text headers backed by common header tokens") {
+    val inputDir = Files.createTempDirectory("privyspark-common-header-token-csv-")
+
+    try {
+      val file = inputDir.resolve("header.csv")
+      writeText(file,
+        "maker,model\n" +
+          "ford,focus\n")
+
+      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("maker|model", true)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("detectCsvHasHeader returns true for unicode plain-text headers backed by common header tokens") {
+    val inputDir = Files.createTempDirectory("privyspark-common-unicode-header-token-csv-")
+
+    try {
+      val file = inputDir.resolve("header.csv")
+      writeText(file,
+        "도시,국가\n" +
+          "서울,한국\n")
+
+      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("도시|국가", true)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("inferCsvSchemaSignature returns column-count signature for headerless CSV") {
     val inputDir = Files.createTempDirectory("privyspark-schema-signature-no-header-")
 
