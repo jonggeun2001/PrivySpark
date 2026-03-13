@@ -48,6 +48,46 @@ object PrivySparkApp {
   private[privyspark] val MaxFilesPerGroupBatchScan = 1000
   private[privyspark] val MaxFileReadAttempts = 2
   private[privyspark] val FileReadRetryDelayMillis = 200L
+  private val CommonCsvHeaderTokens = Set(
+    "id",
+    "name",
+    "first",
+    "last",
+    "full",
+    "email",
+    "mail",
+    "phone",
+    "tel",
+    "mobile",
+    "city",
+    "state",
+    "country",
+    "address",
+    "addr",
+    "zip",
+    "postal",
+    "code",
+    "user",
+    "account",
+    "customer",
+    "created",
+    "updated",
+    "timestamp",
+    "date",
+    "time",
+    "age",
+    "gender",
+    "status",
+    "type",
+    "amount",
+    "price",
+    "count",
+    "number",
+    "value",
+    "description",
+    "product",
+    "item"
+  )
   private val GroupParallelismConfKey = "spark.privyspark.groupParallelism"
   private val DefaultGroupParallelism = 4
   private val FileParallelismConfKey = "spark.privyspark.fileParallelism"
@@ -746,35 +786,45 @@ object PrivySparkApp {
     filePath: String
   ): Boolean = {
     val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = 2)
-    if (lines.size <= 1) {
-      true
+    val firstRowFields = lines.headOption.map(parseCsvLine(spark, _).toSeq).getOrElse(Seq.empty)
+    if (firstRowFields.isEmpty) {
+      false
     } else {
-      val firstRowFields = parseCsvLine(spark, lines.head).toSeq
+      val normalizedFields = firstRowFields.map(field => Option(field).getOrElse("").trim.toLowerCase)
+      val hasDuplicateFields = normalizedFields.nonEmpty && normalizedFields.distinct.size != normalizedFields.size
+      val allNumericFields = firstRowFields.nonEmpty && firstRowFields.forall(isNumericLikeField)
+      val firstRowFieldKinds = firstRowFields.map(classifyCsvField)
+      val firstRowHasStructuredData = firstRowFieldKinds.exists(isStructuredCsvFieldKind)
+      val firstLooksLikeHeader = looksLikeCsvHeaderRow(firstRowFields)
+      val firstHeaderScore = scoreCsvHeaderRow(firstRowFields)
+
+      if (lines.size <= 1) {
+        !hasDuplicateFields &&
+        !allNumericFields &&
+        !firstRowHasStructuredData &&
+        firstLooksLikeHeader &&
+        firstHeaderScore >= firstRowFields.size * 2
+      } else {
       val secondRowFields = parseCsvLine(spark, lines(1)).toSeq
       if (firstRowFields.isEmpty || firstRowFields.size != secondRowFields.size) {
         return true
       }
 
-      val normalizedFields = firstRowFields.map(field => Option(field).getOrElse("").trim.toLowerCase)
-      val hasDuplicateFields = normalizedFields.nonEmpty && normalizedFields.distinct.size != normalizedFields.size
-      val allNumericFields = firstRowFields.nonEmpty && firstRowFields.forall(isNumericLikeField)
-      val firstRowFieldKinds = firstRowFields.map(classifyCsvField)
       val secondRowFieldKinds = secondRowFields.map(classifyCsvField)
-      val firstRowHasStructuredData = firstRowFieldKinds.exists(isStructuredCsvFieldKind)
-      val looksLikeHeaderRow = firstRowFields.forall(looksLikeCsvHeaderField)
-      val sameFieldKinds = firstRowFieldKinds == secondRowFieldKinds
+      val secondHeaderScore = scoreCsvHeaderRow(secondRowFields)
       val secondRowShowsStructuredData = firstRowFieldKinds.zip(secondRowFieldKinds).exists {
         case ("plain_text", secondKind) => isStructuredCsvFieldKind(secondKind)
         case ("empty", secondKind) => isStructuredCsvFieldKind(secondKind)
         case _ => false
       }
+      val headerScoreGap = firstHeaderScore - secondHeaderScore
 
       !hasDuplicateFields &&
       !allNumericFields &&
-      !sameFieldKinds &&
       !firstRowHasStructuredData &&
-      looksLikeHeaderRow &&
-      secondRowShowsStructuredData
+      firstLooksLikeHeader &&
+      (secondRowShowsStructuredData || headerScoreGap >= 2)
+      }
     }
   }
 
@@ -948,7 +998,7 @@ object PrivySparkApp {
               splitGroups.head.filePaths.size > 1
           val rescannedGroups =
             splitGroups.map(_.copy(
-              useDirectoryIdentifier = exactSplitCanUseDirectoryIdentifier,
+              useDirectoryIdentifier = exactSplitCanUseDirectoryIdentifier && group.useDirectoryIdentifier,
               schemaSampled = false
             ))
 
@@ -1415,12 +1465,50 @@ object PrivySparkApp {
     }
   }
 
+  private def tokenizeCsvHeaderField(value: String): Seq[String] = {
+    Option(value).getOrElse("").trim.toLowerCase.split("[\\s_./-]+").filter(_.nonEmpty).toSeq
+  }
+
   private def looksLikeCsvHeaderField(value: String): Boolean = {
     val trimmed = Option(value).getOrElse("").trim
     trimmed.nonEmpty &&
-      !trimmed.exists(_.isDigit) &&
       !trimmed.contains("@") &&
       trimmed.matches("[A-Za-z][A-Za-z_ ./-]*")
+  }
+
+  private def hasStrongCsvHeaderSignal(value: String): Boolean = {
+    val trimmed = Option(value).getOrElse("").trim
+    val tokens = tokenizeCsvHeaderField(trimmed)
+    tokens.exists(CommonCsvHeaderTokens.contains) ||
+      trimmed.exists(ch => ch == '_' || ch == '-' || ch == ' ')
+  }
+
+  private def scoreCsvHeaderField(value: String): Int = {
+    val trimmed = Option(value).getOrElse("").trim
+    if (trimmed.isEmpty) {
+      -2
+    } else if (classifyCsvField(trimmed) != "plain_text") {
+      -2
+    } else {
+      val tokens = tokenizeCsvHeaderField(trimmed)
+      val commonTokenScore = tokens.count(CommonCsvHeaderTokens.contains) * 2
+      val separatorScore = if (trimmed.exists(ch => ch == '_' || ch == '-' || ch == ' ')) 1 else 0
+      val lowercaseWordScore =
+        if (trimmed.nonEmpty && trimmed.forall(ch => ch.isLower || ch.isWhitespace || ch == '_' || ch == '-' || ch == '.')) 1
+        else 0
+      val alphaOnlyScore = if (trimmed.matches("[A-Za-z][A-Za-z_ ./-]*")) 1 else 0
+      commonTokenScore + separatorScore + lowercaseWordScore + alphaOnlyScore
+    }
+  }
+
+  private def scoreCsvHeaderRow(fields: Seq[String]): Int = {
+    fields.map(scoreCsvHeaderField).sum
+  }
+
+  private def looksLikeCsvHeaderRow(fields: Seq[String]): Boolean = {
+    fields.nonEmpty &&
+      fields.forall(looksLikeCsvHeaderField) &&
+      fields.exists(hasStrongCsvHeaderSignal)
   }
 
   private[privyspark] def writeReports(

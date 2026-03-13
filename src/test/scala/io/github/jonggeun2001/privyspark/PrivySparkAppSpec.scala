@@ -223,6 +223,21 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("detectCsvHasHeader returns true for plain-text headers with common column names") {
+    val inputDir = Files.createTempDirectory("privyspark-plain-text-header-csv-")
+
+    try {
+      val file = inputDir.resolve("header.csv")
+      writeText(file,
+        "name,city\n" +
+          "alice,seoul\n")
+
+      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("inferCsvSchemaSignature returns column-count signature for headerless CSV") {
     val inputDir = Files.createTempDirectory("privyspark-schema-signature-no-header-")
 
@@ -248,6 +263,20 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "bob,busan\n")
 
       assert(!PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("detectCsvHasHeader returns false for single-row headerless CSV") {
+    val inputDir = Files.createTempDirectory("privyspark-single-row-headerless-csv-")
+
+    try {
+      val file = inputDir.resolve("headerless.csv")
+      writeText(file, "alice,seoul\n")
+
+      assert(!PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("cols:2", false)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -970,6 +999,47 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         Set(("part-a.parquet", "email", 1L), ("part-a.parquet", "phone", 1L)))
       assert(!results.exists(_.file_identifier == "."))
       assert(!results.exists(_.file_identifier == "grouped"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroup resplit preserves file identifiers when directory aggregation was already disabled") {
+    val inputDir = Files.createTempDirectory("privyspark-sampled-resplit-no-dir-id-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      val existingFile = groupedDir.resolve("part-a.csv")
+      val missingFile = groupedDir.resolve("part-missing.csv")
+
+      writeText(existingFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(existingFile.toString, missingFile.toString),
+        schemaSampled = true,
+        csvHasHeader = true,
+        useDirectoryIdentifier = false
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.size == 1)
+      assert(results.map(_.file_identifier).toSet == Set("users/part-a.csv"))
+      assert(!results.exists(_.file_identifier == "users"))
     } finally {
       deleteRecursively(inputDir)
     }
