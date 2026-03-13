@@ -14,10 +14,10 @@ class RulesetLoaderSpec extends AnyFunSuite {
     val rules = RulesetLoader.load("default")
     assert(rules.nonEmpty)
     assert(rules.exists(_.piiType == "email"))
-    assert(rules.find(_.piiType == "email").exists(_.columnHints.contains("email")))
+    assert(rules.forall(_.columnHints.isEmpty))
   }
 
-  test("loads optional column hints from ruleset file") {
+  test("loads optional column hints from ruleset file and ignores blank entries") {
     val rulesetPath = Files.createTempFile("privyspark-ruleset", ".yaml")
     val yaml =
       """rules:
@@ -25,6 +25,8 @@ class RulesetLoaderSpec extends AnyFunSuite {
         |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
         |    column_hints:
         |      - email
+        |      -
+        |      - "   "
         |      - mail
         |  - pii_type: phone_number
         |    regex: '01[016789]-?[0-9]{3,4}-?[0-9]{4}'

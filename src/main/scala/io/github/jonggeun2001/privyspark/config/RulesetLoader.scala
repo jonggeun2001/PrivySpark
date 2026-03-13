@@ -58,10 +58,9 @@ object RulesetLoader {
   private def parseColumnHints(rawValue: Object): Seq[String] = {
     rawValue match {
       case values: java.util.List[_] =>
-        values.asScala.map(_.toString.trim).filter(_.nonEmpty).toSeq
+        values.asScala.flatMap(value => Option(value).map(_.toString.trim)).filter(_.nonEmpty).toSeq
       case value =>
-        val hint = value.toString.trim
-        if (hint.isEmpty) Seq.empty else Seq(hint)
+        Option(value).map(_.toString.trim).filter(_.nonEmpty).toSeq
     }
   }
 

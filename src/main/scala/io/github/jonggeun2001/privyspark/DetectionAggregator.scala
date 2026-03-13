@@ -88,13 +88,19 @@ object DetectionAggregator {
 
     if (metrics.size > config.legacyFallbackThreshold) {
       logFallback("dataset", metrics.size, s"metric_threshold_exceeded(${config.legacyFallbackThreshold})")
-      val results = aggregateLegacy(sampledDf, metrics)
+      val results = try {
+        aggregateThresholdFallback(sampledDf, metrics)
+      } catch {
+        case NonFatal(e) =>
+          logFallback("dataset", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+          aggregateLegacy(sampledDf, metrics)
+      }
       logDebug(
         "detection_aggregation_complete",
         "scope" -> "dataset",
         "metrics" -> metrics.size,
         "results" -> results.size,
-        "mode" -> "legacy_fallback"
+        "mode" -> "threshold_fallback"
       )
       return results
     }
@@ -159,13 +165,19 @@ object DetectionAggregator {
 
     if (metrics.size > config.legacyFallbackThreshold) {
       logFallback("file", metrics.size, s"metric_threshold_exceeded(${config.legacyFallbackThreshold})")
-      val results = aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
+      val results = try {
+        aggregateByFileThresholdFallback(sampledDf, fileIdentifierColumn, metrics)
+      } catch {
+        case NonFatal(e) =>
+          logFallback("file", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+          aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics)
+      }
       logDebug(
         "detection_aggregation_complete",
         "scope" -> "file",
         "metrics" -> metrics.size,
         "results" -> results.size,
-        "mode" -> "legacy_fallback"
+        "mode" -> "threshold_fallback"
       )
       return results
     }
@@ -240,8 +252,15 @@ object DetectionAggregator {
     }
   }
 
-  private def aggregateLegacy(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
+  private def aggregateThresholdFallback(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
     aggregateInBatches(sampledDf, metrics, LegacyFallbackBatchSize)
+  }
+
+  private def aggregateLegacy(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
+    metrics.flatMap { metric =>
+      val count = sampledDf.filter(metric.predicate).count()
+      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+    }
   }
 
   private def aggregateByFileInBatches(
@@ -269,11 +288,35 @@ object DetectionAggregator {
     }
   }
 
-  private def aggregateByFileLegacy(
+  private def aggregateByFileThresholdFallback(
     sampledDf: DataFrame,
     fileIdentifierColumn: String,
     metrics: Seq[Metric]
   ): Seq[FileMatchCount] = {
     aggregateByFileInBatches(sampledDf, fileIdentifierColumn, metrics, LegacyFallbackBatchSize)
+  }
+
+  private def aggregateByFileLegacy(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    metrics: Seq[Metric]
+  ): Seq[FileMatchCount] = {
+    metrics.flatMap { metric =>
+      val groupedRows = sampledDf
+        .filter(metric.predicate)
+        .groupBy(col(fileIdentifierColumn))
+        .count()
+        .collect()
+
+      groupedRows.flatMap { row =>
+        val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+        val count = if (row.isNullAt(1)) 0L else row.getLong(1)
+        if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
+          None
+        } else {
+          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
+        }
+      }
+    }
   }
 }
