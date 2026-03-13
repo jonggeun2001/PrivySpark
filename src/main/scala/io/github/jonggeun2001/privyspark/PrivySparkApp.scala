@@ -1501,7 +1501,7 @@ object PrivySparkApp {
     val trimmed = Option(value).getOrElse("").trim
     trimmed.nonEmpty &&
       !trimmed.contains("@") &&
-      trimmed.matches("[A-Za-z][A-Za-z0-9_ ./-]*")
+      isCsvHeaderFieldShape(trimmed)
   }
 
   private def hasStrongCsvHeaderSignal(value: String): Boolean = {
@@ -1523,9 +1523,9 @@ object PrivySparkApp {
       val commonTokenScore = tokens.count(CommonCsvHeaderTokens.contains) * 2
       val separatorScore = if (trimmed.exists(ch => ch == '_' || ch == '-' || ch == ' ')) 1 else 0
       val lowercaseWordScore =
-        if (trimmed.nonEmpty && trimmed.forall(ch => ch.isLower || ch.isWhitespace || ch == '_' || ch == '-' || ch == '.')) 1
+        if (trimmed.nonEmpty && trimmed.forall(isCsvHeaderLowercaseLikeChar)) 1
         else 0
-      val alphaOnlyScore = if (trimmed.matches("[A-Za-z][A-Za-z_ ./-]*")) 1 else 0
+      val alphaOnlyScore = if (isCsvHeaderFieldShape(trimmed)) 1 else 0
       commonTokenScore + separatorScore + lowercaseWordScore + alphaOnlyScore
     }
   }
@@ -1545,6 +1545,20 @@ object PrivySparkApp {
     } else {
       fields.map(field => Option(field).getOrElse("").trim.length).sum.toDouble / fields.size.toDouble
     }
+  }
+
+  private def isCsvHeaderFieldShape(value: String): Boolean = {
+    value.nonEmpty &&
+      Character.isLetter(value.charAt(0)) &&
+      value.forall(isCsvHeaderFieldChar)
+  }
+
+  private def isCsvHeaderFieldChar(ch: Char): Boolean = {
+    Character.isLetterOrDigit(ch) || ch == '_' || ch == ' ' || ch == '.' || ch == '/' || ch == '-'
+  }
+
+  private def isCsvHeaderLowercaseLikeChar(ch: Char): Boolean = {
+    ch.isWhitespace || ch == '_' || ch == '-' || ch == '.' || ch == '/' || !Character.isUpperCase(ch)
   }
 
   private def rescanSampledGroupWithExactSplit(
