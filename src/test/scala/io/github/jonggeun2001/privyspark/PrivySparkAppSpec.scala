@@ -331,7 +331,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("detectCsvHasHeader returns false for plain-text headerless CSV rows") {
+  test("detectCsvHasHeader defaults ambiguous plain-text two-row CSVs to header mode") {
     val inputDir = Files.createTempDirectory("privyspark-headerless-plain-text-csv-")
 
     try {
@@ -340,7 +340,24 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "alice,seoul\n" +
           "bob,busan\n")
 
-      assert(!PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("alice|seoul", true)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("detectCsvHasHeader defaults generic plain-text tie cases to header mode") {
+    val inputDir = Files.createTempDirectory("privyspark-plain-text-tie-header-csv-")
+
+    try {
+      val file = inputDir.resolve("header.csv")
+      writeText(file,
+        "color,shape\n" +
+          "green,round\n")
+
+      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("color|shape", true)))
     } finally {
       deleteRecursively(inputDir)
     }

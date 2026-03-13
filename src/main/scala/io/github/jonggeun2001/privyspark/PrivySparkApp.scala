@@ -808,45 +808,27 @@ object PrivySparkApp {
       val firstRowHasStructuredData = firstRowFields.zip(firstRowFieldKinds).exists {
         case (field, kind) => isStructuredCsvFieldForHeaderHeuristic(field, kind)
       }
-      val firstLooksLikeHeader = looksLikeCsvHeaderRow(firstRowFields)
-      val firstHasStrongHeaderSignal = firstRowFields.exists(hasStrongCsvHeaderSignal)
-      val firstHeaderScore = scoreCsvHeaderRow(firstRowFields)
+      if (hasDuplicateFields || allNumericFields || firstRowHasStructuredData || !looksLikeCsvHeaderRow(firstRowFields)) {
+        return false
+      }
 
       if (lines.size <= 1) {
-        !hasDuplicateFields &&
-        !allNumericFields &&
-        !firstRowHasStructuredData &&
-        firstLooksLikeHeader &&
-        firstHasStrongHeaderSignal &&
-        firstHeaderScore >= firstRowFields.size * 2
-      } else {
+        return firstRowFields.exists(hasStrongCsvHeaderSignal)
+      }
+
       val secondRowFields = parseCsvLine(spark, lines(1)).toSeq
-      if (firstRowFields.isEmpty || firstRowFields.size != secondRowFields.size) {
+      if (firstRowFields.size != secondRowFields.size) {
         return true
       }
 
       val secondRowFieldKinds = secondRowFields.map(classifyCsvField)
-      val secondHeaderScore = scoreCsvHeaderRow(secondRowFields)
-      val secondRowShowsStructuredData = firstRowFieldKinds.zip(secondRowFieldKinds).exists {
-        case ("plain_text", secondKind) => isStructuredCsvFieldKind(secondKind)
-        case ("empty", secondKind) => isStructuredCsvFieldKind(secondKind)
-        case _ => false
+      if (secondRowFieldKinds.exists(isStructuredCsvFieldKind)) {
+        return true
       }
-      val headerScoreGap = firstHeaderScore - secondHeaderScore
-      val firstRowAverageLength = averageCsvFieldLength(firstRowFields)
-      val secondRowAverageLength = averageCsvFieldLength(secondRowFields)
 
-      !hasDuplicateFields &&
-      !allNumericFields &&
-      !firstRowHasStructuredData &&
-      firstLooksLikeHeader &&
-      (
-        secondRowShowsStructuredData ||
-          headerScoreGap >= 2 ||
-          (firstHasStrongHeaderSignal && headerScoreGap >= 0) ||
-          (headerScoreGap >= 0 && firstRowAverageLength + 0.5 < secondRowAverageLength)
-      )
-      }
+      val firstHeaderScore = scoreCsvHeaderRow(firstRowFields)
+      val secondHeaderScore = scoreCsvHeaderRow(secondRowFields)
+      secondHeaderScore <= firstHeaderScore
     }
   }
 
@@ -1545,14 +1527,6 @@ object PrivySparkApp {
   private def looksLikeCsvHeaderRow(fields: Seq[String]): Boolean = {
     fields.nonEmpty &&
       fields.forall(looksLikeCsvHeaderField)
-  }
-
-  private def averageCsvFieldLength(fields: Seq[String]): Double = {
-    if (fields.isEmpty) {
-      0.0
-    } else {
-      fields.map(field => Option(field).getOrElse("").trim.length).sum.toDouble / fields.size.toDouble
-    }
   }
 
   private def isCsvHeaderFieldShape(value: String): Boolean = {
