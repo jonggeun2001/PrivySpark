@@ -190,6 +190,40 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure preserves quoted CSV header whitespace in schema signatures") {
+    val inputDir = Files.createTempDirectory("privyspark-quoted-header-whitespace-")
+
+    try {
+      val spacedFile = inputDir.resolve("spaced.csv")
+      val compactFile = inputDir.resolve("compact.csv")
+
+      writeText(spacedFile,
+        "\" account \",email\n" +
+          "alice,alice@example.com\n")
+      writeText(compactFile,
+        "\"account\",email\n" +
+          "bob,bob@example.com\n")
+
+      val spacedFastPath = PrivySparkApp.inferCsvHeaderSignature(spark, spacedFile.toString)
+      val spacedSparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", spacedFile.toString)
+      val compactFastPath = PrivySparkApp.inferCsvHeaderSignature(spark, compactFile.toString)
+      val compactSparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", compactFile.toString)
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-03-13T00:00:00Z"
+      )
+
+      assert(spacedFastPath == spacedSparkSignature)
+      assert(compactFastPath == compactSparkSignature)
+      assert(spacedFastPath != compactFastPath)
+      assert(plan.groups.filter(_.format == "csv").size == 2)
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure throws when input path does not exist") {
     val missingPath = s"/tmp/privyspark-missing-${System.nanoTime()}"
 

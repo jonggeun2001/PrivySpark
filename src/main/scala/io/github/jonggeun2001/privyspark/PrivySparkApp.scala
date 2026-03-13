@@ -681,7 +681,7 @@ object PrivySparkApp {
             spark.sessionState.conf.caseSensitiveAnalysis,
             csvOptions
           )
-          headerColumns.map(_.trim.toLowerCase).mkString("|")
+          headerColumns.map(_.toLowerCase).mkString("|")
         } finally {
           reader.close()
         }
