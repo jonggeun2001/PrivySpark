@@ -377,11 +377,19 @@ object PrivySparkApp {
     )
     val errors = ArrayBuffer.empty[ScanError]
     var resolvedGroup: Option[ScanGroup] = None
+    var index = 0
 
-    group.filePaths.iterator.takeWhile(_ => resolvedGroup.isEmpty).foreach { filePath =>
+    while (index < group.filePaths.size && resolvedGroup.isEmpty) {
+      val filePath = group.filePaths(index)
       inferSchemaMetadata(spark, group.format, filePath) match {
         case Right((schemaSignature, expectedSchema)) =>
-          resolvedGroup = Some(group.copy(schemaSignature = schemaSignature, expectedSchema = Some(expectedSchema)))
+          resolvedGroup = Some(
+            group.copy(
+              schemaSignature = schemaSignature,
+              filePaths = group.filePaths.drop(index),
+              expectedSchema = Some(expectedSchema)
+            )
+          )
           logDebug(
             "group_schema_probe_resolved",
             "directory" -> group.directoryPath,
@@ -404,6 +412,7 @@ object PrivySparkApp {
             s"Schema detection failed: $errorMessage"
           )
       }
+      index += 1
     }
 
     logDebug(
@@ -473,6 +482,38 @@ object PrivySparkApp {
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
+  }
+
+  private def verifyBatchSchemaConsistency(spark: SparkSession, group: ScanGroup): Unit = {
+    if (group.format == "csv" || group.filePaths.size <= 1) {
+      return
+    }
+
+    logDebug(
+      "group_scan_batch_schema_verify_start",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "files_to_verify" -> (group.filePaths.size - 1)
+    )
+
+    group.filePaths.tail.foreach { filePath =>
+      inferSchemaMetadata(spark, group.format, filePath) match {
+        case Right((schemaSignature, _)) if schemaSignature != group.schemaSignature =>
+          throw new IllegalStateException(
+            s"Schema mismatch detected for $filePath: expected=${group.schemaSignature} actual=$schemaSignature"
+          )
+        case Left(errorMessage) =>
+          throw new IllegalStateException(s"Schema verification failed for $filePath: $errorMessage")
+        case _ =>
+      }
+    }
+
+    logDebug(
+      "group_scan_batch_schema_verify_complete",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "files_verified" -> (group.filePaths.size - 1)
+    )
   }
 
   private[privyspark] def scanGroup(
@@ -694,6 +735,7 @@ object PrivySparkApp {
       "use_directory_identifier" -> group.useDirectoryIdentifier
     )
     val baseDf = readSource(spark, group.format, group.filePaths, group.expectedSchema)
+    verifyBatchSchemaConsistency(spark, group)
     val fileIdentifierColumn = if (group.useDirectoryIdentifier) {
       None
     } else {
@@ -906,23 +948,13 @@ object PrivySparkApp {
               .csv(filePaths: _*)
         }
       case "json" =>
-        val reader = spark.read
+        spark.read
           .option("mode", "PERMISSIVE")
-
-        expectedSchema match {
-          case Some(schema) => reader.schema(schema).json(filePaths: _*)
-          case None => reader.json(filePaths: _*)
-        }
+          .json(filePaths: _*)
       case "parquet" =>
-        expectedSchema match {
-          case Some(schema) => spark.read.schema(schema).parquet(filePaths: _*)
-          case None => spark.read.parquet(filePaths: _*)
-        }
+        spark.read.parquet(filePaths: _*)
       case "orc" =>
-        expectedSchema match {
-          case Some(schema) => spark.read.schema(schema).orc(filePaths: _*)
-          case None => spark.read.orc(filePaths: _*)
-        }
+        spark.read.orc(filePaths: _*)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }

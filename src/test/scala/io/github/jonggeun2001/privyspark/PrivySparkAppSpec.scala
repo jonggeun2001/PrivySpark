@@ -485,6 +485,52 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroup falls back to file identifiers when grouped JSON schemas diverge") {
+    val inputDir = Files.createTempDirectory("privyspark-json-schema-divergence-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("events"))
+
+    try {
+      writeText(groupedDir.resolve("part-a.jsonl"),
+        """{"name":"alice","email":"alice@example.com"}""" + "\n")
+      writeText(groupedDir.resolve("part-b.jsonl"),
+        """{"name":"bob","phone":"010-1234-5678"}""" + "\n")
+
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+      )
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-03-12T00:00:00Z"
+      )
+      val group = plan.groups.head
+
+      assert(group.useDirectoryIdentifier)
+
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-03-12T00:00:00Z"
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(_.file_identifier).toSet == Set("events/part-a.jsonl", "events/part-b.jsonl"))
+      assert(results.map(result => (result.file_identifier, result.column_name, result.pii_type)).toSet ==
+        Set(
+          ("events/part-a.jsonl", "email", "email"),
+          ("events/part-b.jsonl", "phone", "phone")
+        ))
+      assert(!results.exists(_.file_identifier == "events"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroup fallback preserves file identifiers when a grouped directory has partial file errors") {
     val inputDir = Files.createTempDirectory("privyspark-directory-group-partial-fallback-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
@@ -721,6 +767,43 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(orcResults.forall(_.file_identifier.toLowerCase.endsWith(".orc")))
     } finally {
       deleteRecursively(outputDir)
+    }
+  }
+
+  test("scanDirectoryStructure excludes probe-failed files from planned parquet group") {
+    val inputDir = Files.createTempDirectory("privyspark-parquet-probe-failure-")
+    val validDir = Files.createTempDirectory("privyspark-valid-parquet-source-")
+    val timestamp = "2026-03-12T00:00:00Z"
+
+    val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+    try {
+      val validParquetFile = Paths.get(createColumnarDataFile(validDir, "parquet"))
+      val brokenFile = inputDir.resolve("aaa-broken.parquet")
+      val validFile = inputDir.resolve("zzz-valid.parquet")
+
+      writeText(brokenFile, "not-a-real-parquet-file")
+      Files.copy(validParquetFile, validFile)
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        timestamp
+      )
+
+      assert(plan.errors.map(_.file_identifier) == Seq("aaa-broken.parquet"))
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.filePaths.map(path => Paths.get(path).getFileName.toString) == Seq("zzz-valid.parquet"))
+
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.map(_.file_identifier) == Seq("aaa-broken.parquet"))
+      assert(results.nonEmpty)
+      assert(results.forall(_.file_identifier == "zzz-valid.parquet"))
+    } finally {
+      deleteRecursively(inputDir)
+      deleteRecursively(validDir)
     }
   }
 
