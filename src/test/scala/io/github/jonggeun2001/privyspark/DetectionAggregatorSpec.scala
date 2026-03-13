@@ -259,6 +259,20 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_complete scope=file"))
   }
 
+  test("reports threshold fallback mode when threshold batch fallback succeeds") {
+    val expected = Seq(MatchCount("customer_email", "email", 2L))
+
+    val fallback = DetectionAggregator.executeThresholdFallback(
+      "dataset",
+      metricsSize = 4,
+      threshold = 1,
+      batchedFallback = expected,
+      legacyFallback = Seq.empty
+    )
+
+    assert(fallback == ((expected, "threshold_fallback")))
+  }
+
   test("reports legacy fallback mode when threshold batch fallback fails") {
     val expected = Seq(MatchCount("customer_email", "email", 2L))
 
