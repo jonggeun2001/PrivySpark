@@ -46,7 +46,6 @@ object PrivySparkApp {
   )
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
-  private[privyspark] val MaxFilesPerGroupBatchScan = 1000
   private[privyspark] val MaxFileReadAttempts = 2
   private[privyspark] val FileReadRetryDelayMillis = 200L
   private val CommonCsvHeaderTokens = Set(
@@ -921,8 +920,7 @@ object PrivySparkApp {
     group: ScanGroup,
     rules: Seq[PiiRule],
     sampleRatio: Double,
-    timestamp: String,
-    maxFilesPerGroupBatchScan: Int = MaxFilesPerGroupBatchScan
+    timestamp: String
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logDebug(
       "group_scan_start",
@@ -935,30 +933,6 @@ object PrivySparkApp {
       "schema_sampled" -> group.schemaSampled,
       "csv_has_header" -> group.csvHasHeader
     )
-    if (group.filePaths.size > maxFilesPerGroupBatchScan) {
-      logDriver(
-        s"group_scan_fallback directory=${group.directoryPath} format=${group.format} files=${group.filePaths.size} reason=group_size_limit_exceeded($maxFilesPerGroupBatchScan)"
-      )
-      logDebug(
-        "group_scan_fallback_requested",
-        "directory" -> group.directoryPath,
-        "format" -> group.format,
-        "schema" -> group.schemaSignature,
-        "files" -> group.filePaths.size,
-        "reason" -> s"group_size_limit_exceeded($maxFilesPerGroupBatchScan)"
-      )
-      val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
-      logDebug(
-        "group_scan_complete",
-        "directory" -> group.directoryPath,
-        "format" -> group.format,
-        "schema" -> group.schemaSignature,
-        "result_rows" -> fallbackResult._1.size,
-        "error_rows" -> fallbackResult._2.size,
-        "mode" -> "fallback_file_scan"
-      )
-      return fallbackResult
-    }
     if (group.schemaSampled && group.format == "csv" && group.filePaths.size > 1) {
       val exactSplitResult = rescanSampledGroupWithExactSplit(
         spark,
@@ -1550,8 +1524,7 @@ object PrivySparkApp {
     rules: Seq[PiiRule],
     sampleRatio: Double,
     timestamp: String,
-    mode: String,
-    maxFilesPerGroupBatchScan: Int = MaxFilesPerGroupBatchScan
+    mode: String
   ): (Seq[ScanResult], Seq[ScanError]) = {
     val (splitGroups, splitErrors) = splitGroupBySchema(
       spark,
@@ -1579,8 +1552,7 @@ object PrivySparkApp {
         rescannedGroup,
         rules,
         sampleRatio,
-        timestamp,
-        maxFilesPerGroupBatchScan
+        timestamp
       )
       rescannedResults ++= groupResults
       rescannedErrors ++= groupErrors
