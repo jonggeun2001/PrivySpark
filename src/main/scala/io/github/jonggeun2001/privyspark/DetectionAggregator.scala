@@ -231,7 +231,7 @@ object DetectionAggregator {
     val regexPredicate = valueColumn.isNotNull && valueColumn.rlike(rule.regex)
     rule.validator match {
       case Some(KoreanNameValidator.ValidatorName) =>
-        regexPredicate && KoreanNameValidator.predicate(spark, valueColumn)
+        regexPredicate && KoreanNameValidator.predicate(spark, valueColumn, rule.regex)
       case Some(unsupported) =>
         throw new IllegalArgumentException(s"Unsupported validator: $unsupported")
       case None =>

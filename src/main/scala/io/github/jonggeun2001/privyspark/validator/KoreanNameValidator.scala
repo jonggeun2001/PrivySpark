@@ -28,28 +28,28 @@ object KoreanNameValidator {
     "아", "야", "요",
     "이", "가", "은", "는", "을", "를", "의", "과", "와", "도", "만", "랑",
     "에", "에서", "에게", "에게서", "한테", "한테서", "께", "께서", "로", "으로", "부터", "까지", "보다", "처럼", "이랑",
-    "이며", "이고", "이라", "이라고", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
+    "이며", "이고", "이라", "이라고", "라", "라고", "라는", "라서", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
   )
-  private val NamePattern = Pattern.compile(RuleRegex)
   private val broadcastCache = mutable.Map.empty[String, Broadcast[NameDictionary]]
   private lazy val localDictionary = NameDictionary(
     givenNames = loadEntries("/korean-name-given-names.txt"),
     shortFullNames = loadEntries("/korean-name-short-full-names.txt")
   )
 
-  def predicate(spark: SparkSession, valueColumn: Column): Column = {
+  def predicate(spark: SparkSession, valueColumn: Column, ruleRegex: String): Column = {
+    val rulePattern = Pattern.compile(ruleRegex)
     val dictionary = broadcastDictionary(spark)
     val validate = udf { value: String =>
-      containsLikelyName(value, dictionary.value)
+      containsLikelyName(value, rulePattern, dictionary.value)
     }
     validate(valueColumn)
   }
 
-  private[privyspark] def containsLikelyName(value: String): Boolean = {
-    containsLikelyName(value, localDictionary)
+  private[privyspark] def containsLikelyName(value: String, ruleRegex: String): Boolean = {
+    containsLikelyName(value, Pattern.compile(ruleRegex), localDictionary)
   }
 
-  private def containsLikelyName(value: String, dictionary: NameDictionary): Boolean = {
+  private def containsLikelyName(value: String, rulePattern: Pattern, dictionary: NameDictionary): Boolean = {
     if (value == null) {
       return false
     }
@@ -59,7 +59,7 @@ object KoreanNameValidator {
       return false
     }
 
-    val matcher = NamePattern.matcher(normalized)
+    val matcher = rulePattern.matcher(normalized)
     while (matcher.find()) {
       if (isLikelyNameCandidate(matcher.group(), normalized, matcher.end(), dictionary)) {
         return true

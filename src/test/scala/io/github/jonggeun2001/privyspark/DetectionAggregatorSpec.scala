@@ -143,6 +143,8 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "담당자 김민수",
       "김민수의 이메일",
       "김민수랑",
+      "김민수라고 합니다",
+      "김민수라서",
       "박지민이랑",
       "남궁민수에게서",
       "정민이",
@@ -172,7 +174,24 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 12L))
+    val expected = Seq(MatchCount("candidate", "name", 14L))
+
+    assert(actual == sortByKey(expected))
+  }
+
+  test("applies validator only to substrings matched by the rule regex") {
+    val df = Seq(
+      "김치찌개 / 박지민",
+      "김철수",
+      "김민수"
+    ).toDF("candidate")
+
+    val rules = Seq(
+      PiiRule("name", "김[가-힣]{1,2}", validator = Some(KoreanNameValidator.ValidatorName))
+    )
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
+    val expected = Seq(MatchCount("candidate", "name", 2L))
 
     assert(actual == sortByKey(expected))
   }
@@ -472,7 +491,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val regexPredicate = valueColumn.isNotNull && valueColumn.rlike(rule.regex)
     rule.validator match {
       case Some(KoreanNameValidator.ValidatorName) =>
-        regexPredicate && KoreanNameValidator.predicate(spark, valueColumn)
+        regexPredicate && KoreanNameValidator.predicate(spark, valueColumn, rule.regex)
       case Some(unsupported) =>
         throw new IllegalArgumentException(s"Unsupported validator: $unsupported")
       case None =>
@@ -486,7 +505,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     regex: scala.util.matching.Regex
   ): Boolean = {
     regex.findFirstIn(value).nonEmpty && rule.validator.forall {
-      case KoreanNameValidator.ValidatorName => KoreanNameValidator.containsLikelyName(value)
+      case KoreanNameValidator.ValidatorName => KoreanNameValidator.containsLikelyName(value, rule.regex)
       case unsupported => throw new IllegalArgumentException(s"Unsupported validator: $unsupported")
     }
   }
