@@ -48,7 +48,9 @@ jobs:
           fi
 
           asset_jar="build/libs/privyspark-${{ steps.meta.outputs.tag }}-all.jar"
-          cp "${jars[0]}" "$asset_jar"
+          if [ "${jars[0]}" != "$asset_jar" ]; then
+            cp "${jars[0]}" "$asset_jar"
+          fi
           sha256sum "$asset_jar" > "${asset_jar}.sha256"
 
           echo "asset_jar=$asset_jar" >> "$GITHUB_OUTPUT"
