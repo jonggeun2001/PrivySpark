@@ -23,6 +23,13 @@ object KoreanNameValidator {
     "변", "염", "여", "추", "도", "석", "선", "설", "마", "길", "연", "위", "표", "명", "기", "반", "라",
     "왕", "금", "옥", "육", "인", "맹", "제", "모", "탁", "국", "어", "은", "편", "봉", "피", "경", "사", "가"
   )
+  private val AllowedTrailingPrefixes = Seq(
+    "님", "씨", "군", "양",
+    "아", "야",
+    "이", "가", "은", "는", "을", "를", "과", "와", "도", "만",
+    "에", "에서", "께", "로", "으로",
+    "이며", "이고", "이라", "이라고", "이는", "이가", "이를", "입니다"
+  )
   private val NamePattern = Pattern.compile(RuleRegex)
   private val broadcastCache = mutable.Map.empty[String, Broadcast[NameDictionary]]
   private lazy val localDictionary = NameDictionary(
@@ -54,7 +61,7 @@ object KoreanNameValidator {
 
     val matcher = NamePattern.matcher(normalized)
     while (matcher.find()) {
-      if (isLikelyNameCandidate(matcher.group(), dictionary)) {
+      if (isLikelyNameCandidate(matcher.group(), normalized, matcher.end(), dictionary)) {
         return true
       }
     }
@@ -62,8 +69,16 @@ object KoreanNameValidator {
     false
   }
 
-  private def isLikelyNameCandidate(candidate: String, dictionary: NameDictionary): Boolean = {
-    candidateMatches(candidate, dictionary) || shortenedShortNameCandidate(candidate).exists(candidateMatches(_, dictionary))
+  private def isLikelyNameCandidate(
+    candidate: String,
+    source: String,
+    matchEnd: Int,
+    dictionary: NameDictionary
+  ): Boolean = {
+    val directMatch = candidateMatches(candidate, dictionary) && hasAllowedTrailingBoundary(source, matchEnd)
+    directMatch || shortenedShortNameCandidate(candidate).exists { shortened =>
+      candidateMatches(shortened, dictionary) && hasAllowedTrailingBoundary(source, matchEnd - 1)
+    }
   }
 
   private def candidateMatches(candidate: String, dictionary: NameDictionary): Boolean = {
@@ -85,6 +100,20 @@ object KoreanNameValidator {
         None
       }
     }
+  }
+
+  private def hasAllowedTrailingBoundary(source: String, matchEnd: Int): Boolean = {
+    if (matchEnd >= source.length) {
+      true
+    } else {
+      val trailing = source.substring(matchEnd)
+      val next = trailing.charAt(0)
+      !isHangul(next) || AllowedTrailingPrefixes.exists(trailing.startsWith)
+    }
+  }
+
+  private def isHangul(ch: Char): Boolean = {
+    ch >= '\uAC00' && ch <= '\uD7A3'
   }
 
   private def extractGivenName(candidate: String): Option[String] = {
