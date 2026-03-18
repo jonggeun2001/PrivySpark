@@ -30,6 +30,7 @@ object KoreanNameValidator {
     "에", "에서", "에게", "에게서", "한테", "한테서", "께", "께서", "로", "으로", "부터", "까지", "보다", "처럼", "이랑",
     "이며", "이고", "이라", "이라고", "라", "라고", "라는", "라서", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
   )
+  private val CandidatePattern = Pattern.compile(RuleRegex)
   private val broadcastCache = mutable.Map.empty[String, Broadcast[NameDictionary]]
   private lazy val localDictionary = NameDictionary(
     givenNames = loadEntries("/korean-name-given-names.txt"),
@@ -59,10 +60,16 @@ object KoreanNameValidator {
       return false
     }
 
-    val matcher = rulePattern.matcher(normalized)
-    while (matcher.find()) {
-      if (isLikelyNameCandidate(matcher.group(), normalized, matcher.end(), dictionary)) {
-        return true
+    val ruleMatcher = rulePattern.matcher(normalized)
+    while (ruleMatcher.find()) {
+      val matchedText = ruleMatcher.group()
+      val candidateMatcher = CandidatePattern.matcher(matchedText)
+      while (candidateMatcher.find()) {
+        val candidate = candidateMatcher.group()
+        val candidateEnd = ruleMatcher.start() + candidateMatcher.end()
+        if (isLikelyNameCandidate(candidate, normalized, candidateEnd, dictionary)) {
+          return true
+        }
       }
     }
 
