@@ -63,11 +63,26 @@ object KoreanNameValidator {
   }
 
   private def isLikelyNameCandidate(candidate: String, dictionary: NameDictionary): Boolean = {
+    candidateMatches(candidate, dictionary) || shortenedShortNameCandidate(candidate).exists(candidateMatches(_, dictionary))
+  }
+
+  private def candidateMatches(candidate: String, dictionary: NameDictionary): Boolean = {
     extractGivenName(candidate).exists { givenName =>
       givenName.length match {
         case 1 => dictionary.shortFullNames.contains(candidate)
         case 2 => dictionary.givenNames.contains(givenName)
         case _ => false
+      }
+    }
+  }
+
+  private def shortenedShortNameCandidate(candidate: String): Option[String] = {
+    extractGivenName(candidate).flatMap { givenName =>
+      if (givenName.length == 2) {
+        val shortened = candidate.dropRight(1)
+        extractGivenName(shortened).filter(_.length == 1).map(_ => shortened)
+      } else {
+        None
       }
     }
   }
