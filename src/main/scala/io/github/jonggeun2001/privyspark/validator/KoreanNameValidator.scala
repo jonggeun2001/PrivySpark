@@ -25,10 +25,10 @@ object KoreanNameValidator {
   )
   private val AllowedTrailingPrefixes = Seq(
     "님", "씨", "군", "양",
-    "아", "야",
-    "이", "가", "은", "는", "을", "를", "의", "과", "와", "도", "만",
-    "에", "에서", "에게", "한테", "께", "께서", "로", "으로", "부터", "까지", "보다", "처럼",
-    "이며", "이고", "이라", "이라고", "이는", "이가", "이를", "입니다"
+    "아", "야", "요",
+    "이", "가", "은", "는", "을", "를", "의", "과", "와", "도", "만", "랑",
+    "에", "에서", "에게", "에게서", "한테", "한테서", "께", "께서", "로", "으로", "부터", "까지", "보다", "처럼", "이랑",
+    "이며", "이고", "이라", "이라고", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
   )
   private val NamePattern = Pattern.compile(RuleRegex)
   private val broadcastCache = mutable.Map.empty[String, Broadcast[NameDictionary]]

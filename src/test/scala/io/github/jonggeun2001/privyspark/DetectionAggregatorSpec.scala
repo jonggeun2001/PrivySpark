@@ -142,6 +142,9 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "남궁민수",
       "담당자 김민수",
       "김민수의 이메일",
+      "김민수랑",
+      "박지민이랑",
+      "남궁민수에게서",
       "정민이",
       "이준은",
       "남궁민은",
@@ -169,7 +172,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 9L))
+    val expected = Seq(MatchCount("candidate", "name", 12L))
 
     assert(actual == sortByKey(expected))
   }
