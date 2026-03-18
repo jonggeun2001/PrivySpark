@@ -135,7 +135,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(actual == sortByKey(expected))
   }
 
-  test("applies validator-backed name rules after regex prefilter") {
+  test("applies validator-backed name rules without reintroducing common noun false positives") {
     val df = Seq(
       "김철수",
       "박지민",
@@ -143,7 +143,13 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "담당자 김민수",
       "김치찌개",
       "이사회",
-      "관리자"
+      "관리자",
+      "전화",
+      "유리",
+      "가구",
+      "인형",
+      "연락은 전화로 주세요",
+      "유리문 앞입니다"
     ).toDF("candidate")
 
     val rules = Seq(

@@ -108,4 +108,4 @@ rules:
 
 `column_hints`는 커스텀 ruleset에서 선택적으로 사용하는 필드입니다. 지정하면 컬럼명에 해당 힌트가 포함된 컬럼에만 규칙을 적용하고, 생략하면 기존처럼 모든 컬럼을 검사합니다.
 
-`validator`도 선택 필드이며 현재는 `korean_name_dict`만 지원합니다. 이 validator는 정규식으로 먼저 성씨 prefix 기반 후보를 좁힌 뒤, 셀 안의 이름 후보 substring을 한국인 이름 음절 사전으로 다시 검증해 `"김치찌개"`, `"이사회"` 같은 오탐을 줄입니다. 기본 ruleset의 `name` 규칙이 이 validator를 사용합니다.
+`validator`도 선택 필드이며 현재는 `korean_name_dict`만 지원합니다. 이 validator는 정규식으로 먼저 성씨 prefix 기반 후보를 좁힌 뒤, 셀 안의 이름 후보 substring을 한국인 이름 사전으로 다시 검증해 `"김치찌개"`, `"이사회"`, `"전화"` 같은 오탐을 줄입니다. 기본 ruleset의 `name` 규칙이 이 validator를 사용합니다.
