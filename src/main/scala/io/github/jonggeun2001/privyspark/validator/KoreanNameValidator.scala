@@ -106,9 +106,22 @@ object KoreanNameValidator {
     if (matchEnd >= source.length) {
       true
     } else {
-      val trailing = source.substring(matchEnd)
+      consumeAllowedTrailingSuffixes(source.substring(matchEnd))
+    }
+  }
+
+  private def consumeAllowedTrailingSuffixes(trailing: String): Boolean = {
+    if (trailing.isEmpty) {
+      true
+    } else {
       val next = trailing.charAt(0)
-      !isHangul(next) || AllowedTrailingPrefixes.exists(trailing.startsWith)
+      if (!isHangul(next)) {
+        true
+      } else {
+        AllowedTrailingPrefixes.exists { prefix =>
+          trailing.startsWith(prefix) && consumeAllowedTrailingSuffixes(trailing.substring(prefix.length))
+        }
+      }
     }
   }
 
