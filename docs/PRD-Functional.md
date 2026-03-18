@@ -23,10 +23,11 @@
 - 다중 파일 디렉토리 그룹은 대표 파일 1개로 스키마를 우선 샘플링할 수 있고, sampled group은 우선 파일 식별자를 유지한 채 배치 스캔을 시도한다. 단, CSV sampled group은 헤더 유무가 파일마다 다를 수 있으므로 batch scan 전에 exact split으로 재확인한다. sampled group 배치 스캔 실패 시 전체 파일 exact split 후 재시도한다. 그룹 파일 수만으로 파일 단위 폴백을 강제하지 않는다.
 
 ### 2.3 탐지
-- MVP는 정규식 매칭만 사용.
+- MVP는 regex 기반 탐지를 사용하며, 일부 규칙은 regex 매칭 후 경량 validator UDF를 추가 적용할 수 있다.
 - 규칙셋은 외부 파일에서 로드.
 - 기본 규칙셋 `config/rules/default.yaml` 제공.
-- 규칙은 커스텀 ruleset에서 선택적으로 `column_hints`를 가질 수 있으며, 지정 시 컬럼명에 힌트가 포함된 컬럼에만 적용한다. `column_hints`가 비어 있으면 모든 컬럼을 검사한다.
+- 규칙은 커스텀 ruleset에서 선택적으로 `column_hints`, `validator`를 가질 수 있다. `column_hints`를 지정하면 컬럼명에 힌트가 포함된 컬럼에만 적용하고, 비어 있으면 모든 컬럼을 검사한다.
+- `validator`를 지정하면 regex 매칭 후 추가 검증을 수행한다. 현재 지원 값은 `korean_name_dict`이며, 기본 `name` 규칙은 성씨 prefix regex 뒤에 한국인 이름 음절 사전 검증을 적용해 `"김치찌개"`, `"이사회"` 같은 일반 단어 오탐을 줄인다.
 - 탐지 타입은 한국 포맷 중심(이름, 전화번호, 이메일, 주민번호, 주소, 계좌번호, 카드번호, 여권번호, IP).
 
 ### 2.4 샘플링
@@ -54,7 +55,7 @@
 - 스트리밍/실시간 탐지
 - ML/NLP 기반 분류
 - 자동 마스킹/차단
-- false positive 고도화(체크디짓/컨텍스트 점수 등)
+- 고비용 false positive 고도화(ML/NLP, 컨텍스트 점수, 체크디짓 등)
 
 ## 4. MVP 완료 기준 (Acceptance Criteria)
 1. 절대경로/URI 검증이 동작하고, 상대경로 입력 시 실패한다.

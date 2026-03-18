@@ -1,9 +1,10 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.model.PiiRule
+import io.github.jonggeun2001.privyspark.validator.KoreanNameValidator
 import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, when}
 import org.apache.spark.sql.types.StringType
-import org.apache.spark.sql.{Column, DataFrame}
+import org.apache.spark.sql.{Column, DataFrame, SparkSession}
 
 import scala.util.control.NonFatal
 
@@ -79,7 +80,7 @@ object DetectionAggregator {
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
     require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
 
-    val metrics = buildMetrics(columns, rules)
+    val metrics = buildMetrics(sampledDf.sparkSession, columns, rules)
     if (metrics.isEmpty) {
       logDebug("detection_aggregation_complete", "scope" -> "dataset", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
@@ -155,7 +156,7 @@ object DetectionAggregator {
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
     require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
 
-    val metrics = buildMetrics(columns, rules)
+    val metrics = buildMetrics(sampledDf.sparkSession, columns, rules)
     if (metrics.isEmpty) {
       logDebug("detection_aggregation_complete", "scope" -> "file", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
@@ -205,7 +206,7 @@ object DetectionAggregator {
     }
   }
 
-  private def buildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[Metric] = {
+  private def buildMetrics(spark: SparkSession, columns: Seq[String], rules: Seq[PiiRule]): Seq[Metric] = {
     columns.zipWithIndex.flatMap {
       case (columnName, columnIndex) =>
         val normalizedColumnName = columnName.toLowerCase
@@ -217,12 +218,24 @@ object DetectionAggregator {
             if (shouldTestColumn) {
               val alias = s"m_${columnIndex}_${ruleIndex}"
               val valueColumn = col(columnName).cast(StringType)
-              val predicate = valueColumn.isNotNull && valueColumn.rlike(rule.regex)
+              val predicate = buildPredicate(spark, valueColumn, rule)
               Some(Metric(alias = alias, columnName = columnName, piiType = rule.piiType, predicate = predicate))
             } else {
               None
             }
         }
+    }
+  }
+
+  private def buildPredicate(spark: SparkSession, valueColumn: Column, rule: PiiRule): Column = {
+    val regexPredicate = valueColumn.isNotNull && valueColumn.rlike(rule.regex)
+    rule.validator match {
+      case Some(KoreanNameValidator.ValidatorName) =>
+        regexPredicate && KoreanNameValidator.predicate(spark, valueColumn)
+      case Some(unsupported) =>
+        throw new IllegalArgumentException(s"Unsupported validator: $unsupported")
+      case None =>
+        regexPredicate
     }
   }
 

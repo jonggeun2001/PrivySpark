@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.DetectionAggregator.{AggregationConfig, FileMatchCount, MatchCount}
 import io.github.jonggeun2001.privyspark.model.PiiRule
+import io.github.jonggeun2001.privyspark.validator.KoreanNameValidator
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
@@ -130,6 +131,27 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       MatchCount("contact_phone", "phone", 2L),
       MatchCount("customer_email", "email", 2L)
     )
+
+    assert(actual == sortByKey(expected))
+  }
+
+  test("applies validator-backed name rules after regex prefilter") {
+    val df = Seq(
+      "김철수",
+      "박지민",
+      "남궁민수",
+      "담당자 김민수",
+      "김치찌개",
+      "이사회",
+      "관리자"
+    ).toDF("candidate")
+
+    val rules = Seq(
+      PiiRule("name", KoreanNameValidator.RuleRegex, validator = Some(KoreanNameValidator.ValidatorName))
+    )
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
+    val expected = Seq(MatchCount("candidate", "name", 4L))
 
     assert(actual == sortByKey(expected))
   }
@@ -351,7 +373,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       val valueColumn = col(columnName).cast(StringType)
       rules.flatMap { rule =>
         if (shouldApplyRule(columnName, rule)) {
-          val count = df.filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex)).count()
+          val count = df.filter(rulePredicate(valueColumn, rule)).count()
           if (count > 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
         } else {
           None
@@ -374,7 +396,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
               if (row.isNullAt(columnIndex)) {
                 false
               } else {
-                regex.findFirstIn(row.getString(columnIndex)).nonEmpty
+                matchesRule(row.getString(columnIndex), rule, regex)
               }
             }
 
@@ -399,7 +421,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       rules.flatMap { rule =>
         if (shouldApplyRule(columnName, rule)) {
           val groupedRows = df
-            .filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex))
+            .filter(rulePredicate(valueColumn, rule))
             .groupBy(col(fileIdentifierColumn))
             .count()
             .collect()
@@ -423,5 +445,28 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
   private def shouldApplyRule(columnName: String, rule: PiiRule): Boolean = {
     val normalizedColumnName = columnName.toLowerCase
     rule.columnHints.isEmpty || rule.columnHints.exists(hint => normalizedColumnName.contains(hint.toLowerCase))
+  }
+
+  private def rulePredicate(valueColumn: org.apache.spark.sql.Column, rule: PiiRule): org.apache.spark.sql.Column = {
+    val regexPredicate = valueColumn.isNotNull && valueColumn.rlike(rule.regex)
+    rule.validator match {
+      case Some(KoreanNameValidator.ValidatorName) =>
+        regexPredicate && KoreanNameValidator.predicate(spark, valueColumn)
+      case Some(unsupported) =>
+        throw new IllegalArgumentException(s"Unsupported validator: $unsupported")
+      case None =>
+        regexPredicate
+    }
+  }
+
+  private def matchesRule(
+    value: String,
+    rule: PiiRule,
+    regex: scala.util.matching.Regex
+  ): Boolean = {
+    regex.findFirstIn(value).nonEmpty && rule.validator.forall {
+      case KoreanNameValidator.ValidatorName => KoreanNameValidator.containsLikelyName(value)
+      case unsupported => throw new IllegalArgumentException(s"Unsupported validator: $unsupported")
+    }
   }
 }

@@ -1,6 +1,11 @@
 package io.github.jonggeun2001.privyspark.model
 
-final case class PiiRule(piiType: String, regex: String, columnHints: Seq[String] = Seq.empty)
+final case class PiiRule(
+  piiType: String,
+  regex: String,
+  columnHints: Seq[String] = Seq.empty,
+  validator: Option[String] = None
+)
 
 final case class ScanResult(
   dataset_path: String,
