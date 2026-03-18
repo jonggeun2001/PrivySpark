@@ -15,14 +15,16 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(rules.nonEmpty)
     assert(rules.exists(_.piiType == "email"))
     assert(rules.forall(_.columnHints.isEmpty))
+    assert(rules.forall(_.matchType == "value"))
   }
 
-  test("loads optional column hints from ruleset file and ignores blank entries") {
+  test("loads optional column hints and match type from ruleset file and ignores blank entries") {
     val rulesetPath = Files.createTempFile("privyspark-ruleset", ".yaml")
     val yaml =
       """rules:
         |  - pii_type: email
         |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        |    match_type: full_column
         |    column_hints:
         |      - email
         |      -
@@ -37,7 +39,29 @@ class RulesetLoaderSpec extends AnyFunSuite {
       val rules = RulesetLoader.load(rulesetPath.toString)
       assert(rules.map(_.piiType) == Seq("email", "phone_number"))
       assert(rules.head.columnHints == Seq("email", "mail"))
+      assert(rules.head.matchType == "full_column")
       assert(rules(1).columnHints.isEmpty)
+      assert(rules(1).matchType == "value")
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
+  test("throws on unsupported match type") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-invalid", ".yaml")
+    val yaml =
+      """rules:
+        |  - pii_type: email
+        |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        |    match_type: unknown_mode
+        |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val error = intercept[IllegalArgumentException] {
+        RulesetLoader.load(rulesetPath.toString)
+      }
+      assert(error.getMessage.contains("Unsupported match_type"))
     } finally {
       Files.deleteIfExists(rulesetPath)
     }
