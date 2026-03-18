@@ -826,47 +826,47 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanGroup falls back to file scan when group file count exceeds limit") {
+  test("scanGroup does not fall back when group file count exceeds 1000 files") {
     val inputDir = Files.createTempDirectory("privyspark-group-fallback-")
 
     try {
-      val file1 = inputDir.resolve("part-a.csv")
-      val file2 = inputDir.resolve("part-b.csv")
+      val file = inputDir.resolve("part-a.csv")
 
-      writeText(file1,
+      writeText(file,
         "name,email\n" +
           "alice,alice@example.com\n")
-      writeText(file2,
-        "name,email\n" +
-          "bob,bob@example.com\n")
 
       val group = PrivySparkApp.ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "email|name",
-        filePaths = Seq(file1.toString, file2.toString)
+        filePaths = Seq.fill(1001)(file.toString)
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-
-      val (results, errors) = PrivySparkApp.scanGroup(
-        spark,
-        inputDir.toString,
-        group,
-        rules,
-        sampleRatio = 1.0,
-        timestamp = "2026-03-05T00:00:00Z",
-        maxFilesPerGroupBatchScan = 1
-      )
+      var scanResult = (Seq.empty[ScanResult], Seq.empty[ScanError])
+      val logs = captureStderr {
+        scanResult = PrivySparkApp.scanGroup(
+          spark,
+          inputDir.toString,
+          group,
+          rules,
+          sampleRatio = 1.0,
+          timestamp = "2026-03-05T00:00:00Z"
+        )
+      }
+      val (results, errors) = scanResult
 
       assert(errors.isEmpty)
-      assert(results.map(_.file_identifier).toSet == Set("part-a.csv", "part-b.csv"))
+      assert(results.nonEmpty)
+      assert(!logs.contains("group_size_limit_exceeded"))
+      assert(!logs.contains("group_scan_fallback"))
     } finally {
       deleteRecursively(inputDir)
     }
   }
 
-  test("scanGroup fallback keeps directory identifier for a grouped directory") {
+  test("scanGroup keeps directory identifier for a grouped directory") {
     val inputDir = Files.createTempDirectory("privyspark-directory-group-fallback-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
 
@@ -896,8 +896,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         group,
         rules,
         sampleRatio = 1.0,
-        timestamp = "2026-03-12T00:00:00Z",
-        maxFilesPerGroupBatchScan = 1
+        timestamp = "2026-03-12T00:00:00Z"
       )
 
       assert(errors.isEmpty)
@@ -908,7 +907,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanGroup file fallback re-detects CSV headers per file for sampled groups") {
+  test("scanGroupByFile re-detects CSV headers per file for sampled groups") {
     val inputDir = Files.createTempDirectory("privyspark-sampled-csv-header-fallback-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
     val timestamp = "2026-03-13T00:00:00Z"
@@ -934,14 +933,13 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
         rules,
         sampleRatio = 1.0,
-        timestamp = timestamp,
-        maxFilesPerGroupBatchScan = 1
+        timestamp = timestamp
       )
 
       assert(errors.isEmpty)
@@ -1076,8 +1074,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         group,
         rules,
         sampleRatio = 1.0,
-        timestamp = "2026-03-12T00:00:00Z",
-        maxFilesPerGroupBatchScan = 1
+        timestamp = "2026-03-12T00:00:00Z"
       )
 
       assert(errors.size == 1)
@@ -1088,22 +1085,20 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanGroup emits driver fallback logs when switching to file scan") {
+  test("scanGroup emits driver fallback logs when batch read failure switches to file scan") {
     val inputDir = Files.createTempDirectory("privyspark-group-fallback-log-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
 
     try {
-      val file1 = inputDir.resolve("part-a.csv")
-      val file2 = inputDir.resolve("part-b.csv")
+      val file1 = groupedDir.resolve("part-a.csv")
+      val file2 = groupedDir.resolve("part-missing.csv")
 
       writeText(file1,
         "name,email\n" +
           "alice,alice@example.com\n")
-      writeText(file2,
-        "name,email\n" +
-          "bob,bob@example.com\n")
 
       val group = PrivySparkApp.ScanGroup(
-        directoryPath = inputDir.toString,
+        directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
         filePaths = Seq(file1.toString, file2.toString)
@@ -1118,8 +1113,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           group,
           rules,
           sampleRatio = 1.0,
-          timestamp = "2026-03-12T00:00:00Z",
-          maxFilesPerGroupBatchScan = 1
+          timestamp = "2026-03-12T00:00:00Z"
         )
       }
 
