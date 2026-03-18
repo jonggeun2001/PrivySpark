@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
-import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, when}
+import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{Column, DataFrame, Row}
 
@@ -228,15 +228,16 @@ object DetectionAggregator {
             if (shouldTestColumn) {
               val alias = s"m_${columnIndex}_${ruleIndex}"
               val valueColumn = col(columnName).cast(StringType)
+              val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
               val mismatchPredicate = rule.matchType match {
                 case PiiRuleMatchType.FullColumn =>
                   val fullMatchPredicate = valueColumn.rlike(fullMatchRegex(rule.regex))
-                  Some(valueColumn.isNotNull && !fullMatchPredicate)
+                  Some(presentValuePredicate && !fullMatchPredicate)
                 case _ =>
                   None
               }
               val predicate = rule.matchType match {
-                case PiiRuleMatchType.FullColumn => valueColumn.isNotNull && valueColumn.rlike(fullMatchRegex(rule.regex))
+                case PiiRuleMatchType.FullColumn => presentValuePredicate && valueColumn.rlike(fullMatchRegex(rule.regex))
                 case _ => valueColumn.isNotNull && valueColumn.rlike(rule.regex)
               }
               Some(

@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.DetectionAggregator.{AggregationConfig, FileMatchCount, MatchCount}
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
-import org.apache.spark.sql.functions.{col, when}
+import org.apache.spark.sql.functions.{col, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.junit.runner.RunWith
@@ -138,6 +138,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val df = Seq(
       ("alpha@example.com", "prefix alpha@example.com", "alpha@example.com"),
       ("beta@example.com", "beta@example.com suffix", "not-an-email"),
+      ("", "", ""),
       (null.asInstanceOf[String], null.asInstanceOf[String], null.asInstanceOf[String])
     ).toDF("strict_email", "embedded_email", "mixed_email")
 
@@ -332,6 +333,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       ("alpha.csv", "prefix alpha@example.com"),
       ("alpha.csv", "beta@example.com suffix"),
       ("beta.csv", "beta@example.com"),
+      ("beta.csv", ""),
       ("beta.csv", null.asInstanceOf[String])
     ).toDF("file_id", "customer_email")
 
@@ -389,10 +391,11 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       rules.flatMap { rule =>
         if (shouldApplyRule(columnName, rule)) {
           val matchRegex = regexForRule(rule)
-          val count = df.filter(valueColumn.isNotNull && valueColumn.rlike(matchRegex)).count()
+          val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
+          val count = df.filter(presentValuePredicate && valueColumn.rlike(matchRegex)).count()
           rule.matchType match {
             case PiiRuleMatchType.FullColumn =>
-              val mismatchCount = df.filter(valueColumn.isNotNull && !valueColumn.rlike(matchRegex)).count()
+              val mismatchCount = df.filter(presentValuePredicate && !valueColumn.rlike(matchRegex)).count()
               if (count > 0L && mismatchCount == 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
             case _ =>
               if (count > 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
@@ -414,15 +417,16 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       compiledRules.flatMap {
         case (rule, regex) =>
           if (shouldApplyRule(columnName, rule)) {
-            val nonNullValues = rows.flatMap { row =>
+            val presentValues = rows.flatMap { row =>
               if (row.isNullAt(columnIndex)) {
                 None
               } else {
-                Some(row.getString(columnIndex))
+                val value = row.getString(columnIndex)
+                if (rule.matchType == PiiRuleMatchType.FullColumn && value.trim.isEmpty) None else Some(value)
               }
             }
-            val count = nonNullValues.count(value => regex.findFirstIn(value).nonEmpty)
-            val mismatchCount = nonNullValues.size - count
+            val count = presentValues.count(value => regex.findFirstIn(value).nonEmpty)
+            val mismatchCount = presentValues.size - count
 
             rule.matchType match {
               case PiiRuleMatchType.FullColumn =>
@@ -450,13 +454,14 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       rules.flatMap { rule =>
         if (shouldApplyRule(columnName, rule)) {
           val matchRegex = regexForRule(rule)
+          val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
           rule.matchType match {
             case PiiRuleMatchType.FullColumn =>
               val groupedRows = df
                 .groupBy(col(fileIdentifierColumn))
                 .agg(
-                  org.apache.spark.sql.functions.sum(when(valueColumn.isNotNull && valueColumn.rlike(matchRegex), 1L).otherwise(0L)).cast("long").as("match_count"),
-                  org.apache.spark.sql.functions.sum(when(valueColumn.isNotNull && !valueColumn.rlike(matchRegex), 1L).otherwise(0L)).cast("long").as("mismatch_count")
+                  org.apache.spark.sql.functions.sum(when(presentValuePredicate && valueColumn.rlike(matchRegex), 1L).otherwise(0L)).cast("long").as("match_count"),
+                  org.apache.spark.sql.functions.sum(when(presentValuePredicate && !valueColumn.rlike(matchRegex), 1L).otherwise(0L)).cast("long").as("mismatch_count")
                 )
                 .collect()
 
