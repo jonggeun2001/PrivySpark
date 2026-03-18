@@ -1,9 +1,9 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.model.PiiRule
+import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
 import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, when}
 import org.apache.spark.sql.types.StringType
-import org.apache.spark.sql.{Column, DataFrame}
+import org.apache.spark.sql.{Column, DataFrame, Row}
 
 import scala.util.control.NonFatal
 
@@ -12,7 +12,16 @@ object DetectionAggregator {
   final case class FileMatchCount(fileIdentifier: String, columnName: String, piiType: String, count: Long)
   final case class AggregationConfig(maxExpressionsPerAgg: Int = 400, legacyFallbackThreshold: Int = 50000)
 
-  private final case class Metric(alias: String, columnName: String, piiType: String, predicate: Column)
+  private final case class Metric(
+    alias: String,
+    columnName: String,
+    piiType: String,
+    matchType: String,
+    predicate: Column,
+    mismatchPredicate: Option[Column]
+  ) {
+    val expressionCount: Int = 1 + mismatchPredicate.size
+  }
   private val DebugPropertyName = "privyspark.debug"
   private val DebugEnvName = "PRIVYSPARK_DEBUG"
   private val LegacyFallbackBatchSize = 50
@@ -56,8 +65,8 @@ object DetectionAggregator {
     System.err.println(s"[PrivySpark][DEBUG] $event$suffix")
   }
 
-  private def logFallback(scope: String, metricsSize: Int, reason: String): Unit = {
-    System.err.println(s"[PrivySpark] detection_aggregation_fallback scope=$scope metrics=$metricsSize reason=$reason")
+  private def logFallback(scope: String, expressionCount: Int, reason: String): Unit = {
+    System.err.println(s"[PrivySpark] detection_aggregation_fallback scope=$scope expressions=$expressionCount reason=$reason")
   }
 
   def aggregate(sampledDf: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
@@ -84,12 +93,13 @@ object DetectionAggregator {
       logDebug("detection_aggregation_complete", "scope" -> "dataset", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
     }
-    logDebug("detection_aggregation_metrics_built", "scope" -> "dataset", "metrics" -> metrics.size)
+    val expressionCount = totalExpressionCount(metrics)
+    logDebug("detection_aggregation_metrics_built", "scope" -> "dataset", "metrics" -> metrics.size, "expressions" -> expressionCount)
 
-    if (metrics.size > config.legacyFallbackThreshold) {
+    if (expressionCount > config.legacyFallbackThreshold) {
       val fallback = executeThresholdFallback(
         "dataset",
-        metrics.size,
+        expressionCount,
         config.legacyFallbackThreshold,
         aggregateLegacy(sampledDf, metrics),
         aggregateSafeLegacy(sampledDf, metrics)
@@ -116,7 +126,7 @@ object DetectionAggregator {
       results
     } catch {
       case NonFatal(e) =>
-        logFallback("dataset", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+        logFallback("dataset", expressionCount, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
         val results = aggregateSafeLegacy(sampledDf, metrics)
         logDebug(
           "detection_aggregation_complete",
@@ -160,12 +170,13 @@ object DetectionAggregator {
       logDebug("detection_aggregation_complete", "scope" -> "file", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
     }
-    logDebug("detection_aggregation_metrics_built", "scope" -> "file", "metrics" -> metrics.size)
+    val expressionCount = totalExpressionCount(metrics)
+    logDebug("detection_aggregation_metrics_built", "scope" -> "file", "metrics" -> metrics.size, "expressions" -> expressionCount)
 
-    if (metrics.size > config.legacyFallbackThreshold) {
+    if (expressionCount > config.legacyFallbackThreshold) {
       val fallback = executeThresholdFallback(
         "file",
-        metrics.size,
+        expressionCount,
         config.legacyFallbackThreshold,
         aggregateByFileLegacy(sampledDf, fileIdentifierColumn, metrics),
         aggregateByFileSafeLegacy(sampledDf, fileIdentifierColumn, metrics)
@@ -192,7 +203,7 @@ object DetectionAggregator {
       results
     } catch {
       case NonFatal(e) =>
-        logFallback("file", metrics.size, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+        logFallback("file", expressionCount, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
         val results = aggregateByFileSafeLegacy(sampledDf, fileIdentifierColumn, metrics)
         logDebug(
           "detection_aggregation_complete",
@@ -217,8 +228,22 @@ object DetectionAggregator {
             if (shouldTestColumn) {
               val alias = s"m_${columnIndex}_${ruleIndex}"
               val valueColumn = col(columnName).cast(StringType)
-              val predicate = valueColumn.isNotNull && valueColumn.rlike(rule.regex)
-              Some(Metric(alias = alias, columnName = columnName, piiType = rule.piiType, predicate = predicate))
+              val regexPredicate = valueColumn.rlike(rule.regex)
+              val predicate = valueColumn.isNotNull && regexPredicate
+              val mismatchPredicate = rule.matchType match {
+                case PiiRuleMatchType.FullColumn => Some(valueColumn.isNotNull && !regexPredicate)
+                case _ => None
+              }
+              Some(
+                Metric(
+                  alias = alias,
+                  columnName = columnName,
+                  piiType = rule.piiType,
+                  matchType = rule.matchType,
+                  predicate = predicate,
+                  mismatchPredicate = mismatchPredicate
+                )
+              )
             } else {
               None
             }
@@ -227,8 +252,14 @@ object DetectionAggregator {
   }
 
   private def buildExpressions(batch: Seq[Metric]): Seq[Column] = {
-    batch.map { metric =>
-      sparkSum(when(metric.predicate, lit(1L)).otherwise(lit(0L))).cast("long").as(metric.alias)
+    batch.flatMap { metric =>
+      val matchExpression = sparkSum(when(metric.predicate, lit(1L)).otherwise(lit(0L))).cast("long").as(metric.alias)
+      metric.mismatchPredicate match {
+        case Some(predicate) =>
+          Seq(matchExpression, sparkSum(when(predicate, lit(1L)).otherwise(lit(0L))).cast("long").as(s"${metric.alias}_mismatch"))
+        case None =>
+          Seq(matchExpression)
+      }
     }
   }
 
@@ -237,15 +268,24 @@ object DetectionAggregator {
     metrics: Seq[Metric],
     maxExpressionsPerAgg: Int
   ): Seq[MatchCount] = {
-    metrics.grouped(maxExpressionsPerAgg).toSeq.flatMap { batch =>
+    groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).flatMap { batch =>
       val expressions = buildExpressions(batch)
 
       val row = sampledDf.agg(expressions.head, expressions.tail: _*).head()
 
-      batch.zipWithIndex.flatMap {
-        case (metric, index) =>
-          val count = if (row.isNullAt(index)) 0L else row.getLong(index)
-          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+      var index = 0
+      batch.flatMap { metric =>
+        val count = if (row.isNullAt(index)) 0L else row.getLong(index)
+        index += 1
+
+        metric.mismatchPredicate match {
+          case Some(_) =>
+            val mismatchCount = if (row.isNullAt(index)) 0L else row.getLong(index)
+            index += 1
+            if (count > 0L && mismatchCount == 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+          case None =>
+            if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+        }
       }
     }
   }
@@ -256,17 +296,17 @@ object DetectionAggregator {
 
   private[privyspark] def executeThresholdFallback[T](
     scope: String,
-    metricsSize: Int,
+    expressionCount: Int,
     threshold: Int,
     batchedFallback: => Seq[T],
     legacyFallback: => Seq[T]
   ): (Seq[T], String) = {
-    logFallback(scope, metricsSize, s"metric_threshold_exceeded($threshold)")
+    logFallback(scope, expressionCount, s"metric_threshold_exceeded($threshold)")
     try {
       (batchedFallback, "threshold_fallback")
     } catch {
       case NonFatal(e) =>
-        logFallback(scope, metricsSize, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+        logFallback(scope, expressionCount, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
         (legacyFallback, "legacy_fallback")
     }
   }
@@ -274,7 +314,13 @@ object DetectionAggregator {
   private def aggregateSafeLegacy(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
     metrics.flatMap { metric =>
       val count = sampledDf.filter(metric.predicate).count()
-      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+      metric.mismatchPredicate match {
+        case Some(predicate) =>
+          val mismatchCount = sampledDf.filter(predicate).count()
+          if (count > 0L && mismatchCount == 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+        case None =>
+          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+      }
     }
   }
 
@@ -284,7 +330,7 @@ object DetectionAggregator {
     metrics: Seq[Metric],
     maxExpressionsPerAgg: Int
   ): Seq[FileMatchCount] = {
-    metrics.grouped(maxExpressionsPerAgg).toSeq.flatMap { batch =>
+    groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).flatMap { batch =>
       val expressions = buildExpressions(batch)
       val groupedRows = sampledDf.groupBy(col(fileIdentifierColumn)).agg(expressions.head, expressions.tail: _*).collect()
 
@@ -293,10 +339,19 @@ object DetectionAggregator {
         if (fileIdentifier == null || fileIdentifier.isEmpty) {
           Seq.empty
         } else {
-          batch.zipWithIndex.flatMap {
-            case (metric, index) =>
-              val count = if (row.isNullAt(index + 1)) 0L else row.getLong(index + 1)
-              if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count)) else None
+          var index = 1
+          batch.flatMap { metric =>
+            val count = if (row.isNullAt(index)) 0L else row.getLong(index)
+            index += 1
+
+            metric.mismatchPredicate match {
+              case Some(_) =>
+                val mismatchCount = if (row.isNullAt(index)) 0L else row.getLong(index)
+                index += 1
+                if (count > 0L && mismatchCount == 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count)) else None
+              case None =>
+                if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count)) else None
+            }
           }
         }
       }
@@ -317,21 +372,71 @@ object DetectionAggregator {
     metrics: Seq[Metric]
   ): Seq[FileMatchCount] = {
     metrics.flatMap { metric =>
-      val groupedRows = sampledDf
-        .filter(metric.predicate)
-        .groupBy(col(fileIdentifierColumn))
-        .count()
-        .collect()
+      metric.mismatchPredicate match {
+        case Some(mismatchPredicate) =>
+          val groupedRows = sampledDf
+            .groupBy(col(fileIdentifierColumn))
+            .agg(
+              sparkSum(when(metric.predicate, lit(1L)).otherwise(lit(0L))).cast("long").as("match_count"),
+              sparkSum(when(mismatchPredicate, lit(1L)).otherwise(lit(0L))).cast("long").as("mismatch_count")
+            )
+            .collect()
 
-      groupedRows.flatMap { row =>
-        val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
-        val count = if (row.isNullAt(1)) 0L else row.getLong(1)
-        if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
-          None
-        } else {
-          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
-        }
+          groupedRows.flatMap { row =>
+            val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+            val count = if (row.isNullAt(1)) 0L else row.getLong(1)
+            val mismatchCount = if (row.isNullAt(2)) 0L else row.getLong(2)
+            if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L || mismatchCount > 0L) {
+              None
+            } else {
+              Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
+            }
+          }
+        case None =>
+          val groupedRows = sampledDf
+            .filter(metric.predicate)
+            .groupBy(col(fileIdentifierColumn))
+            .count()
+            .collect()
+
+          groupedRows.flatMap { row =>
+            val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+            val count = if (row.isNullAt(1)) 0L else row.getLong(1)
+            if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
+              None
+            } else {
+              Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
+            }
+          }
       }
     }
+  }
+
+  private def totalExpressionCount(metrics: Seq[Metric]): Int = {
+    metrics.map(_.expressionCount).sum
+  }
+
+  private def groupMetricsByExpressionBudget(metrics: Seq[Metric], maxExpressionsPerAgg: Int): Seq[Seq[Metric]] = {
+    val batches = scala.collection.mutable.ArrayBuffer.empty[Seq[Metric]]
+    val currentBatch = scala.collection.mutable.ArrayBuffer.empty[Metric]
+    var currentExpressionCount = 0
+
+    metrics.foreach { metric =>
+      val metricExpressionCount = metric.expressionCount
+      if (currentBatch.nonEmpty && currentExpressionCount + metricExpressionCount > maxExpressionsPerAgg) {
+        batches += currentBatch.toSeq
+        currentBatch.clear()
+        currentExpressionCount = 0
+      }
+
+      currentBatch += metric
+      currentExpressionCount += metricExpressionCount
+    }
+
+    if (currentBatch.nonEmpty) {
+      batches += currentBatch.toSeq
+    }
+
+    batches.toSeq
   }
 }

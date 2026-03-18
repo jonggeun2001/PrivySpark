@@ -1,8 +1,8 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.DetectionAggregator.{AggregationConfig, FileMatchCount, MatchCount}
-import io.github.jonggeun2001.privyspark.model.PiiRule
-import org.apache.spark.sql.functions.col
+import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
+import org.apache.spark.sql.functions.{col, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.junit.runner.RunWith
@@ -132,6 +132,24 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     assert(actual == sortByKey(expected))
+  }
+
+  test("detects full-column rules only when every non-null value matches the regex") {
+    val df = Seq(
+      ("alpha@example.com", "alpha@example.com"),
+      ("beta@example.com", "not-an-email"),
+      (null.asInstanceOf[String], null.asInstanceOf[String])
+    ).toDF("strict_email", "mixed_email")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", matchType = PiiRuleMatchType.FullColumn)
+    )
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
+    val expected = sortByKey(legacyCounts(df, rules))
+
+    assert(actual == expected)
+    assert(actual == Seq(MatchCount("strict_email", "email", 2L)))
   }
 
   test("produces correct results when aggregation is split into batches") {
@@ -264,7 +282,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     val fallback = DetectionAggregator.executeThresholdFallback(
       "dataset",
-      metricsSize = 4,
+      expressionCount = 4,
       threshold = 1,
       batchedFallback = expected,
       legacyFallback = Seq.empty
@@ -278,7 +296,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     val fallback = DetectionAggregator.executeThresholdFallback(
       "dataset",
-      metricsSize = 4,
+      expressionCount = 4,
       threshold = 1,
       batchedFallback = throw new RuntimeException("forced-threshold-fallback-failure"),
       legacyFallback = expected
@@ -307,6 +325,25 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     assert(actual == sortByFileKey(expected))
+  }
+
+  test("detects full-column rules per file only when each file column has no mismatches") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com"),
+      ("alpha.csv", "not-an-email"),
+      ("beta.csv", "beta@example.com"),
+      ("beta.csv", null.asInstanceOf[String])
+    ).toDF("file_id", "customer_email")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", matchType = PiiRuleMatchType.FullColumn)
+    )
+
+    val actual = sortByFileKey(DetectionAggregator.aggregateByFile(df, "file_id", rules))
+    val expected = sortByFileKey(legacyCountsByFile(df, "file_id", rules))
+
+    assert(actual == expected)
+    assert(actual == Seq(FileMatchCount("beta.csv", "customer_email", "email", 1L)))
   }
 
   private def sortByKey(values: Seq[MatchCount]): Seq[MatchCount] = {
@@ -352,7 +389,13 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       rules.flatMap { rule =>
         if (shouldApplyRule(columnName, rule)) {
           val count = df.filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex)).count()
-          if (count > 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
+          rule.matchType match {
+            case PiiRuleMatchType.FullColumn =>
+              val mismatchCount = df.filter(valueColumn.isNotNull && !valueColumn.rlike(rule.regex)).count()
+              if (count > 0L && mismatchCount == 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
+            case _ =>
+              if (count > 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
+          }
         } else {
           None
         }
@@ -370,15 +413,22 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       compiledRules.flatMap {
         case (rule, regex) =>
           if (shouldApplyRule(columnName, rule)) {
-            val count = rows.count { row =>
+            val nonNullValues = rows.flatMap { row =>
               if (row.isNullAt(columnIndex)) {
-                false
+                None
               } else {
-                regex.findFirstIn(row.getString(columnIndex)).nonEmpty
+                Some(row.getString(columnIndex))
               }
             }
+            val count = nonNullValues.count(value => regex.findFirstIn(value).nonEmpty)
+            val mismatchCount = nonNullValues.size - count
 
-            if (count > 0) Some(MatchCount(columnName, rule.piiType, count.toLong)) else None
+            rule.matchType match {
+              case PiiRuleMatchType.FullColumn =>
+                if (count > 0 && mismatchCount == 0) Some(MatchCount(columnName, rule.piiType, count.toLong)) else None
+              case _ =>
+                if (count > 0) Some(MatchCount(columnName, rule.piiType, count.toLong)) else None
+            }
           } else {
             None
           }
@@ -398,20 +448,42 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       rules.flatMap { rule =>
         if (shouldApplyRule(columnName, rule)) {
-          val groupedRows = df
-            .filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex))
-            .groupBy(col(fileIdentifierColumn))
-            .count()
-            .collect()
+          rule.matchType match {
+            case PiiRuleMatchType.FullColumn =>
+              val groupedRows = df
+                .groupBy(col(fileIdentifierColumn))
+                .agg(
+                  org.apache.spark.sql.functions.sum(when(valueColumn.isNotNull && valueColumn.rlike(rule.regex), 1L).otherwise(0L)).cast("long").as("match_count"),
+                  org.apache.spark.sql.functions.sum(when(valueColumn.isNotNull && !valueColumn.rlike(rule.regex), 1L).otherwise(0L)).cast("long").as("mismatch_count")
+                )
+                .collect()
 
-          groupedRows.flatMap { row =>
-            val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
-            val count = if (row.isNullAt(1)) 0L else row.getLong(1)
-            if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
-              None
-            } else {
-              Some(FileMatchCount(fileIdentifier, columnName, rule.piiType, count))
-            }
+              groupedRows.flatMap { row =>
+                val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+                val count = if (row.isNullAt(1)) 0L else row.getLong(1)
+                val mismatchCount = if (row.isNullAt(2)) 0L else row.getLong(2)
+                if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L || mismatchCount > 0L) {
+                  None
+                } else {
+                  Some(FileMatchCount(fileIdentifier, columnName, rule.piiType, count))
+                }
+              }
+            case _ =>
+              val groupedRows = df
+                .filter(valueColumn.isNotNull && valueColumn.rlike(rule.regex))
+                .groupBy(col(fileIdentifierColumn))
+                .count()
+                .collect()
+
+              groupedRows.flatMap { row =>
+                val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+                val count = if (row.isNullAt(1)) 0L else row.getLong(1)
+                if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
+                  None
+                } else {
+                  Some(FileMatchCount(fileIdentifier, columnName, rule.piiType, count))
+                }
+              }
           }
         } else {
           None

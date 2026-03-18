@@ -98,9 +98,11 @@ git push origin 0.1.3
 rules:
   - pii_type: email
     regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}'
+    match_type: full_column
     column_hints:
       - email
       - mail
 ```
 
 `column_hints`는 커스텀 ruleset에서 선택적으로 사용하는 필드입니다. 지정하면 컬럼명에 해당 힌트가 포함된 컬럼에만 규칙을 적용하고, 생략하면 기존처럼 모든 컬럼을 검사합니다. 기본 ruleset은 기존 호환성을 위해 모든 컬럼을 검사합니다.
+`match_type`도 선택 필드이며 기본값은 `value`입니다. `value`는 기존처럼 regex에 매칭되는 값 개수를 집계하고, `full_column`은 비어 있지 않은 값 전체가 regex를 만족하는 컬럼/파일에 대해서만 결과를 생성합니다.

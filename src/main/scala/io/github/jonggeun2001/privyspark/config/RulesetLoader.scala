@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark.config
 
-import io.github.jonggeun2001.privyspark.model.PiiRule
+import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
 import org.yaml.snakeyaml.Yaml
 
 import java.io.FileInputStream
@@ -29,12 +29,18 @@ object RulesetLoader {
         val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
         val regex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
         val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
+        val rawMatchType = Option(item.get("match_type")).map(_.toString.trim).filter(_.nonEmpty).getOrElse(PiiRuleMatchType.Value)
+        val matchType = PiiRuleMatchType.normalize(rawMatchType).getOrElse {
+          throw new IllegalArgumentException(
+            s"Unsupported match_type: $rawMatchType. Supported values: ${PiiRuleMatchType.Supported.toSeq.sorted.mkString(", ")}"
+          )
+        }
 
         if (piiType.isEmpty || regex.isEmpty) {
           throw new IllegalArgumentException("Each rule must include pii_type and regex")
         }
 
-        PiiRule(piiType, regex, columnHints)
+        PiiRule(piiType, regex, columnHints, matchType)
       }.toSeq
 
       if (parsed.isEmpty) {
