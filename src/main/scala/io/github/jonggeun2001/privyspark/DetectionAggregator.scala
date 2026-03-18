@@ -228,11 +228,16 @@ object DetectionAggregator {
             if (shouldTestColumn) {
               val alias = s"m_${columnIndex}_${ruleIndex}"
               val valueColumn = col(columnName).cast(StringType)
-              val regexPredicate = valueColumn.rlike(rule.regex)
-              val predicate = valueColumn.isNotNull && regexPredicate
               val mismatchPredicate = rule.matchType match {
-                case PiiRuleMatchType.FullColumn => Some(valueColumn.isNotNull && !regexPredicate)
-                case _ => None
+                case PiiRuleMatchType.FullColumn =>
+                  val fullMatchPredicate = valueColumn.rlike(fullMatchRegex(rule.regex))
+                  Some(valueColumn.isNotNull && !fullMatchPredicate)
+                case _ =>
+                  None
+              }
+              val predicate = rule.matchType match {
+                case PiiRuleMatchType.FullColumn => valueColumn.isNotNull && valueColumn.rlike(fullMatchRegex(rule.regex))
+                case _ => valueColumn.isNotNull && valueColumn.rlike(rule.regex)
               }
               Some(
                 Metric(
@@ -414,6 +419,10 @@ object DetectionAggregator {
 
   private def totalExpressionCount(metrics: Seq[Metric]): Int = {
     metrics.map(_.expressionCount).sum
+  }
+
+  private def fullMatchRegex(regex: String): String = {
+    s"\\A(?:$regex)\\z"
   }
 
   private def groupMetricsByExpressionBudget(metrics: Seq[Metric], maxExpressionsPerAgg: Int): Seq[Seq[Metric]] = {
