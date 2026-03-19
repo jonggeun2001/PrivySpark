@@ -69,6 +69,7 @@ object KoreanNameValidator {
     "이랑" -> (Seq("요") ++ SecondarySuffixes),
     "라고" -> (Seq("요") ++ SecondarySuffixes),
     "이라고" -> (Seq("요") ++ SecondarySuffixes),
+    "이고" -> Seq("요"),
     "이라" -> Seq("는", "서"),
     "은" -> Seq("요"),
     "는" -> Seq("요"),
