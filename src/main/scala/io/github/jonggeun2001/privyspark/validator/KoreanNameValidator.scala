@@ -152,11 +152,17 @@ object KoreanNameValidator {
       Seq.empty
     } else {
       val matchCandidateSet = matchCandidates.toSet
-      (1 to ruleMatcher.groupCount()).flatMap { groupIndex =>
+      val candidateBearingGroups = (1 to ruleMatcher.groupCount()).map { groupIndex =>
         Option(ruleMatcher.group(groupIndex)).toSeq.flatMap { groupText =>
           allCandidateSpans(groupText, ruleMatcher.start(groupIndex)).filter(matchCandidateSet.contains)
         }
-      }.distinct
+      }.filter(_.nonEmpty)
+
+      if (candidateBearingGroups.length == 1) {
+        candidateBearingGroups.head.distinct
+      } else {
+        Seq.empty
+      }
     }
   }
 
