@@ -136,11 +136,16 @@ object KoreanNameValidator {
   }
 
   private def selectCandidateSpans(candidates: Seq[CandidateSpan], ruleRegex: String): Seq[CandidateSpan] = {
+    val leadingBroad = ruleRegex.startsWith(".*")
+    val trailingBroad = ruleRegex.endsWith(".*")
+
     if (candidates.length <= 1) {
       candidates
-    } else if (ruleRegex.startsWith(".*") && !ruleRegex.endsWith(".*")) {
+    } else if (leadingBroad && trailingBroad) {
+      Seq.empty
+    } else if (leadingBroad) {
       Seq(candidates.maxBy(_.end))
-    } else if (ruleRegex.endsWith(".*") && !ruleRegex.startsWith(".*")) {
+    } else if (trailingBroad) {
       Seq(candidates.minBy(_.start))
     } else {
       Seq(candidates.head)
