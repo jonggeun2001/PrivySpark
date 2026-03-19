@@ -271,6 +271,23 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(actual == sortByKey(expected))
   }
 
+  test("does not validate earlier candidates inside a broader regex span") {
+    val df = Seq(
+      "유진 / 김치찌개",
+      "박지민 / 김민수",
+      "김철수"
+    ).toDF("candidate")
+
+    val rules = Seq(
+      PiiRule("name", ".*김[가-힣]{1,2}", validator = Some(KoreanNameValidator.ValidatorName))
+    )
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
+    val expected = Seq(MatchCount("candidate", "name", 2L))
+
+    assert(actual == sortByKey(expected))
+  }
+
   test("detects full-column rules only when every non-null value matches the regex") {
     val df = Seq(
       ("alpha@example.com", "prefix alpha@example.com", "alpha@example.com"),

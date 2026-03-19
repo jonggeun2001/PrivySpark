@@ -4,13 +4,13 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.functions.udf
 import org.apache.spark.sql.{Column, SparkSession}
 
-import java.util.regex.Matcher
 import java.util.regex.Pattern
 import scala.collection.mutable
 import scala.io.Source
 
 object KoreanNameValidator {
   private final case class NameDictionary(givenNames: Set[String], shortFullNames: Set[String])
+  private final case class CandidateSpan(candidate: String, start: Int, end: Int)
 
   val ValidatorName = "korean_name_dict"
   val RuleRegexReference = "__KOREAN_NAME_RULE_REGEX__"
@@ -106,7 +106,7 @@ object KoreanNameValidator {
 
     val ruleMatcher = rulePattern.matcher(value)
     while (ruleMatcher.find()) {
-      candidateSpans(ruleMatcher).foreach {
+      candidateSpans(ruleMatcher, rulePattern.pattern()).foreach {
         case (candidate, candidateEnd) =>
           if (isLikelyNameCandidate(candidate, value, candidateEnd, dictionary)) {
             return true
@@ -117,26 +117,33 @@ object KoreanNameValidator {
     false
   }
 
-  private def candidateSpans(ruleMatcher: Matcher): Seq[(String, Int)] = {
-    if (ruleMatcher.groupCount() > 0) {
-      val groupCandidates = (1 to ruleMatcher.groupCount()).flatMap { groupIndex =>
-        Option(ruleMatcher.group(groupIndex)).flatMap { groupText =>
-          firstCandidateInSpan(groupText, ruleMatcher.start(groupIndex))
-        }
-      }
-      val fullMatchCandidate = firstCandidateInSpan(ruleMatcher.group(), ruleMatcher.start()).toSeq
-      (groupCandidates ++ fullMatchCandidate).distinct
-    } else {
-      firstCandidateInSpan(ruleMatcher.group(), ruleMatcher.start()).toSeq
-    }
+  private def candidateSpans(ruleMatcher: java.util.regex.Matcher, ruleRegex: String): Seq[(String, Int)] = {
+    val candidates = allCandidateSpans(ruleMatcher.group(), ruleMatcher.start())
+    selectCandidateSpans(candidates, ruleRegex).map(candidate => candidate.candidate -> candidate.end)
   }
 
-  private def firstCandidateInSpan(spanText: String, spanStart: Int): Option[(String, Int)] = {
+  private def allCandidateSpans(spanText: String, spanStart: Int): Seq[CandidateSpan] = {
     val candidateMatcher = CandidatePattern.matcher(spanText)
-    if (candidateMatcher.find()) {
-      Some(candidateMatcher.group() -> (spanStart + candidateMatcher.end()))
+    val candidates = mutable.ArrayBuffer.empty[CandidateSpan]
+    while (candidateMatcher.find()) {
+      candidates += CandidateSpan(
+        candidate = candidateMatcher.group(),
+        start = spanStart + candidateMatcher.start(),
+        end = spanStart + candidateMatcher.end()
+      )
+    }
+    candidates.toSeq
+  }
+
+  private def selectCandidateSpans(candidates: Seq[CandidateSpan], ruleRegex: String): Seq[CandidateSpan] = {
+    if (candidates.length <= 1) {
+      candidates
+    } else if (ruleRegex.startsWith(".*") && !ruleRegex.endsWith(".*")) {
+      Seq(candidates.maxBy(_.end))
+    } else if (ruleRegex.endsWith(".*") && !ruleRegex.startsWith(".*")) {
+      Seq(candidates.minBy(_.start))
     } else {
-      None
+      Seq(candidates.head)
     }
   }
 
