@@ -23,13 +23,13 @@ object KoreanNameValidator {
     "변", "염", "여", "추", "도", "석", "선", "설", "마", "길", "연", "위", "표", "명", "기", "반", "라",
     "왕", "금", "옥", "육", "인", "맹", "제", "모", "탁", "국", "어", "은", "편", "봉", "피", "경", "사", "가"
   )
-  private val AllowedTrailingPrefixes = Seq(
+  private val AllowedTrailingSuffixes = Seq(
     "님", "씨", "군", "양",
     "아", "야", "요",
     "이", "가", "은", "는", "을", "를", "의", "과", "와", "도", "만", "나", "랑",
     "에", "에서", "에게", "에게서", "한테", "한테서", "께", "께서", "로", "으로", "부터", "까지", "보다", "처럼", "하고", "이랑",
-    "이며", "이고", "이라", "이라고", "라", "라고", "라는", "라서", "지만", "이지만", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
-  )
+    "이나", "이며", "이고", "이라", "이라고", "라", "라고", "라는", "라서", "지만", "이지만", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
+  ).sortBy(prefix => -prefix.length)
   private val CandidatePattern = Pattern.compile(RuleRegex)
   private val broadcastCache = mutable.Map.empty[String, Broadcast[NameDictionary]]
   private lazy val localDictionary = NameDictionary(
@@ -124,11 +124,15 @@ object KoreanNameValidator {
       if (!isHangul(next)) {
         true
       } else {
-        AllowedTrailingPrefixes.exists { prefix =>
-          trailing.startsWith(prefix) && consumeAllowedTrailingSuffixes(trailing.substring(prefix.length))
+        AllowedTrailingSuffixes.exists { suffix =>
+          trailing.startsWith(suffix) && hasTerminalBoundary(trailing.substring(suffix.length))
         }
       }
     }
+  }
+
+  private def hasTerminalBoundary(trailing: String): Boolean = {
+    trailing.isEmpty || !isHangul(trailing.charAt(0))
   }
 
   private def isHangul(ch: Char): Boolean = {
