@@ -17,6 +17,7 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(rules.nonEmpty)
     assert(rules.exists(_.piiType == "email"))
     assert(rules.find(_.piiType == "name").flatMap(_.validator).contains(KoreanNameValidator.ValidatorName))
+    assert(rules.find(_.piiType == "name").map(_.regex).contains(KoreanNameValidator.RuleRegex))
     assert(rules.forall(_.columnHints.isEmpty))
     assert(rules.forall(_.matchType == PiiRuleMatchType.Value))
   }
@@ -73,6 +74,25 @@ class RulesetLoaderSpec extends AnyFunSuite {
         RulesetLoader.load(rulesetPath.toString)
       }
       assert(error.getMessage.contains("Unsupported validator"))
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
+  test("resolves shared korean name regex reference when validator is enabled") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-shared-regex", ".yaml")
+    val yaml =
+      s"""rules:
+         |  - pii_type: name
+         |    regex: '${KoreanNameValidator.RuleRegexReference}'
+         |    validator: ${KoreanNameValidator.ValidatorName}
+         |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val rules = RulesetLoader.load(rulesetPath.toString)
+      assert(rules.head.regex == KoreanNameValidator.RuleRegex)
+      assert(rules.head.validator.contains(KoreanNameValidator.ValidatorName))
     } finally {
       Files.deleteIfExists(rulesetPath)
     }

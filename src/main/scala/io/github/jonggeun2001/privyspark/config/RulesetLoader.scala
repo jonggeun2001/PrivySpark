@@ -28,9 +28,10 @@ object RulesetLoader {
 
       val parsed = rawRules.asScala.map { item =>
         val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
-        val regex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
+        val rawRegex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
         val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
         val validator = Option(item.get("validator")).flatMap(parseValidator)
+        val regex = resolveRegex(rawRegex, validator)
         val rawMatchType = Option(item.get("match_type")).map(_.toString.trim).filter(_.nonEmpty).getOrElse(PiiRuleMatchType.Value)
         val matchType = PiiRuleMatchType.normalize(rawMatchType).getOrElse {
           throw new IllegalArgumentException(
@@ -84,6 +85,20 @@ object RulesetLoader {
         throw new IllegalArgumentException(s"Unsupported validator: $validator")
       }
       validator
+    }
+  }
+
+  private def resolveRegex(rawRegex: String, validator: Option[String]): String = {
+    rawRegex match {
+      case KoreanNameValidator.RuleRegexReference =>
+        validator match {
+          case Some(KoreanNameValidator.ValidatorName) => KoreanNameValidator.RuleRegex
+          case _ =>
+            throw new IllegalArgumentException(
+              s"${KoreanNameValidator.RuleRegexReference} can only be used with validator ${KoreanNameValidator.ValidatorName}"
+            )
+        }
+      case other => other
     }
   }
 

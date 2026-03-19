@@ -12,17 +12,18 @@ object KoreanNameValidator {
   private final case class NameDictionary(givenNames: Set[String], shortFullNames: Set[String])
 
   val ValidatorName = "korean_name_dict"
-  val RuleRegex =
-    "(남궁|선우|독고|사공|제갈|황보|김|이|박|최|정|강|조|윤|장|임|한|오|서|신|권|황|안|송|류|전|홍|고|문|양|손|배|백|허|유|남|심|노|하|곽|성|차|주|우|구|민|진|나|지|엄|채|원|천|방|공|현|함|변|염|여|추|도|석|선|설|마|길|연|위|표|명|기|반|라|왕|금|옥|육|인|맹|제|모|탁|국|어|은|편|봉|피|경|사|가)[가-힣]{1,2}"
+  val RuleRegexReference = "__KOREAN_NAME_RULE_REGEX__"
 
   private val CompoundSurnames = Seq("남궁", "선우", "독고", "사공", "제갈", "황보")
   private val SingleSurnames = Seq(
     "김", "이", "박", "최", "정", "강", "조", "윤", "장", "임", "한", "오", "서", "신", "권", "황", "안",
-    "송", "류", "전", "홍", "고", "문", "양", "손", "배", "백", "허", "유", "남", "심", "노", "하", "곽",
+    "송", "류", "전", "홍", "고", "문", "양", "손", "소", "배", "백", "허", "유", "남", "심", "노", "하", "곽",
     "성", "차", "주", "우", "구", "민", "진", "나", "지", "엄", "채", "원", "천", "방", "공", "현", "함",
     "변", "염", "여", "추", "도", "석", "선", "설", "마", "길", "연", "위", "표", "명", "기", "반", "라",
     "왕", "금", "옥", "육", "인", "맹", "제", "모", "탁", "국", "어", "은", "편", "봉", "피", "경", "사", "가"
   )
+  private val SupportedSurnames = (CompoundSurnames ++ SingleSurnames).sortBy(prefix => -prefix.length)
+  val RuleRegex = s"(${SupportedSurnames.mkString("|")})[가-힣]{1,2}"
   private val AllowedTrailingSuffixes = Seq(
     "님", "씨", "군", "양",
     "아", "야", "요",
