@@ -4,6 +4,7 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.functions.udf
 import org.apache.spark.sql.{Column, SparkSession}
 
+import java.util.regex.Matcher
 import java.util.regex.Pattern
 import scala.collection.mutable
 import scala.io.Source
@@ -35,7 +36,7 @@ object KoreanNameValidator {
   private val SecondarySuffixes = Seq("은", "는", "도", "만")
   private val PoliteEndingSuffixes = Seq("예요", "이에요", "입니다", "인가요", "죠", "이죠", "네요", "이네요")
   private val HonorificContinuationSuffixes =
-    Seq("이", "가", "을", "를", "의", "께", "께서") ++ SecondarySuffixes ++ PoliteEndingSuffixes
+    Seq("이", "가", "을", "를", "의", "께", "께서", "과", "와", "랑", "이랑", "하고") ++ SecondarySuffixes ++ PoliteEndingSuffixes
   private val ContinuationSuffixes: Map[String, Seq[String]] = Map(
     "님" -> HonorificContinuationSuffixes,
     "씨" -> HonorificContinuationSuffixes,
@@ -100,18 +101,38 @@ object KoreanNameValidator {
 
     val ruleMatcher = rulePattern.matcher(value)
     while (ruleMatcher.find()) {
-      val matchedText = ruleMatcher.group()
-      val candidateMatcher = CandidatePattern.matcher(matchedText)
-      while (candidateMatcher.find()) {
-        val candidate = candidateMatcher.group()
-        val candidateEnd = ruleMatcher.start() + candidateMatcher.end()
-        if (isLikelyNameCandidate(candidate, value, candidateEnd, dictionary)) {
-          return true
-        }
+      candidateSpans(ruleMatcher).foreach {
+        case (candidate, candidateEnd) =>
+          if (isLikelyNameCandidate(candidate, value, candidateEnd, dictionary)) {
+            return true
+          }
       }
     }
 
     false
+  }
+
+  private def candidateSpans(ruleMatcher: Matcher): Seq[(String, Int)] = {
+    if (ruleMatcher.groupCount() > 0) {
+      val groupCandidates = (1 to ruleMatcher.groupCount()).flatMap { groupIndex =>
+        Option(ruleMatcher.group(groupIndex)).flatMap { groupText =>
+          firstCandidateInSpan(groupText, ruleMatcher.start(groupIndex))
+        }
+      }
+      val fullMatchCandidate = firstCandidateInSpan(ruleMatcher.group(), ruleMatcher.start()).toSeq
+      (groupCandidates ++ fullMatchCandidate).distinct
+    } else {
+      firstCandidateInSpan(ruleMatcher.group(), ruleMatcher.start()).toSeq
+    }
+  }
+
+  private def firstCandidateInSpan(spanText: String, spanStart: Int): Option[(String, Int)] = {
+    val candidateMatcher = CandidatePattern.matcher(spanText)
+    if (candidateMatcher.find()) {
+      Some(candidateMatcher.group() -> (spanStart + candidateMatcher.end()))
+    } else {
+      None
+    }
   }
 
   private def isLikelyNameCandidate(
