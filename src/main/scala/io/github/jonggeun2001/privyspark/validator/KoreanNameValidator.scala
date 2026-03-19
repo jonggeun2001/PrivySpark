@@ -28,7 +28,7 @@ object KoreanNameValidator {
     "아", "야", "요",
     "이", "가", "은", "는", "을", "를", "의", "과", "와", "도", "만", "나", "랑",
     "에", "에서", "에게", "에게서", "한테", "한테서", "께", "께서", "로", "으로", "부터", "까지", "보다", "처럼", "하고", "이랑",
-    "이나", "이며", "이고", "이라", "이라고", "라", "라고", "라는", "라서", "지만", "이지만", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
+    "이나", "이며", "이고", "이라", "이라고", "인가요", "라", "라고", "라는", "라서", "지만", "이지만", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
   ).sortBy(prefix => -prefix.length)
   private val SecondarySuffixes = Seq("은", "는", "도", "만")
   private val ContinuationSuffixes: Map[String, Seq[String]] = Map(
@@ -49,8 +49,8 @@ object KoreanNameValidator {
     "까지" -> SecondarySuffixes,
     "보다" -> SecondarySuffixes,
     "처럼" -> SecondarySuffixes,
-    "하고" -> SecondarySuffixes,
-    "이랑" -> SecondarySuffixes,
+    "하고" -> (Seq("요") ++ SecondarySuffixes),
+    "이랑" -> (Seq("요") ++ SecondarySuffixes),
     "라고" -> (Seq("요") ++ SecondarySuffixes),
     "이라고" -> (Seq("요") ++ SecondarySuffixes),
     "은" -> Seq("요"),
