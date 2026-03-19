@@ -50,7 +50,7 @@ object KoreanNameValidator {
     "양" -> HonorificContinuationSuffixes,
     "과" -> SecondarySuffixes,
     "와" -> SecondarySuffixes,
-    "랑" -> SecondarySuffixes,
+    "랑" -> (Seq("요") ++ SecondarySuffixes),
     "에" -> SecondarySuffixes,
     "에서" -> SecondarySuffixes,
     "에게" -> SecondarySuffixes,
@@ -152,19 +152,14 @@ object KoreanNameValidator {
       Seq.empty
     } else {
       val matchCandidateSet = matchCandidates.toSet
-      val candidateBearingGroups = (1 to ruleMatcher.groupCount()).map { groupIndex =>
+      val explicitCandidates = (1 to ruleMatcher.groupCount()).flatMap { groupIndex =>
         Option(ruleMatcher.group(groupIndex)).toSeq.flatMap { groupText =>
           allCandidateSpans(groupText, ruleMatcher.start(groupIndex)).filter(matchCandidateSet.contains)
         }
-      }.filter(_.nonEmpty)
+      }.distinct
 
-      if (candidateBearingGroups.length == 1) {
-        val candidates = candidateBearingGroups.head.distinct
-        if (candidates.length == 1) {
-          candidates
-        } else {
-          Seq.empty
-        }
+      if (explicitCandidates.length == 1) {
+        explicitCandidates
       } else {
         Seq.empty
       }

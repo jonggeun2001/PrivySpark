@@ -152,6 +152,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "김민수씨는",
       "김민수씨예요",
       "김민수씨랑",
+      "김민수씨랑요",
       "김민수씨하고",
       "김민수씨라고 합니다",
       "김민수씨라는 분",
@@ -161,6 +162,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "김민수씨에게",
       "김민수죠",
       "김민수랑",
+      "김민수랑요",
       "김민수인가요",
       "김민수라고 합니다",
       "김민수라고요",
@@ -217,7 +219,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 54L))
+    val expected = Seq(MatchCount("candidate", "name", 56L))
 
     assert(actual == sortByKey(expected))
   }
@@ -348,6 +350,22 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     val rules = Seq(
       PiiRule("name", "(.*김[가-힣]{1,2}.*)", validator = Some(KoreanNameValidator.ValidatorName))
+    )
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
+    val expected = Seq(MatchCount("candidate", "name", 1L))
+
+    assert(actual == sortByKey(expected))
+  }
+
+  test("allows nested capture groups that point to the same candidate span") {
+    val df = Seq(
+      "유진 / 김민수",
+      "유진 / 김치찌개"
+    ).toDF("candidate")
+
+    val rules = Seq(
+      PiiRule("name", "(?:유진 / )?((김[가-힣]{1,2}))", validator = Some(KoreanNameValidator.ValidatorName))
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
