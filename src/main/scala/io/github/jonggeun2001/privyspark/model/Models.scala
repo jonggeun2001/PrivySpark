@@ -1,10 +1,22 @@
 package io.github.jonggeun2001.privyspark.model
 
+object PiiRuleMatchType {
+  val Value = "value"
+  val FullColumn = "full_column"
+
+  val Supported: Set[String] = Set(Value, FullColumn)
+
+  def normalize(rawValue: String): Option[String] = {
+    Option(rawValue).map(_.trim.toLowerCase).filter(Supported.contains)
+  }
+}
+
 final case class PiiRule(
   piiType: String,
   regex: String,
   columnHints: Seq[String] = Seq.empty,
-  validator: Option[String] = None
+  validator: Option[String] = None,
+  matchType: String = PiiRuleMatchType.Value
 )
 
 final case class ScanResult(

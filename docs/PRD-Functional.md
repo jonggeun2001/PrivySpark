@@ -26,8 +26,9 @@
 - MVP는 regex 기반 탐지를 사용하며, 일부 규칙은 regex 매칭 후 경량 validator UDF를 추가 적용할 수 있다.
 - 규칙셋은 외부 파일에서 로드.
 - 기본 규칙셋 `config/rules/default.yaml` 제공.
-- 규칙은 커스텀 ruleset에서 선택적으로 `column_hints`, `validator`를 가질 수 있다. `column_hints`를 지정하면 컬럼명에 힌트가 포함된 컬럼에만 적용하고, 비어 있으면 모든 컬럼을 검사한다.
+- 규칙은 커스텀 ruleset에서 선택적으로 `column_hints`, `validator`, `match_type`을 가질 수 있다. `column_hints`를 지정하면 컬럼명에 힌트가 포함된 컬럼에만 적용하고, 비어 있으면 모든 컬럼을 검사한다.
 - `validator`를 지정하면 regex 매칭 후 추가 검증을 수행한다. 현재 지원 값은 `korean_name_dict`이며, 기본 `name` 규칙은 성씨 prefix regex 뒤에 한국인 이름 사전 검증을 적용해 `"김치찌개"`, `"이사회"`, `"전화"` 같은 일반 단어 오탐을 줄인다.
+- `match_type` 기본값은 `value`이며 regex에 매칭되는 값 개수를 집계한다. `full_column`은 비어 있지 않은 값 전체가 regex를 만족하는 컬럼/파일에 대해서만 결과를 생성한다.
 - 탐지 타입은 한국 포맷 중심(이름, 전화번호, 이메일, 주민번호, 주소, 계좌번호, 카드번호, 여권번호, IP).
 
 ### 2.4 샘플링

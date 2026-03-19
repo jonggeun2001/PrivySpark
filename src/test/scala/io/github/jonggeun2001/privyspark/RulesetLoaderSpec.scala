@@ -1,6 +1,7 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
+import io.github.jonggeun2001.privyspark.model.PiiRuleMatchType
 import io.github.jonggeun2001.privyspark.validator.KoreanNameValidator
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
@@ -17,33 +18,41 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(rules.exists(_.piiType == "email"))
     assert(rules.find(_.piiType == "name").flatMap(_.validator).contains(KoreanNameValidator.ValidatorName))
     assert(rules.forall(_.columnHints.isEmpty))
+    assert(rules.forall(_.matchType == PiiRuleMatchType.Value))
   }
 
-  test("loads optional column hints and validator from ruleset file and ignores blank entries") {
+  test("loads optional column hints, validator and match type from ruleset file and ignores blank entries") {
     val rulesetPath = Files.createTempFile("privyspark-ruleset", ".yaml")
     val yaml =
       """rules:
+        |  - pii_type: email
+        |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        |    match_type: full_column
+        |    column_hints:
+        |      - email
+        |      -
+        |      - "   "
+        |      - mail
         |  - pii_type: name
         |    regex: '(김|이|박)[가-힣]{1,2}'
+        |    validator: korean_name_dict
         |    column_hints:
         |      - name
         |      -
         |      - "   "
         |      - customer
-        |    validator: korean_name_dict
-        |  - pii_type: phone_number
-        |    regex: '01[016789]-?[0-9]{3,4}-?[0-9]{4}'
-        |    validator: "   "
         |""".stripMargin
 
     Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
     try {
       val rules = RulesetLoader.load(rulesetPath.toString)
-      assert(rules.map(_.piiType) == Seq("name", "phone_number"))
-      assert(rules.head.columnHints == Seq("name", "customer"))
-      assert(rules.head.validator.contains(KoreanNameValidator.ValidatorName))
-      assert(rules(1).columnHints.isEmpty)
-      assert(rules(1).validator.isEmpty)
+      assert(rules.map(_.piiType) == Seq("email", "name"))
+      assert(rules.head.columnHints == Seq("email", "mail"))
+      assert(rules.head.matchType == PiiRuleMatchType.FullColumn)
+      assert(rules.head.validator.isEmpty)
+      assert(rules(1).columnHints == Seq("name", "customer"))
+      assert(rules(1).validator.contains(KoreanNameValidator.ValidatorName))
+      assert(rules(1).matchType == PiiRuleMatchType.Value)
     } finally {
       Files.deleteIfExists(rulesetPath)
     }
@@ -60,9 +69,30 @@ class RulesetLoaderSpec extends AnyFunSuite {
 
     Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
     try {
-      assertThrows[IllegalArgumentException] {
+      val error = intercept[IllegalArgumentException] {
         RulesetLoader.load(rulesetPath.toString)
       }
+      assert(error.getMessage.contains("Unsupported validator"))
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
+  test("throws on unsupported match type") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-invalid", ".yaml")
+    val yaml =
+      """rules:
+        |  - pii_type: email
+        |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        |    match_type: unknown_mode
+        |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val error = intercept[IllegalArgumentException] {
+        RulesetLoader.load(rulesetPath.toString)
+      }
+      assert(error.getMessage.contains("Unsupported match_type"))
     } finally {
       Files.deleteIfExists(rulesetPath)
     }
