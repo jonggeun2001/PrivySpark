@@ -33,7 +33,12 @@ object KoreanNameValidator {
     "라", "라고", "라는", "라서", "지만", "이지만", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
   ).sortBy(prefix => -prefix.length)
   private val SecondarySuffixes = Seq("은", "는", "도", "만")
+  private val PoliteEndingSuffixes = Seq("예요", "이에요", "입니다", "인가요", "죠", "이죠", "네요", "이네요")
   private val ContinuationSuffixes: Map[String, Seq[String]] = Map(
+    "님" -> (SecondarySuffixes ++ PoliteEndingSuffixes),
+    "씨" -> (SecondarySuffixes ++ PoliteEndingSuffixes),
+    "군" -> (SecondarySuffixes ++ PoliteEndingSuffixes),
+    "양" -> (SecondarySuffixes ++ PoliteEndingSuffixes),
     "과" -> SecondarySuffixes,
     "와" -> SecondarySuffixes,
     "랑" -> SecondarySuffixes,
