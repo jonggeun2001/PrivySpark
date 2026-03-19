@@ -159,7 +159,12 @@ object KoreanNameValidator {
       }.filter(_.nonEmpty)
 
       if (candidateBearingGroups.length == 1) {
-        candidateBearingGroups.head.distinct
+        val candidates = candidateBearingGroups.head.distinct
+        if (candidates.length == 1) {
+          candidates
+        } else {
+          Seq.empty
+        }
       } else {
         Seq.empty
       }
