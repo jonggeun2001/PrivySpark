@@ -38,6 +38,7 @@ object KoreanNameValidator {
   private val HonorificContinuationSuffixes =
     Seq(
       "이", "가", "을", "를", "의", "께", "께서", "과", "와", "랑", "이랑", "하고",
+      "에게", "에게서", "한테", "한테서", "로", "으로",
       "라고", "이라고", "라는", "라서", "지만", "이지만", "인데", "인데요", "이며", "이고", "이라"
     ) ++
       SecondarySuffixes ++
@@ -106,7 +107,7 @@ object KoreanNameValidator {
 
     val ruleMatcher = rulePattern.matcher(value)
     while (ruleMatcher.find()) {
-      candidateSpans(ruleMatcher, rulePattern.pattern()).foreach {
+      candidateSpans(ruleMatcher).foreach {
         case (candidate, candidateEnd) =>
           if (isLikelyNameCandidate(candidate, value, candidateEnd, dictionary)) {
             return true
@@ -117,9 +118,17 @@ object KoreanNameValidator {
     false
   }
 
-  private def candidateSpans(ruleMatcher: java.util.regex.Matcher, ruleRegex: String): Seq[(String, Int)] = {
+  private def candidateSpans(ruleMatcher: java.util.regex.Matcher): Seq[(String, Int)] = {
     val candidates = allCandidateSpans(ruleMatcher.group(), ruleMatcher.start())
-    selectCandidateSpans(candidates, ruleRegex).map(candidate => candidate.candidate -> candidate.end)
+    val explicitGroupCandidates = candidateSpansFromGroups(ruleMatcher, candidates)
+    val selectedCandidates =
+      if (explicitGroupCandidates.nonEmpty) {
+        explicitGroupCandidates
+      } else {
+        selectCandidateSpans(candidates)
+      }
+
+    selectedCandidates.map(candidate => candidate.candidate -> candidate.end)
   }
 
   private def allCandidateSpans(spanText: String, spanStart: Int): Seq[CandidateSpan] = {
@@ -135,20 +144,27 @@ object KoreanNameValidator {
     candidates.toSeq
   }
 
-  private def selectCandidateSpans(candidates: Seq[CandidateSpan], ruleRegex: String): Seq[CandidateSpan] = {
-    val leadingBroad = ruleRegex.startsWith(".*")
-    val trailingBroad = ruleRegex.endsWith(".*")
-
-    if (candidates.length <= 1) {
-      candidates
-    } else if (leadingBroad && trailingBroad) {
+  private def candidateSpansFromGroups(
+    ruleMatcher: java.util.regex.Matcher,
+    matchCandidates: Seq[CandidateSpan]
+  ): Seq[CandidateSpan] = {
+    if (ruleMatcher.groupCount() == 0) {
       Seq.empty
-    } else if (leadingBroad) {
-      Seq(candidates.maxBy(_.end))
-    } else if (trailingBroad) {
-      Seq(candidates.minBy(_.start))
     } else {
-      Seq(candidates.head)
+      val matchCandidateSet = matchCandidates.toSet
+      (1 to ruleMatcher.groupCount()).flatMap { groupIndex =>
+        Option(ruleMatcher.group(groupIndex)).toSeq.flatMap { groupText =>
+          allCandidateSpans(groupText, ruleMatcher.start(groupIndex)).filter(matchCandidateSet.contains)
+        }
+      }.distinct
+    }
+  }
+
+  private def selectCandidateSpans(candidates: Seq[CandidateSpan]): Seq[CandidateSpan] = {
+    if (candidates.length == 1) {
+      candidates
+    } else {
+      Seq.empty
     }
   }
 

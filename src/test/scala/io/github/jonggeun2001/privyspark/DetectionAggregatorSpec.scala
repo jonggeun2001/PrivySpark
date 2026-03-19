@@ -158,6 +158,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "김민수씨라서",
       "김민수씨인데",
       "김민수씨이고",
+      "김민수씨에게",
       "김민수죠",
       "김민수랑",
       "김민수인가요",
@@ -175,6 +176,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "박지민님인데요",
       "박지민님이며",
       "박지민님이라",
+      "박지민님한테서",
       "박지민님과",
       "박지민님께서",
       "박지민님도",
@@ -183,6 +185,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "남궁민수에게서",
       "남궁민수에게는",
       "남궁민수씨와",
+      "남궁민수씨로",
       "남궁민수씨입니다",
       "정민이",
       "이준은",
@@ -214,7 +217,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 51L))
+    val expected = Seq(MatchCount("candidate", "name", 54L))
 
     assert(actual == sortByKey(expected))
   }
@@ -274,7 +277,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
   test("does not validate earlier candidates inside a broader regex span") {
     val df = Seq(
       "유진 / 김치찌개",
-      "박지민 / 김민수",
+      "123 / 김민수",
       "김철수"
     ).toDF("candidate")
 
@@ -301,6 +304,22 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
     val expected = Seq(MatchCount("candidate", "name", 2L))
+
+    assert(actual == sortByKey(expected))
+  }
+
+  test("rejects ambiguous candidates inside optional-prefix regex spans without explicit groups") {
+    val df = Seq(
+      "유진 / 김치찌개",
+      "김철수"
+    ).toDF("candidate")
+
+    val rules = Seq(
+      PiiRule("name", "(?:유진 / )?김[가-힣]{1,2}", validator = Some(KoreanNameValidator.ValidatorName))
+    )
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
+    val expected = Seq(MatchCount("candidate", "name", 1L))
 
     assert(actual == sortByKey(expected))
   }
