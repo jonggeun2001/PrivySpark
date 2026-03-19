@@ -38,7 +38,8 @@
 ### 3.3 탐지 집계 전략
 - 기본: 배치 집계(`agg`) 기반 정규식 매칭 카운트 계산
 - 규칙이 `column_hints`를 가지면 컬럼명 힌트와 매칭되는 컬럼에만 metric을 생성하고, 힌트가 없으면 모든 컬럼에 적용한다.
-- 규칙의 `match_type`이 `value`면 행 단위 regex 일치 개수를 집계하고, `full_column`이면 비어 있지 않은 값 전체가 regex를 만족하는 컬럼/파일에 대해서만 결과를 생성한다.
+- 규칙이 `validator`를 가지면 regex predicate 뒤에 validator predicate를 추가한다. 현재 `korean_name_dict`는 드라이버에서 이름 사전을 로드해 executor에 broadcast하고, 2음절 given name 사전과 short-name whitelist로 셀 안의 이름 후보 substring만 다시 검증한다.
+- 규칙의 `match_type`이 `value`면 행 단위 regex 일치 개수를 집계하고, `full_column`이면 비어 있지 않은 값 전체가 regex와 validator를 함께 만족하는 컬럼/파일에 대해서만 결과를 생성한다.
 - 보호 장치:
   - 파일 교체/삭제로 인한 읽기 실패 시 경로 메타데이터 refresh 후 제한 횟수 내 재시도
   - 표현식 임계치(기본 `50,000`) 초과 시 소배치 집계 기반 fallback 경로로 전환
