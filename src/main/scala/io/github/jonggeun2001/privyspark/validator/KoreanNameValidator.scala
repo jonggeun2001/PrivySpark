@@ -26,7 +26,7 @@ object KoreanNameValidator {
   private val AllowedTrailingPrefixes = Seq(
     "님", "씨", "군", "양",
     "아", "야", "요",
-    "이", "가", "은", "는", "을", "를", "의", "과", "와", "도", "만", "랑",
+    "이", "가", "은", "는", "을", "를", "의", "과", "와", "도", "만", "나", "랑",
     "에", "에서", "에게", "에게서", "한테", "한테서", "께", "께서", "로", "으로", "부터", "까지", "보다", "처럼", "하고", "이랑",
     "이며", "이고", "이라", "이라고", "라", "라고", "라는", "라서", "지만", "이지만", "이는", "이가", "이를", "인데", "인데요", "입니다", "이군요"
   )
@@ -55,19 +55,18 @@ object KoreanNameValidator {
       return false
     }
 
-    val normalized = value.trim
-    if (normalized.isEmpty) {
+    if (value.trim.isEmpty) {
       return false
     }
 
-    val ruleMatcher = rulePattern.matcher(normalized)
+    val ruleMatcher = rulePattern.matcher(value)
     while (ruleMatcher.find()) {
       val matchedText = ruleMatcher.group()
       val candidateMatcher = CandidatePattern.matcher(matchedText)
       while (candidateMatcher.find()) {
         val candidate = candidateMatcher.group()
         val candidateEnd = ruleMatcher.start() + candidateMatcher.end()
-        if (isLikelyNameCandidate(candidate, normalized, candidateEnd, dictionary)) {
+        if (isLikelyNameCandidate(candidate, value, candidateEnd, dictionary)) {
           return true
         }
       }

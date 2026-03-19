@@ -142,11 +142,13 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "남궁민수",
       "담당자 김민수",
       "김민수의 이메일",
+      "김민수나",
       "김민수하고",
       "김민수랑",
       "김민수라고 합니다",
       "김민수라서",
       "김민수지만",
+      "박지민이나",
       "박지민이랑",
       "박지민이지만",
       "남궁민수에게서",
@@ -177,7 +179,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 17L))
+    val expected = Seq(MatchCount("candidate", "name", 19L))
 
     assert(actual == sortByKey(expected))
   }
@@ -202,12 +204,13 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
   test("supports validator-backed rules whose regex consumes surrounding boundaries") {
     val df = Seq(
       " 김민수 ",
+      "김민수",
       " 김치찌개 ",
       "박지민"
     ).toDF("candidate")
 
     val rules = Seq(
-      PiiRule("name", "(?:^|\\s)(김[가-힣]{1,2})(?:\\s|$)", validator = Some(KoreanNameValidator.ValidatorName))
+      PiiRule("name", "\\s김[가-힣]{1,2}\\s", validator = Some(KoreanNameValidator.ValidatorName))
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
