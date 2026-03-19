@@ -36,7 +36,9 @@ object KoreanNameValidator {
   private val SecondarySuffixes = Seq("은", "는", "도", "만")
   private val PoliteEndingSuffixes = Seq("예요", "이에요", "입니다", "인가요", "죠", "이죠", "네요", "이네요")
   private val HonorificContinuationSuffixes =
-    Seq("이", "가", "을", "를", "의", "께", "께서", "과", "와", "랑", "이랑", "하고") ++ SecondarySuffixes ++ PoliteEndingSuffixes
+    Seq("이", "가", "을", "를", "의", "께", "께서", "과", "와", "랑", "이랑", "하고", "라고", "이라고", "라는", "라서", "지만", "이지만") ++
+      SecondarySuffixes ++
+      PoliteEndingSuffixes
   private val ContinuationSuffixes: Map[String, Seq[String]] = Map(
     "님" -> HonorificContinuationSuffixes,
     "씨" -> HonorificContinuationSuffixes,
