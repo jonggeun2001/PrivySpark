@@ -9,7 +9,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - 디렉토리 구조 선스캔 후 `(디렉토리, 포맷)` 그룹 단위로 배치 처리
 - 그룹 내부는 대표 파일 1개로 스키마를 우선 샘플링하고, sampled group은 파일 식별자를 유지한 채 배치 읽기를 시도한다. 다만 CSV sampled group은 헤더 유무 드리프트를 막기 위해 batch scan 전에 exact split으로 재확인한다. sampled group 배치 읽기 실패 시 전체 파일 exact split 후 재시도한다.
 - `file_identifier`는 입력 경로 기준 상대경로를 사용하고, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 충돌 방지를 위해 `.`로 표기한다.
-- 외부 규칙 파일 기반 정규식 탐지 (선택적 `column_hints`/`validator` 지원 + 배치 집계 + 메트릭 50,000 초과 시 소배치 폴백 + 집계 예외 시 안전 legacy 폴백)
+- 외부 규칙 파일 기반 정규식 탐지 (선택적 `column_hints` 지원 + 배치 집계 + 메트릭 50,000 초과 시 소배치 폴백 + 집계 예외 시 안전 legacy 폴백)
 - `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`를 지정하거나, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 지정하면 드라이버 debug 로그에 스캔 계획, 스키마 분할, 그룹/파일 스캔, 리포트 저장 진행사항을 기록
 - 그룹/집계 폴백 발생 시 원인과 실행 경로를 드라이버 로그에 기록
 - 지원 확장자: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc` (그 외 포맷은 오류 리포트로 분류)
@@ -96,9 +96,6 @@ git push origin 0.1.3
 `config/rules/default.yaml` 예시:
 ```yaml
 rules:
-  - pii_type: name
-    regex: '__KOREAN_NAME_RULE_REGEX__'
-    validator: korean_name_dict
   - pii_type: email
     regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}'
     match_type: full_column
@@ -108,9 +105,4 @@ rules:
 ```
 
 `column_hints`는 커스텀 ruleset에서 선택적으로 사용하는 필드입니다. 지정하면 컬럼명에 해당 힌트가 포함된 컬럼에만 규칙을 적용하고, 생략하면 기존처럼 모든 컬럼을 검사합니다. 기본 ruleset은 기존 호환성을 위해 모든 컬럼을 검사합니다.
-
-`validator`도 선택 필드이며 현재는 `korean_name_dict`만 지원합니다. 이 validator는 정규식으로 먼저 성씨 prefix 기반 후보를 좁힌 뒤, 셀 안의 이름 후보 substring을 한국인 이름 사전으로 다시 검증해 `"김치찌개"`, `"이사회"`, `"전화"` 같은 오탐을 줄입니다. 기본 ruleset의 `name` 규칙이 이 validator를 사용합니다.
-
-기본 ruleset의 `__KOREAN_NAME_RULE_REGEX__`는 loader가 `KoreanNameValidator.RuleRegex`로 치환하는 내부 참조값입니다. 이렇게 기본 ruleset과 validator가 같은 성씨 목록을 공유해 드리프트를 줄입니다.
-
 `match_type`도 선택 필드이며 기본값은 `value`입니다. `value`는 기존처럼 regex에 매칭되는 값 개수를 집계하고, `full_column`은 비어 있지 않은 값 전체가 regex를 만족하는 컬럼/파일에 대해서만 결과를 생성합니다.
