@@ -434,7 +434,7 @@ object DetectionAggregator {
     metrics.foreach { metric =>
       val metricExpressionCount = metric.expressionCount
       if (currentBatch.nonEmpty && currentExpressionCount + metricExpressionCount > maxExpressionsPerAgg) {
-        batches += currentBatch.toVector
+        batches += currentBatch.toSeq
         currentBatch.clear()
         currentExpressionCount = 0
       }
@@ -444,7 +444,7 @@ object DetectionAggregator {
     }
 
     if (currentBatch.nonEmpty) {
-      batches += currentBatch.toVector
+      batches += currentBatch.toSeq
     }
 
     batches.toSeq
