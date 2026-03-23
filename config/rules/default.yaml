@@ -1,7 +1,6 @@
 rules:
   - pii_type: name
-    regex: '__KOREAN_NAME_RULE_REGEX__'
-    validator: 'korean_name_dict'
+    regex: '[가-힣]{2,4}'
   - pii_type: phone_number
     regex: '01[016789]-?[0-9]{3,4}-?[0-9]{4}'
   - pii_type: email

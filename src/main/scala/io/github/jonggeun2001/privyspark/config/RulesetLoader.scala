@@ -1,7 +1,6 @@
 package io.github.jonggeun2001.privyspark.config
 
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
-import io.github.jonggeun2001.privyspark.validator.KoreanNameValidator
 import org.yaml.snakeyaml.Yaml
 
 import java.io.FileInputStream
@@ -11,6 +10,7 @@ import scala.collection.JavaConverters._
 object RulesetLoader {
   private val DefaultRulesetPath = "config/rules/default.yaml"
   private val YarnDistributedDefaultRuleset = "default-rules.yaml"
+  private val RemovedRegexReference = "__KOREAN_NAME_RULE_REGEX__"
 
   def load(ruleset: String): Seq[PiiRule] = {
     val rulesetPath = resolvePath(ruleset)
@@ -28,10 +28,14 @@ object RulesetLoader {
 
       val parsed = rawRules.asScala.map { item =>
         val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
-        val rawRegex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
+        val regex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
         val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
-        val validator = Option(item.get("validator")).flatMap(parseValidator)
-        val regex = resolveRegex(rawRegex, validator)
+        if (item.containsKey("validator")) {
+          throw new IllegalArgumentException("validator is no longer supported")
+        }
+        if (regex.contains(RemovedRegexReference)) {
+          throw new IllegalArgumentException(s"$RemovedRegexReference is no longer supported")
+        }
         val rawMatchType = Option(item.get("match_type")).map(_.toString.trim).filter(_.nonEmpty).getOrElse(PiiRuleMatchType.Value)
         val matchType = PiiRuleMatchType.normalize(rawMatchType).getOrElse {
           throw new IllegalArgumentException(
@@ -43,13 +47,7 @@ object RulesetLoader {
           throw new IllegalArgumentException("Each rule must include pii_type and regex")
         }
 
-        PiiRule(
-          piiType = piiType,
-          regex = regex,
-          columnHints = columnHints,
-          validator = validator,
-          matchType = matchType
-        )
+        PiiRule(piiType, regex, columnHints, matchType)
       }.toSeq
 
       if (parsed.isEmpty) {
@@ -76,29 +74,6 @@ object RulesetLoader {
         values.asScala.flatMap(value => Option(value).map(_.toString.trim)).filter(_.nonEmpty).toSeq
       case value =>
         Option(value).map(_.toString.trim).filter(_.nonEmpty).toSeq
-    }
-  }
-
-  private def parseValidator(rawValue: Object): Option[String] = {
-    Option(rawValue).map(_.toString.trim).filter(_.nonEmpty).map { validator =>
-      if (validator != KoreanNameValidator.ValidatorName) {
-        throw new IllegalArgumentException(s"Unsupported validator: $validator")
-      }
-      validator
-    }
-  }
-
-  private def resolveRegex(rawRegex: String, validator: Option[String]): String = {
-    rawRegex match {
-      case KoreanNameValidator.RuleRegexReference =>
-        validator match {
-          case Some(KoreanNameValidator.ValidatorName) => KoreanNameValidator.RuleRegex
-          case _ =>
-            throw new IllegalArgumentException(
-              s"${KoreanNameValidator.RuleRegexReference} can only be used with validator ${KoreanNameValidator.ValidatorName}"
-            )
-        }
-      case other => other
     }
   }
 

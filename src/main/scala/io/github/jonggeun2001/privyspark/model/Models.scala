@@ -15,7 +15,6 @@ final case class PiiRule(
   piiType: String,
   regex: String,
   columnHints: Seq[String] = Seq.empty,
-  validator: Option[String] = None,
   matchType: String = PiiRuleMatchType.Value
 )
 

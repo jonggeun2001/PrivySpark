@@ -2,7 +2,6 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.DetectionAggregator.{AggregationConfig, FileMatchCount, MatchCount}
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
-import io.github.jonggeun2001.privyspark.validator.KoreanNameValidator
 import org.apache.spark.sql.functions.{col, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
@@ -131,254 +130,6 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       MatchCount("contact_phone", "phone", 2L),
       MatchCount("customer_email", "email", 2L)
     )
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("applies validator-backed name rules without reintroducing common noun false positives") {
-    val df = Seq(
-      "김철수",
-      "박지민",
-      "소유진",
-      "남궁민수",
-      "담당자 김민수",
-      "김민수의 이메일",
-      "김민수나",
-      "김민수하고",
-      "김민수하고요",
-      "김민수예요",
-      "김민수씨가",
-      "김민수씨를",
-      "김민수씨는",
-      "김민수씨예요",
-      "김민수씨랑",
-      "김민수씨랑요",
-      "김민수씨하고",
-      "김민수씨라고 합니다",
-      "김민수씨라는 분",
-      "김민수씨라서",
-      "김민수씨인데",
-      "김민수씨이고",
-      "김민수씨이고요",
-      "김민수씨나",
-      "김민수씨에게",
-      "김민수죠",
-      "김민수랑",
-      "김민수랑요",
-      "김민수인가요",
-      "김민수라고 합니다",
-      "김민수라고요",
-      "김민수라서",
-      "김민수지만",
-      "박지민이나",
-      "박지민이라는 분",
-      "박지민이라서",
-      "박지민이에요",
-      "박지민이랑",
-      "박지민이랑은",
-      "박지민이랑요",
-      "박지민님이라고",
-      "박지민님이지만",
-      "박지민님인데요",
-      "박지민님이며",
-      "박지민님이라",
-      "박지민님이라는 분",
-      "박지민님이라서",
-      "박지민님한테서",
-      "박지민님처럼",
-      "박지민님과",
-      "박지민님께서",
-      "박지민님도",
-      "박지민이지만",
-      "박지민이네요",
-      "박지민이고요",
-      "남궁민수에게서",
-      "남궁민수에게는",
-      "남궁민수씨와",
-      "남궁민수씨부터",
-      "남궁민수씨로",
-      "남궁민수씨입니다",
-      "정민이",
-      "이준은",
-      "남궁민은",
-      "전화영",
-      "김치찌개",
-      "이사회",
-      "관리자",
-      "전화",
-      "전화영업",
-      "전화영업 중입니다",
-      "유리",
-      "유진은행",
-      "유진의자",
-      "가구",
-      "인형",
-      "김민수나라",
-      "박지민가요",
-      "김민수도로",
-      "김민수가구",
-      "이별",
-      "이별은 아쉽다",
-      "연락은 전화로 주세요",
-      "유리문 앞입니다"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", KoreanNameValidator.RuleRegex, validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 65L))
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("applies validator only to substrings matched by the rule regex") {
-    val df = Seq(
-      "김치찌개 / 박지민",
-      "김철수",
-      "김민수"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", "김[가-힣]{1,2}", validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 2L))
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("supports validator-backed rules whose regex consumes surrounding boundaries") {
-    val df = Seq(
-      " 김민수 ",
-      "김민수",
-      " 김치찌개 ",
-      "박지민"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", "\\s김[가-힣]{1,2}\\s", validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 1L))
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("does not validate later candidates inside a broader regex span") {
-    val df = Seq(
-      "김치찌개 / 박지민",
-      "김철수",
-      "김민수"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", "김[가-힣]{1,2}.*", validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 2L))
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("does not validate earlier candidates inside a broader regex span") {
-    val df = Seq(
-      "유진 / 김치찌개",
-      "123 / 김민수",
-      "김철수"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", ".*김[가-힣]{1,2}", validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 2L))
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("rejects ambiguous candidates inside fully broad regex spans") {
-    val df = Seq(
-      "유진 / 김치찌개 / 박지민",
-      "김철수",
-      "id: 김민수 / 123"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", ".*김[가-힣]{1,2}.*", validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 2L))
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("rejects ambiguous candidates inside optional-prefix regex spans without explicit groups") {
-    val df = Seq(
-      "유진 / 김치찌개",
-      "김철수"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", "(?:유진 / )?김[가-힣]{1,2}", validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 1L))
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("rejects ambiguous candidates across multiple capture groups") {
-    val df = Seq(
-      "유진 / 김치찌개",
-      "김철수"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", "(유진 / )?(김[가-힣]{1,2})", validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 1L))
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("rejects ambiguous candidates inside a single broad capture group") {
-    val df = Seq(
-      "유진 / 김치찌개",
-      "김철수"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", "(.*김[가-힣]{1,2}.*)", validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 1L))
-
-    assert(actual == sortByKey(expected))
-  }
-
-  test("allows nested capture groups that point to the same candidate span") {
-    val df = Seq(
-      "유진 / 김민수",
-      "유진 / 김치찌개"
-    ).toDF("candidate")
-
-    val rules = Seq(
-      PiiRule("name", "(?:유진 / )?((김[가-힣]{1,2}))", validator = Some(KoreanNameValidator.ValidatorName))
-    )
-
-    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("candidate", "name", 1L))
 
     assert(actual == sortByKey(expected))
   }
@@ -637,15 +388,14 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
   private def legacyCounts(df: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
     df.columns.toSeq.flatMap { columnName =>
       val valueColumn = col(columnName).cast(StringType)
-      val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
-
       rules.flatMap { rule =>
         if (shouldApplyRule(columnName, rule)) {
-          val predicate = rulePredicate(valueColumn, rule)
-          val count = df.filter(predicate).count()
+          val matchRegex = regexForRule(rule)
+          val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
+          val count = df.filter(presentValuePredicate && valueColumn.rlike(matchRegex)).count()
           rule.matchType match {
             case PiiRuleMatchType.FullColumn =>
-              val mismatchCount = df.filter(presentValuePredicate && !predicate).count()
+              val mismatchCount = df.filter(presentValuePredicate && !valueColumn.rlike(matchRegex)).count()
               if (count > 0L && mismatchCount == 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
             case _ =>
               if (count > 0L) Some(MatchCount(columnName, rule.piiType, count)) else None
@@ -675,7 +425,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
                 if (rule.matchType == PiiRuleMatchType.FullColumn && value.trim.isEmpty) None else Some(value)
               }
             }
-            val count = presentValues.count(value => matchesRule(value, rule, regex))
+            val count = presentValues.count(value => regex.findFirstIn(value).nonEmpty)
             val mismatchCount = presentValues.size - count
 
             rule.matchType match {
@@ -700,18 +450,18 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     dataColumns.flatMap { columnName =>
       val valueColumn = col(columnName).cast(StringType)
-      val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
 
       rules.flatMap { rule =>
         if (shouldApplyRule(columnName, rule)) {
-          val predicate = rulePredicate(valueColumn, rule)
+          val matchRegex = regexForRule(rule)
+          val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
           rule.matchType match {
             case PiiRuleMatchType.FullColumn =>
               val groupedRows = df
                 .groupBy(col(fileIdentifierColumn))
                 .agg(
-                  org.apache.spark.sql.functions.sum(when(predicate, 1L).otherwise(0L)).cast("long").as("match_count"),
-                  org.apache.spark.sql.functions.sum(when(presentValuePredicate && !predicate, 1L).otherwise(0L)).cast("long").as("mismatch_count")
+                  org.apache.spark.sql.functions.sum(when(presentValuePredicate && valueColumn.rlike(matchRegex), 1L).otherwise(0L)).cast("long").as("match_count"),
+                  org.apache.spark.sql.functions.sum(when(presentValuePredicate && !valueColumn.rlike(matchRegex), 1L).otherwise(0L)).cast("long").as("mismatch_count")
                 )
                 .collect()
 
@@ -727,7 +477,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
               }
             case _ =>
               val groupedRows = df
-                .filter(predicate)
+                .filter(valueColumn.isNotNull && valueColumn.rlike(matchRegex))
                 .groupBy(col(fileIdentifierColumn))
                 .count()
                 .collect()
@@ -758,35 +508,6 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     rule.matchType match {
       case PiiRuleMatchType.FullColumn => s"\\A(?:${rule.regex})\\z"
       case _ => rule.regex
-    }
-  }
-
-  private def rulePredicate(valueColumn: org.apache.spark.sql.Column, rule: PiiRule): org.apache.spark.sql.Column = {
-    val matchRegex = regexForRule(rule)
-    val regexPredicate = valueColumn.isNotNull && valueColumn.rlike(matchRegex)
-    val basePredicate = rule.validator match {
-      case Some(KoreanNameValidator.ValidatorName) =>
-        regexPredicate && KoreanNameValidator.predicate(spark, valueColumn, matchRegex)
-      case Some(unsupported) =>
-        throw new IllegalArgumentException(s"Unsupported validator: $unsupported")
-      case None =>
-        regexPredicate
-    }
-
-    rule.matchType match {
-      case PiiRuleMatchType.FullColumn => valueColumn.isNotNull && trim(valueColumn) =!= "" && basePredicate
-      case _ => basePredicate
-    }
-  }
-
-  private def matchesRule(
-    value: String,
-    rule: PiiRule,
-    regex: scala.util.matching.Regex
-  ): Boolean = {
-    regex.findFirstIn(value).nonEmpty && rule.validator.forall {
-      case KoreanNameValidator.ValidatorName => KoreanNameValidator.containsLikelyName(value, regex.pattern.pattern())
-      case unsupported => throw new IllegalArgumentException(s"Unsupported validator: $unsupported")
     }
   }
 }

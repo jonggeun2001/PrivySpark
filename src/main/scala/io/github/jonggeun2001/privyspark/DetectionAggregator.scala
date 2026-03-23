@@ -1,10 +1,9 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
-import io.github.jonggeun2001.privyspark.validator.KoreanNameValidator
 import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, trim, when}
 import org.apache.spark.sql.types.StringType
-import org.apache.spark.sql.{Column, DataFrame, SparkSession}
+import org.apache.spark.sql.{Column, DataFrame, Row}
 
 import scala.util.control.NonFatal
 
@@ -89,7 +88,7 @@ object DetectionAggregator {
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
     require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
 
-    val metrics = buildMetrics(sampledDf.sparkSession, columns, rules)
+    val metrics = buildMetrics(columns, rules)
     if (metrics.isEmpty) {
       logDebug("detection_aggregation_complete", "scope" -> "dataset", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
@@ -166,7 +165,7 @@ object DetectionAggregator {
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
     require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
 
-    val metrics = buildMetrics(sampledDf.sparkSession, columns, rules)
+    val metrics = buildMetrics(columns, rules)
     if (metrics.isEmpty) {
       logDebug("detection_aggregation_complete", "scope" -> "file", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
@@ -217,7 +216,7 @@ object DetectionAggregator {
     }
   }
 
-  private def buildMetrics(spark: SparkSession, columns: Seq[String], rules: Seq[PiiRule]): Seq[Metric] = {
+  private def buildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[Metric] = {
     columns.zipWithIndex.flatMap {
       case (columnName, columnIndex) =>
         val normalizedColumnName = columnName.toLowerCase
@@ -230,18 +229,16 @@ object DetectionAggregator {
               val alias = s"m_${columnIndex}_${ruleIndex}"
               val valueColumn = col(columnName).cast(StringType)
               val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
-              val matchRegex = rule.matchType match {
-                case PiiRuleMatchType.FullColumn => fullMatchRegex(rule.regex)
-                case _ => rule.regex
-              }
-              val basePredicate = buildPredicate(spark, valueColumn, rule, matchRegex)
-              val predicate = rule.matchType match {
-                case PiiRuleMatchType.FullColumn => presentValuePredicate && basePredicate
-                case _ => basePredicate
-              }
               val mismatchPredicate = rule.matchType match {
-                case PiiRuleMatchType.FullColumn => Some(presentValuePredicate && !basePredicate)
-                case _ => None
+                case PiiRuleMatchType.FullColumn =>
+                  val fullMatchPredicate = valueColumn.rlike(fullMatchRegex(rule.regex))
+                  Some(presentValuePredicate && !fullMatchPredicate)
+                case _ =>
+                  None
+              }
+              val predicate = rule.matchType match {
+                case PiiRuleMatchType.FullColumn => presentValuePredicate && valueColumn.rlike(fullMatchRegex(rule.regex))
+                case _ => valueColumn.isNotNull && valueColumn.rlike(rule.regex)
               }
               Some(
                 Metric(
@@ -257,18 +254,6 @@ object DetectionAggregator {
               None
             }
         }
-    }
-  }
-
-  private def buildPredicate(spark: SparkSession, valueColumn: Column, rule: PiiRule, regex: String): Column = {
-    val regexPredicate = valueColumn.isNotNull && valueColumn.rlike(regex)
-    rule.validator match {
-      case Some(KoreanNameValidator.ValidatorName) =>
-        regexPredicate && KoreanNameValidator.predicate(spark, valueColumn, regex)
-      case Some(unsupported) =>
-        throw new IllegalArgumentException(s"Unsupported validator: $unsupported")
-      case None =>
-        regexPredicate
     }
   }
 
