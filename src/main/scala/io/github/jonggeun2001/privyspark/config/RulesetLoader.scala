@@ -33,7 +33,7 @@ object RulesetLoader {
         if (item.containsKey("validator")) {
           throw new IllegalArgumentException("validator is no longer supported")
         }
-        if (regex == RemovedRegexReference) {
+        if (regex.contains(RemovedRegexReference)) {
           throw new IllegalArgumentException(s"$RemovedRegexReference is no longer supported")
         }
         val rawMatchType = Option(item.get("match_type")).map(_.toString.trim).filter(_.nonEmpty).getOrElse(PiiRuleMatchType.Value)
