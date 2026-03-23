@@ -29,6 +29,9 @@ object RulesetLoader {
         val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
         val regex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
         val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
+        if (item.containsKey("validator")) {
+          throw new IllegalArgumentException("validator is no longer supported")
+        }
         val rawMatchType = Option(item.get("match_type")).map(_.toString.trim).filter(_.nonEmpty).getOrElse(PiiRuleMatchType.Value)
         val matchType = PiiRuleMatchType.normalize(rawMatchType).getOrElse {
           throw new IllegalArgumentException(
