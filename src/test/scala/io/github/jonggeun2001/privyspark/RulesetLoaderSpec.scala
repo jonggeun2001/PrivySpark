@@ -87,6 +87,25 @@ class RulesetLoaderSpec extends AnyFunSuite {
     }
   }
 
+  test("throws when ruleset still uses removed internal regex reference") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-regex-ref", ".yaml")
+    val yaml =
+      """rules:
+        |  - pii_type: name
+        |    regex: '__KOREAN_NAME_RULE_REGEX__'
+        |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val error = intercept[IllegalArgumentException] {
+        RulesetLoader.load(rulesetPath.toString)
+      }
+      assert(error.getMessage.contains("__KOREAN_NAME_RULE_REGEX__ is no longer supported"))
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
   test("throws on missing ruleset file") {
     assertThrows[IllegalArgumentException] {
       RulesetLoader.load("/tmp/does-not-exist-ruleset.yaml")

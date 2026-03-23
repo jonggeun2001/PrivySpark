@@ -10,6 +10,7 @@ import scala.collection.JavaConverters._
 object RulesetLoader {
   private val DefaultRulesetPath = "config/rules/default.yaml"
   private val YarnDistributedDefaultRuleset = "default-rules.yaml"
+  private val RemovedRegexReference = "__KOREAN_NAME_RULE_REGEX__"
 
   def load(ruleset: String): Seq[PiiRule] = {
     val rulesetPath = resolvePath(ruleset)
@@ -31,6 +32,9 @@ object RulesetLoader {
         val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
         if (item.containsKey("validator")) {
           throw new IllegalArgumentException("validator is no longer supported")
+        }
+        if (regex == RemovedRegexReference) {
+          throw new IllegalArgumentException(s"$RemovedRegexReference is no longer supported")
         }
         val rawMatchType = Option(item.get("match_type")).map(_.toString.trim).filter(_.nonEmpty).getOrElse(PiiRuleMatchType.Value)
         val matchType = PiiRuleMatchType.normalize(rawMatchType).getOrElse {
