@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
@@ -714,6 +715,31 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errors.isEmpty)
       assert(results.map(_.match_ratio).toSet == Set(0.67))
       assert(results.map(_.confidence).toSet == Set(0.67))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules detects Korean passport numbers without matching alphanumeric-adjacent substrings") {
+    val inputDir = Files.createTempDirectory("privyspark-passport-number-")
+    val timestamp = "2026-03-27T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("travellers.csv"),
+        "name,passport_no\n" +
+          "alice,M12345678\n" +
+          "bob,ID:M87654321\n" +
+          "carol,XM12345678\n" +
+          "dave,M12345678Y\n" +
+          "erin,m12345678\n" +
+          "frank,M1234567\n")
+
+      val rules = Seq(RulesetLoader.load("default").find(_.piiType == "passport_number").get)
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.column_name, result.pii_type, result.match_count, result.match_ratio)).toSet ==
+        Set(("passport_no", "passport_number", 2L, 0.33)))
     } finally {
       deleteRecursively(inputDir)
     }

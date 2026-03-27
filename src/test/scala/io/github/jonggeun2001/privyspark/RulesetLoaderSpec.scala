@@ -15,6 +15,7 @@ class RulesetLoaderSpec extends AnyFunSuite {
     val foreignRegistrationNumberRule = rules.find(_.piiType == "foreign_registration_number")
     assert(rules.nonEmpty)
     assert(rules.exists(_.piiType == "email"))
+    assert(rules.exists(_.piiType == "passport_number"))
     assert(foreignRegistrationNumberRule.nonEmpty)
     assert(foreignRegistrationNumberRule.get.regex == "(?<![0-9])[0-9]{6}-?[5-8][0-9]{6}(?![0-9])")
     assert(!rules.exists(_.piiType == "name"))

@@ -14,6 +14,6 @@ rules:
   - pii_type: credit_card_number
     regex: '[0-9]{4}-?[0-9]{4}-?[0-9]{4}-?[0-9]{4}'
   - pii_type: passport_number
-    regex: '[MSROD][0-9]{8}'
+    regex: '(?<![A-Za-z0-9])[MSROD][0-9]{8}(?![A-Za-z0-9])'
   - pii_type: ip_address
     regex: '(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])){3}'
