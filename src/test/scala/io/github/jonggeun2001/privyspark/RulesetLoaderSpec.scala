@@ -14,6 +14,7 @@ class RulesetLoaderSpec extends AnyFunSuite {
     val rules = RulesetLoader.load("default")
     assert(rules.nonEmpty)
     assert(rules.exists(_.piiType == "email"))
+    assert(rules.exists(_.piiType == "foreign_registration_number"))
     assert(rules.forall(_.columnHints.isEmpty))
     assert(rules.forall(_.matchType == "value"))
   }
