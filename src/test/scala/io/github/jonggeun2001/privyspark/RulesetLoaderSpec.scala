@@ -12,9 +12,11 @@ import java.nio.file.Files
 class RulesetLoaderSpec extends AnyFunSuite {
   test("loads default ruleset") {
     val rules = RulesetLoader.load("default")
+    val foreignRegistrationNumberRule = rules.find(_.piiType == "foreign_registration_number")
     assert(rules.nonEmpty)
     assert(rules.exists(_.piiType == "email"))
-    assert(rules.exists(_.piiType == "foreign_registration_number"))
+    assert(foreignRegistrationNumberRule.nonEmpty)
+    assert(foreignRegistrationNumberRule.get.regex == "(?<![0-9])[0-9]{6}-?[5-8][0-9]{6}(?![0-9])")
     assert(rules.forall(_.columnHints.isEmpty))
     assert(rules.forall(_.matchType == "value"))
   }
