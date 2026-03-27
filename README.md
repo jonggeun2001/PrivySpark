@@ -9,7 +9,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - 디렉토리 구조 선스캔 후 `(디렉토리, 포맷)` 그룹 단위로 배치 처리
 - 그룹 내부는 대표 파일 1개로 스키마를 우선 샘플링하고, sampled group은 파일 식별자를 유지한 채 배치 읽기를 시도한다. 다만 CSV sampled group은 헤더 유무 드리프트를 막기 위해 batch scan 전에 exact split으로 재확인한다. sampled group 배치 읽기 실패 시 전체 파일 exact split 후 재시도한다.
 - `file_identifier`는 입력 경로 기준 상대경로를 사용하고, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 충돌 방지를 위해 `.`로 표기한다.
-- 외부 규칙 파일 기반 정규식 탐지 (선택적 `column_hints` 지원 + 배치 집계 + 메트릭 50,000 초과 시 소배치 폴백 + 집계 예외 시 안전 legacy 폴백)
+- 외부 규칙 파일 기반 정규식 탐지 (기본 제공 탐지 타입: 전화번호, 이메일, 주민등록번호, 외국인 등록번호, 주소, 계좌번호, 카드번호, 한국 여권번호, IP / 선택적 `column_hints` 지원 + 배치 집계 + 메트릭 50,000 초과 시 소배치 폴백 + 집계 예외 시 안전 legacy 폴백)
 - 기본 `passport_number` 규칙은 한국 여권번호 형식만 검출하며, 다른 영숫자 토큰에 붙은 substring은 제외
 - `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`를 지정하거나, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 지정하면 드라이버 debug 로그에 스캔 계획, 스키마 분할, 그룹/파일 스캔, 리포트 저장 진행사항을 기록
 - 그룹/집계 폴백 발생 시 원인과 실행 경로를 드라이버 로그에 기록
