@@ -352,6 +352,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val df = Seq(
       ("11-12-345678-90"),
       ("1212345678"),
+      ("면허번호 11-12-345678-90"),
       ("27-12-345678-90"),
       ("271234567890"),
       ("noise")
@@ -365,7 +366,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("driver_license", "driver_license_number", 2L))
+    val expected = Seq(MatchCount("driver_license", "driver_license_number", 3L))
 
     assert(actual == expected)
   }
