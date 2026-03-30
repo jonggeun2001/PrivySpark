@@ -1,6 +1,8 @@
 package io.github.jonggeun2001.privyspark
 
 object DriverLicenseNumberValidator {
+  private val CandidatePattern =
+    "(?<![0-9])(?:[0-9]{10}|[0-9]{12}|[0-9]{2}-[0-9]{6}-[0-9]{2}|[0-9]{2}-[0-9]{2}-[0-9]{6}-[0-9]{2})(?![0-9])".r
   private val CurrentRegionCodes: Set[String] =
     ((11 to 26).map(code => f"$code%02d") :+ "28").toSet
 
@@ -25,5 +27,9 @@ object DriverLicenseNumberValidator {
         }
       }
     }
+  }
+
+  def containsValidCandidate(raw: String): Boolean = {
+    Option(raw).exists(value => CandidatePattern.findAllIn(value).exists(isValid))
   }
 }

@@ -20,4 +20,9 @@ class DriverLicenseNumberValidatorSpec extends AnyFunSuite {
     assert(!DriverLicenseNumberValidator.isValid("12 345678 90"))
     assert(!DriverLicenseNumberValidator.isValid("noise"))
   }
+
+  test("finds at least one valid candidate in free-form text") {
+    assert(DriverLicenseNumberValidator.containsValidCandidate("이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90"))
+    assert(!DriverLicenseNumberValidator.containsValidCandidate("이전 번호 27-12-345678-90, 현재 번호 29-12-345678-90"))
+  }
 }

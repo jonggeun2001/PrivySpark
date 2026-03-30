@@ -353,6 +353,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       ("11-12-345678-90"),
       ("1212345678"),
       ("면허번호 11-12-345678-90"),
+      ("이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90"),
       ("27-12-345678-90"),
       ("271234567890"),
       ("noise")
@@ -366,7 +367,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("driver_license", "driver_license_number", 3L))
+    val expected = Seq(MatchCount("driver_license", "driver_license_number", 4L))
 
     assert(actual == expected)
   }
