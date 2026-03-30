@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
-import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, trim, when}
+import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, trim, udf, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{Column, DataFrame, Row}
 
@@ -25,6 +25,7 @@ object DetectionAggregator {
   private val DebugPropertyName = "privyspark.debug"
   private val DebugEnvName = "PRIVYSPARK_DEBUG"
   private val LegacyFallbackBatchSize = 50
+  private val DriverLicenseValidatorUdf = udf((value: String) => DriverLicenseNumberValidator.isValid(value))
   @volatile private var debugLoggingEnabledCache: java.lang.Boolean = _
 
   private def isDebugLoggingEnabled: Boolean = {
@@ -229,16 +230,20 @@ object DetectionAggregator {
               val alias = s"m_${columnIndex}_${ruleIndex}"
               val valueColumn = col(columnName).cast(StringType)
               val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
+              val validatorPredicate = builtInValidatorPredicate(rule, valueColumn)
+              val matchPredicate = rule.matchType match {
+                case PiiRuleMatchType.FullColumn => valueColumn.rlike(fullMatchRegex(rule.regex)) && validatorPredicate
+                case _ => valueColumn.rlike(rule.regex) && validatorPredicate
+              }
               val mismatchPredicate = rule.matchType match {
                 case PiiRuleMatchType.FullColumn =>
-                  val fullMatchPredicate = valueColumn.rlike(fullMatchRegex(rule.regex))
-                  Some(presentValuePredicate && !fullMatchPredicate)
+                  Some(presentValuePredicate && !matchPredicate)
                 case _ =>
                   None
               }
               val predicate = rule.matchType match {
-                case PiiRuleMatchType.FullColumn => presentValuePredicate && valueColumn.rlike(fullMatchRegex(rule.regex))
-                case _ => valueColumn.isNotNull && valueColumn.rlike(rule.regex)
+                case PiiRuleMatchType.FullColumn => presentValuePredicate && matchPredicate
+                case _ => valueColumn.isNotNull && matchPredicate
               }
               Some(
                 Metric(
@@ -424,6 +429,13 @@ object DetectionAggregator {
 
   private def fullMatchRegex(regex: String): String = {
     s"\\A(?:$regex)\\z"
+  }
+
+  private def builtInValidatorPredicate(rule: PiiRule, valueColumn: Column): Column = {
+    rule.piiType match {
+      case "driver_license_number" => DriverLicenseValidatorUdf(valueColumn)
+      case _ => lit(true)
+    }
   }
 
   private def groupMetricsByExpressionBudget(metrics: Seq[Metric], maxExpressionsPerAgg: Int): Seq[Seq[Metric]] = {

@@ -348,6 +348,28 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(actual == Seq(FileMatchCount("beta.csv", "customer_email", "email", 1L)))
   }
 
+  test("counts driver license numbers only when strict validator accepts the candidate") {
+    val df = Seq(
+      ("11-12-345678-90"),
+      ("1212345678"),
+      ("27-12-345678-90"),
+      ("271234567890"),
+      ("noise")
+    ).toDF("driver_license")
+
+    val rules = Seq(
+      PiiRule(
+        "driver_license_number",
+        "(?<![0-9])(?:[0-9]{10}|[0-9]{12}|[0-9]{2}-[0-9]{6}-[0-9]{2}|[0-9]{2}-[0-9]{2}-[0-9]{6}-[0-9]{2})(?![0-9])"
+      )
+    )
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
+    val expected = Seq(MatchCount("driver_license", "driver_license_number", 2L))
+
+    assert(actual == expected)
+  }
+
   private def sortByKey(values: Seq[MatchCount]): Seq[MatchCount] = {
     values.sortBy(v => (v.columnName, v.piiType, v.count))
   }
