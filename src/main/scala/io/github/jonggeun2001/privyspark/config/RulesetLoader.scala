@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark.config
 
-import io.github.jonggeun2001.privyspark.model.PiiRule
+import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
 import org.yaml.snakeyaml.Yaml
 
 import java.io.FileInputStream
@@ -10,6 +10,7 @@ import scala.collection.JavaConverters._
 object RulesetLoader {
   private val DefaultRulesetPath = "config/rules/default.yaml"
   private val YarnDistributedDefaultRuleset = "default-rules.yaml"
+  private val RemovedRegexReference = "__KOREAN_NAME_RULE_REGEX__"
 
   def load(ruleset: String): Seq[PiiRule] = {
     val rulesetPath = resolvePath(ruleset)
@@ -29,12 +30,26 @@ object RulesetLoader {
         val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
         val regex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
         val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
-
         if (piiType.isEmpty || regex.isEmpty) {
           throw new IllegalArgumentException("Each rule must include pii_type and regex")
         }
+        if (piiType.equalsIgnoreCase("name")) {
+          throw new IllegalArgumentException("pii_type 'name' is no longer supported")
+        }
+        if (item.containsKey("validator")) {
+          throw new IllegalArgumentException("validator is no longer supported")
+        }
+        if (regex.contains(RemovedRegexReference)) {
+          throw new IllegalArgumentException(s"$RemovedRegexReference is no longer supported")
+        }
+        val rawMatchType = Option(item.get("match_type")).map(_.toString.trim).filter(_.nonEmpty).getOrElse(PiiRuleMatchType.Value)
+        val matchType = PiiRuleMatchType.normalize(rawMatchType).getOrElse {
+          throw new IllegalArgumentException(
+            s"Unsupported match_type: $rawMatchType. Supported values: ${PiiRuleMatchType.Supported.toSeq.sorted.mkString(", ")}"
+          )
+        }
 
-        PiiRule(piiType, regex, columnHints)
+        PiiRule(piiType, regex, columnHints, matchType)
       }.toSeq
 
       if (parsed.isEmpty) {
