@@ -14,6 +14,16 @@
 - 배포 아티팩트: Shadow fat JAR(`*-all.jar`)
 - 기본 규칙셋은 `spark-submit --files`로 드라이버에 배포
 
+### 2.1 구현 컴포넌트 매핑
+- `Cli.scala`: `privyspark scan` CLI 파싱과 `sample-ratio` 유효성 검증
+- `PathValidator.scala`: 입력/출력 경로의 절대경로/URI 판별
+- `FormatDetector.scala`: `csv`, `json/jsonl/ndjson`, `parquet`, `orc` 확장자 판별
+- `RulesetLoader.scala`: 기본 ruleset 탐색, 커스텀 ruleset 파싱, 금지 필드 검증
+- `DetectionAggregator.scala`: 규칙별 metric 구성, `match_type` 처리, 집계/폴백 경로
+- `DriverLicenseNumberValidator.scala`: `driver_license_number` 내장 strict validator
+- `PrivySparkApp.scala`: 선스캔, 그룹화, exact split, 재시도, 리포트 저장 오케스트레이션
+- `Models.scala`: `PiiRule`, `ScanResult`, `ScanError` 스키마 정의
+
 ## 3. 스캔 처리 아키텍처
 
 ### 3.1 플로우
@@ -38,6 +48,7 @@
 ### 3.3 탐지 집계 전략
 - 기본: 배치 집계(`agg`) 기반 정규식 매칭 카운트 계산
 - 기본/커스텀 ruleset 모두 `pii_type: name`은 지원하지 않으며, 포함 시 로드 단계에서 실패한다.
+- 기본/커스텀 ruleset 모두 제거된 `validator` 필드와 `__KOREAN_NAME_RULE_REGEX__` 내부 참조를 지원하지 않으며, 포함 시 로드 단계에서 실패한다.
 - 기본 ruleset은 전화번호, 이메일, 주민등록번호, 외국인 등록번호, 운전면허번호, 주소, 계좌번호, 카드번호, 한국 여권번호, IP를 기본 탐지 대상으로 포함한다.
 - 기본 `driver_license_number`는 candidate regex에 매칭된 값에 대해 하이픈 정규화 후 구형 10자리 또는 현행 12자리 형식만 통과시키는 내장 strict validator를 적용한다. 현행 12자리는 지역코드 `11`~`26`, `28`만 허용한다.
 - 기본 ruleset의 `passport_number`는 한국 여권번호 형식만 대상으로 하고, 다른 영숫자 토큰 내부 substring 매치는 제외한다.
