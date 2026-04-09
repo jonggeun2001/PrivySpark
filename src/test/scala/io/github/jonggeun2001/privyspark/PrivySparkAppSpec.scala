@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
@@ -13,6 +14,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.util.Comparator
 import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
 
 @RunWith(classOf[JUnitRunner])
@@ -467,7 +469,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(inputDir.resolve("supported.csv"),
         "name,email\n" +
           "alice,alice@example.com\n")
-      writeText(inputDir.resolve("unsupported.xlsx"), "binary-placeholder")
+      writeBytes(inputDir.resolve("unsupported.bin"), Array[Byte](0.toByte, 1.toByte, 2.toByte, 3.toByte))
 
       val plan = PrivySparkApp.scanDirectoryStructure(
         spark,
@@ -480,8 +482,33 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(plan.groups.size == 1)
       assert(plan.groups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("supported.csv"))
       assert(plan.errors.size == 1)
-      assert(plan.errors.head.file_identifier == "unsupported.xlsx")
+      assert(plan.errors.head.file_identifier == "unsupported.bin")
       assert(plan.errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure treats text-like unknown extensions as text groups") {
+    val inputDir = Files.createTempDirectory("privyspark-text-fallback-plan-")
+
+    try {
+      writeText(inputDir.resolve("notes.log"),
+        "alice@example.com\n" +
+          "not-an-email\n" +
+          "bob@example.com\n")
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-09T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "text")
+      assert(plan.groups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("notes.log"))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -827,7 +854,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(groupedDir.resolve("part-0002.csv"),
         "name,email\n" +
           "bob,bob@example.com\n")
-      writeText(groupedDir.resolve("unsupported.xlsx"), "binary-placeholder")
+      writeBytes(groupedDir.resolve("unsupported.bin"), Array[Byte](0.toByte, 1.toByte, 2.toByte, 3.toByte))
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val plan = PrivySparkApp.scanDirectoryStructure(
@@ -840,7 +867,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(csvGroups.size == 1)
       assert(!csvGroups.head.useDirectoryIdentifier)
-      assert(plan.errors.map(_.file_identifier).toSet == Set("users/unsupported.xlsx"))
+      assert(plan.errors.map(_.file_identifier).toSet == Set("users/unsupported.bin"))
 
       val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
 
@@ -1510,6 +1537,100 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules detects expected pii counts from avro files") {
+    val outputDir = Files.createTempDirectory("privyspark-avro-fixture-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    try {
+      val avroFilePath = createColumnarDataFile(outputDir, "avro")
+      val (results, errors) = scanWithRules(avroFilePath, avroFilePath, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.column_name, result.pii_type)).toSet == Set(("email", "email"), ("phone", "phone")))
+      assert(results.forall(_.match_count == 2L))
+      assert(results.forall(_.file_identifier.toLowerCase.endsWith(".avro")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("scanWithRules detects expected pii counts from xlsx sheets") {
+    val outputDir = Files.createTempDirectory("privyspark-xlsx-fixture-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    try {
+      val workbookPath = createSpreadsheetFile(outputDir)
+      val (results, errors) = scanWithRules(workbookPath, workbookPath, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.pii_type, result.match_count)).toSet ==
+        Set(
+          ("contacts.xlsx#Contacts", "email", "email", 2L),
+          ("contacts.xlsx#Contacts", "phone", "phone", 2L)
+        ))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("scanWithRules expands zip archives and keeps nested identifiers") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-fixture-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      val archivePath = createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n" +
+              "bob,bob@example.com\n")
+        )
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.zip!nested/customers.csv", "email", 2L)))
+      assert(results.forall(_.dataset_path == inputDir.toString))
+      assert(archivePath.endsWith(".zip"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules scans text-like unknown extensions through the value column") {
+    val inputDir = Files.createTempDirectory("privyspark-text-fixture-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("notes.log"),
+        "alice@example.com\n" +
+          "skip\n" +
+          "bob@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("notes.log", "value", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("writeReports stores scan results and errors in csv output paths") {
     val outputDir = Files.createTempDirectory("privyspark-write-reports-")
 
@@ -1566,6 +1687,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def writeText(path: Path, content: String): Unit = {
     Files.write(path, content.getBytes(StandardCharsets.UTF_8))
+  }
+
+  private def writeBytes(path: Path, content: Array[Byte]): Unit = {
+    Files.write(path, content)
   }
 
   private def captureStderr[A](block: => A): String = {
@@ -1642,12 +1767,61 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     format match {
       case "parquet" => sourceDf.coalesce(1).write.mode("overwrite").parquet(targetDir.toString)
       case "orc" => sourceDf.coalesce(1).write.mode("overwrite").orc(targetDir.toString)
+      case "avro" => sourceDf.coalesce(1).write.mode("overwrite").format("avro").save(targetDir.toString)
       case _ => fail(s"Unsupported columnar fixture format: $format")
     }
 
     findDataFile(targetDir, s".$format")
       .map(_.toString)
       .getOrElse(fail(s"Failed to locate generated $format data file under $targetDir"))
+  }
+
+  private def createSpreadsheetFile(outputDir: Path): String = {
+    val workbook = new XSSFWorkbook()
+    try {
+      val sheet = workbook.createSheet("Contacts")
+      val header = sheet.createRow(0)
+      header.createCell(0).setCellValue("email")
+      header.createCell(1).setCellValue("phone")
+
+      val row1 = sheet.createRow(1)
+      row1.createCell(0).setCellValue("alpha@example.com")
+      row1.createCell(1).setCellValue("010-1111-2222")
+
+      val row2 = sheet.createRow(2)
+      row2.createCell(0).setCellValue("invalid-email")
+      row2.createCell(1).setCellValue("not-phone")
+
+      val row3 = sheet.createRow(3)
+      row3.createCell(0).setCellValue("beta@example.com")
+      row3.createCell(1).setCellValue("031-555-7777")
+
+      val workbookPath = outputDir.resolve("contacts.xlsx")
+      val outputStream = Files.newOutputStream(workbookPath)
+      try {
+        workbook.write(outputStream)
+      } finally {
+        outputStream.close()
+      }
+      workbookPath.toString
+    } finally {
+      workbook.close()
+    }
+  }
+
+  private def createArchiveFile(path: Path, entries: Seq[(String, String)]): String = {
+    val outputStream = new ZipOutputStream(Files.newOutputStream(path))
+    try {
+      entries.foreach {
+        case (entryName, content) =>
+          outputStream.putNextEntry(new ZipEntry(entryName))
+          outputStream.write(content.getBytes(StandardCharsets.UTF_8))
+          outputStream.closeEntry()
+      }
+    } finally {
+      outputStream.close()
+    }
+    path.toString
   }
 
   private def findDataFile(root: Path, extension: String): Option[Path] = {

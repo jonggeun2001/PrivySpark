@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark
 import io.github.jonggeun2001.privyspark.DetectionAggregator.MatchCount
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
+import org.apache.poi.ss.usermodel.WorkbookFactory
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.catalyst.csv.CSVOptions
 import org.apache.spark.sql.execution.datasources.csv.CSVUtils
@@ -11,8 +12,10 @@ import org.apache.spark.sql.functions.{col, input_file_name}
 
 import java.io.{BufferedReader, InputStreamReader}
 import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path => LocalPath}
 import java.time.Instant
 import java.util.concurrent.Executors
+import java.util.zip.ZipInputStream
 import java.nio.file.NoSuchFileException
 import com.univocity.parsers.csv.CsvParser
 import scala.annotation.tailrec
@@ -22,7 +25,16 @@ import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.control.NonFatal
 
 object PrivySparkApp {
-  private[privyspark] final case class ScanFileEntry(filePath: String, directoryPath: String, format: String)
+  private[privyspark] final case class ScanReadOptions(sheetName: Option[String] = None)
+  private[privyspark] final case class ScanFileEntry(
+    sourceKey: String,
+    physicalPath: String,
+    directoryPath: String,
+    format: String,
+    logicalIdentifier: String,
+    readOptions: ScanReadOptions = ScanReadOptions(),
+    allowDirectoryIdentifier: Boolean = true
+  )
   private[privyspark] final case class ScanGroup(
     directoryPath: String,
     format: String,
@@ -31,13 +43,18 @@ object PrivySparkApp {
     useDirectoryIdentifier: Boolean = false,
     directoryIdentifierEligible: Boolean = false,
     schemaSampled: Boolean = false,
-    csvHasHeader: Boolean = true
+    csvHasHeader: Boolean = true,
+    physicalPathsByKey: Map[String, String] = Map.empty,
+    logicalIdentifiersByKey: Map[String, String] = Map.empty,
+    readOptionsByKey: Map[String, ScanReadOptions] = Map.empty,
+    allowDirectoryIdentifier: Boolean = true
   )
   private[privyspark] final case class DirectoryScanPlan(
     groups: Seq[ScanGroup],
     errors: Seq[ScanError],
     totalFiles: Int,
-    directoryCount: Int
+    directoryCount: Int,
+    stagingPaths: Seq[LocalPath] = Seq.empty
   )
   private final case class FileScanMetrics(
     fileIdentifier: String,
@@ -46,6 +63,14 @@ object PrivySparkApp {
   )
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
+  private val TextFormat = "text"
+  private val XlsxFormat = "xlsx"
+  private val AvroFormat = "avro"
+  private val ZipFormat = "zip"
+  private val JarFormat = "jar"
+  private val ArchiveFormats = Set(ZipFormat, JarFormat)
+  private val NonDirectoryIdentifierFormats = Set(TextFormat, XlsxFormat)
+  private val TextProbeByteLimit = 4096
   private[privyspark] val MaxFileReadAttempts = 2
   private[privyspark] val FileReadRetryDelayMillis = 200L
   private val CommonCsvHeaderTokens = Set(
@@ -200,6 +225,154 @@ object PrivySparkApp {
       } else {
         fallbackIdentifier(targetPath)
       }
+    }
+  }
+
+  private def canonicalizePath(path: String): String = {
+    val uri = new Path(path).toUri.normalize()
+    val normalizedPath = stripTrailingSlash(Option(uri.getPath).filter(_.nonEmpty).getOrElse(path))
+    normalizedPath
+  }
+
+  private def resolvePhysicalPath(group: ScanGroup, sourceKey: String): String = {
+    group.physicalPathsByKey.getOrElse(sourceKey, sourceKey)
+  }
+
+  private def resolveReadOptions(group: ScanGroup, sourceKey: String): ScanReadOptions = {
+    group.readOptionsByKey.getOrElse(sourceKey, ScanReadOptions())
+  }
+
+  private def resolveLogicalIdentifier(group: ScanGroup, datasetPath: String, sourceKey: String): String = {
+    group.logicalIdentifiersByKey.getOrElse(
+      sourceKey,
+      resolveRelativeIdentifier(datasetPath, resolvePhysicalPath(group, sourceKey))
+    )
+  }
+
+  private def resolveLogicalIdentifierForPhysicalPath(
+    group: ScanGroup,
+    datasetPath: String,
+    physicalPath: String
+  ): String = {
+    val canonical = canonicalizePath(physicalPath)
+    group.filePaths.iterator.collectFirst {
+      case sourceKey if canonicalizePath(resolvePhysicalPath(group, sourceKey)) == canonical =>
+        resolveLogicalIdentifier(group, datasetPath, sourceKey)
+    }.getOrElse(resolveRelativeIdentifier(datasetPath, physicalPath))
+  }
+
+  private def supportsBatchScan(group: ScanGroup): Boolean = {
+    group.format != XlsxFormat
+  }
+
+  private def cleanupStagingPaths(stagingPaths: Seq[LocalPath]): Unit = {
+    stagingPaths.foreach(deleteLocalPath)
+  }
+
+  private def deleteLocalPath(path: LocalPath): Unit = {
+    if (Files.exists(path)) {
+      val stream = Files.walk(path)
+      try {
+        stream.sorted(java.util.Comparator.reverseOrder()).forEach(candidate => Files.deleteIfExists(candidate))
+      } finally {
+        stream.close()
+      }
+    }
+  }
+
+  private def normalizeArchiveEntryName(entryName: String): String = {
+    Option(entryName).getOrElse("").replace('\\', '/')
+  }
+
+  private def safeResolveArchiveEntryPath(root: LocalPath, entryName: String): Option[LocalPath] = {
+    val sanitizedEntryName = normalizeArchiveEntryName(entryName)
+    val resolvedPath = root.resolve(sanitizedEntryName).normalize()
+    if (resolvedPath.startsWith(root)) Some(resolvedPath) else None
+  }
+
+  private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int = TextProbeByteLimit): Array[Byte] = {
+    val sourcePath = new Path(filePath)
+    val fs = sourcePath.getFileSystem(conf)
+    val inputStream = fs.open(sourcePath)
+    try {
+      val buffer = new Array[Byte](limit)
+      val bytesRead = inputStream.read(buffer)
+      if (bytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, bytesRead)
+    } finally {
+      inputStream.close()
+    }
+  }
+
+  private def stripUtfBom(bytes: Array[Byte]): Array[Byte] = {
+    if (bytes.length >= 3 && bytes(0) == 0xEF.toByte && bytes(1) == 0xBB.toByte && bytes(2) == 0xBF.toByte) {
+      bytes.drop(3)
+    } else {
+      bytes
+    }
+  }
+
+  private def looksLikeText(bytes: Array[Byte]): Boolean = {
+    val content = stripUtfBom(bytes)
+    if (content.isEmpty) {
+      true
+    } else if (content.contains(0.toByte)) {
+      false
+    } else {
+      val suspiciousByteCount = content.count { byte =>
+        val unsigned = byte & 0xFF
+        unsigned < 0x09 || (unsigned > 0x0D && unsigned < 0x20)
+      }
+      suspiciousByteCount.toDouble / content.length.toDouble <= 0.1d
+    }
+  }
+
+  private def workbookDataAddress(sheetName: String): String = {
+    s"'${sheetName.replace("'", "''")}'!A1"
+  }
+
+  private def sheetHasContent(sheet: org.apache.poi.ss.usermodel.Sheet): Boolean = {
+    val rowIterator = sheet.rowIterator()
+    while (rowIterator.hasNext) {
+      val row = rowIterator.next()
+      val cellIterator = row.cellIterator()
+      while (cellIterator.hasNext) {
+        val cell = cellIterator.next()
+        if (cell != null && cell.toString.trim.nonEmpty) {
+          return true
+        }
+      }
+    }
+    false
+  }
+
+  private def listVisibleWorkbookSheets(
+    conf: org.apache.hadoop.conf.Configuration,
+    filePath: String
+  ): Either[String, Seq[String]] = {
+    val sourcePath = new Path(filePath)
+    val fs = sourcePath.getFileSystem(conf)
+    val inputStream = fs.open(sourcePath)
+    try {
+      val workbook = WorkbookFactory.create(inputStream)
+      try {
+        val sheetNames = (0 until workbook.getNumberOfSheets).flatMap { index =>
+          val hidden = workbook.isSheetHidden(index) || workbook.isSheetVeryHidden(index)
+          val sheet = workbook.getSheetAt(index)
+          if (!hidden && sheetHasContent(sheet)) Some(sheet.getSheetName) else None
+        }
+        if (sheetNames.nonEmpty) {
+          Right(sheetNames)
+        } else {
+          Left("No non-empty visible sheets found")
+        }
+      } finally {
+        workbook.close()
+      }
+    } catch {
+      case NonFatal(e) =>
+        Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+    } finally {
+      inputStream.close()
     }
   }
 
@@ -399,37 +572,41 @@ object PrivySparkApp {
     logDebug("ruleset_loaded", "rules" -> rules.size, "ruleset" -> config.ruleset)
     val timestamp = Instant.now().toString
     val scanPlan = scanDirectoryStructure(spark, config.inputPath, config.inputPath, timestamp)
-    logDebug(
-      "scan_plan_ready",
-      "groups" -> scanPlan.groups.size,
-      "plan_errors" -> scanPlan.errors.size,
-      "total_files" -> scanPlan.totalFiles,
-      "directories" -> scanPlan.directoryCount
-    )
+    try {
+      logDebug(
+        "scan_plan_ready",
+        "groups" -> scanPlan.groups.size,
+        "plan_errors" -> scanPlan.errors.size,
+        "total_files" -> scanPlan.totalFiles,
+        "directories" -> scanPlan.directoryCount
+      )
 
-    val results = ArrayBuffer.empty[ScanResult]
-    val errors = ArrayBuffer.empty[ScanError] ++ scanPlan.errors
+      val results = ArrayBuffer.empty[ScanResult]
+      val errors = ArrayBuffer.empty[ScanError] ++ scanPlan.errors
 
-    scanGroups(
-      spark,
-      config.inputPath,
-      scanPlan.groups,
-      rules,
-      config.sampleRatio,
-      timestamp
-    ).foreach {
-      case (_, groupResults, groupErrors) =>
-        results ++= groupResults
-        errors ++= groupErrors
+      scanGroups(
+        spark,
+        config.inputPath,
+        scanPlan.groups,
+        rules,
+        config.sampleRatio,
+        timestamp
+      ).foreach {
+        case (_, groupResults, groupErrors) =>
+          results ++= groupResults
+          errors ++= groupErrors
+      }
+
+      logDebug("report_write_start", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
+      writeReports(spark, config.outputPath, results.toSeq, errors.toSeq)
+      logDebug("report_write_complete", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
+
+      println(
+        s"[PrivySpark] scanned_files=${scanPlan.totalFiles}, grouped_dirs=${scanPlan.directoryCount}, groups=${scanPlan.groups.size}, detections=${results.size}, errors=${errors.size}"
+      )
+    } finally {
+      cleanupStagingPaths(scanPlan.stagingPaths)
     }
-
-    logDebug("report_write_start", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
-    writeReports(spark, config.outputPath, results.toSeq, errors.toSeq)
-    logDebug("report_write_complete", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
-
-    println(
-      s"[PrivySpark] scanned_files=${scanPlan.totalFiles}, grouped_dirs=${scanPlan.directoryCount}, groups=${scanPlan.groups.size}, detections=${results.size}, errors=${errors.size}"
-    )
   }
 
   private[privyspark] def scanGroups(
@@ -478,6 +655,177 @@ object PrivySparkApp {
     })
   }
 
+  private def expandPhysicalSource(
+    conf: org.apache.hadoop.conf.Configuration,
+    datasetPath: String,
+    timestamp: String,
+    physicalPath: String,
+    logicalIdentifier: String,
+    groupingDirectoryPath: String,
+    stagingPaths: ArrayBuffer[LocalPath]
+  ): (Seq[ScanFileEntry], Seq[ScanError]) = {
+    val detectedFormat = FormatDetector.infer(physicalPath).orElse(FormatDetector.infer(logicalIdentifier))
+    detectedFormat match {
+      case Some(format) if ArchiveFormats.contains(format) =>
+        expandArchiveSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier, stagingPaths)
+      case Some(XlsxFormat) =>
+        expandWorkbookSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier)
+      case Some(format) =>
+        (
+          Seq(
+            ScanFileEntry(
+              sourceKey = physicalPath,
+              physicalPath = physicalPath,
+              directoryPath = groupingDirectoryPath,
+              format = format,
+              logicalIdentifier = logicalIdentifier,
+              allowDirectoryIdentifier = !NonDirectoryIdentifierFormats.contains(format)
+            )
+          ),
+          Seq.empty
+        )
+      case None =>
+        try {
+          if (looksLikeText(readProbeBytes(conf, physicalPath))) {
+            (
+              Seq(
+                ScanFileEntry(
+                  sourceKey = physicalPath,
+                  physicalPath = physicalPath,
+                  directoryPath = groupingDirectoryPath,
+                  format = TextFormat,
+                  logicalIdentifier = logicalIdentifier,
+                  allowDirectoryIdentifier = false
+                )
+              ),
+              Seq.empty
+            )
+          } else {
+            (
+              Seq.empty,
+              Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Unsupported file format: $logicalIdentifier"))
+            )
+          }
+        } catch {
+          case NonFatal(e) =>
+            (
+              Seq.empty,
+              Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
+            )
+        }
+    }
+  }
+
+  private def expandWorkbookSource(
+    conf: org.apache.hadoop.conf.Configuration,
+    datasetPath: String,
+    timestamp: String,
+    physicalPath: String,
+    logicalIdentifier: String
+  ): (Seq[ScanFileEntry], Seq[ScanError]) = {
+    listVisibleWorkbookSheets(conf, physicalPath) match {
+      case Right(sheetNames) =>
+        (
+          sheetNames.map { sheetName =>
+            ScanFileEntry(
+              sourceKey = s"$physicalPath#$sheetName",
+              physicalPath = physicalPath,
+              directoryPath = logicalIdentifier,
+              format = XlsxFormat,
+              logicalIdentifier = s"$logicalIdentifier#$sheetName",
+              readOptions = ScanReadOptions(sheetName = Some(sheetName)),
+              allowDirectoryIdentifier = false
+            )
+          },
+          Seq.empty
+        )
+      case Left(errorMessage) =>
+        (
+          Seq.empty,
+          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Workbook read failed: $errorMessage"))
+        )
+    }
+  }
+
+  private def expandArchiveSource(
+    conf: org.apache.hadoop.conf.Configuration,
+    datasetPath: String,
+    timestamp: String,
+    archivePath: String,
+    logicalIdentifier: String,
+    stagingPaths: ArrayBuffer[LocalPath]
+  ): (Seq[ScanFileEntry], Seq[ScanError]) = {
+    val sourcePath = new Path(archivePath)
+    val fs = sourcePath.getFileSystem(conf)
+    val archiveInputStream = fs.open(sourcePath)
+    val zipInputStream = new ZipInputStream(archiveInputStream)
+    val extractedEntries = ArrayBuffer.empty[ScanFileEntry]
+    val archiveErrors = ArrayBuffer.empty[ScanError]
+    val stagingRoot = Files.createTempDirectory("privyspark-archive-")
+    stagingPaths += stagingRoot
+
+    try {
+      var entry = zipInputStream.getNextEntry
+      while (entry != null) {
+        if (!entry.isDirectory) {
+          val normalizedEntryName = normalizeArchiveEntryName(entry.getName)
+          safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
+            case Some(targetPath) =>
+              Option(targetPath.getParent).foreach(parent => Files.createDirectories(parent))
+              val outputStream = Files.newOutputStream(targetPath)
+              try {
+                val buffer = new Array[Byte](8192)
+                var bytesRead = zipInputStream.read(buffer)
+                while (bytesRead >= 0) {
+                  if (bytesRead > 0) {
+                    outputStream.write(buffer, 0, bytesRead)
+                  }
+                  bytesRead = zipInputStream.read(buffer)
+                }
+              } finally {
+                outputStream.close()
+              }
+
+              val childLogicalIdentifier = s"$logicalIdentifier!$normalizedEntryName"
+              val (childEntries, childErrors) = expandPhysicalSource(
+                conf,
+                datasetPath,
+                timestamp,
+                targetPath.toString,
+                childLogicalIdentifier,
+                logicalIdentifier,
+                stagingPaths
+              )
+              extractedEntries ++= childEntries
+              archiveErrors ++= childErrors
+            case None =>
+              archiveErrors += ScanError(
+                datasetPath,
+                timestamp,
+                s"$logicalIdentifier!$normalizedEntryName",
+                s"Unsafe archive entry path: $normalizedEntryName"
+              )
+          }
+        }
+        zipInputStream.closeEntry()
+        entry = zipInputStream.getNextEntry
+      }
+    } catch {
+      case NonFatal(e) =>
+        archiveErrors += ScanError(
+          datasetPath,
+          timestamp,
+          logicalIdentifier,
+          s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+        )
+    } finally {
+      zipInputStream.close()
+      archiveInputStream.close()
+    }
+
+    (extractedEntries.toSeq, archiveErrors.toSeq)
+  }
+
   private[privyspark] def scanDirectoryStructure(
     spark: SparkSession,
     inputPath: String,
@@ -488,129 +836,156 @@ object PrivySparkApp {
     val conf = spark.sparkContext.hadoopConfiguration
     val path = new Path(inputPath)
     val fs = path.getFileSystem(conf)
+    val stagingPaths = ArrayBuffer.empty[LocalPath]
 
-    if (!fs.exists(path)) {
-      throw new IllegalArgumentException(s"Input path not found: $inputPath")
-    }
+    try {
+      if (!fs.exists(path)) {
+        throw new IllegalArgumentException(s"Input path not found: $inputPath")
+      }
 
-    val files = if (fs.getFileStatus(path).isFile) {
-      Seq(path.toString)
-    } else {
-      val iter = fs.listFiles(path, true)
-      val files = ArrayBuffer.empty[String]
-      while (iter.hasNext) {
-        val status = iter.next()
-        if (status.isFile) {
-          files += status.getPath.toString
+      val files = if (fs.getFileStatus(path).isFile) {
+        Seq(path.toString)
+      } else {
+        val iter = fs.listFiles(path, true)
+        val discoveredFiles = ArrayBuffer.empty[String]
+        while (iter.hasNext) {
+          val status = iter.next()
+          if (status.isFile) {
+            discoveredFiles += status.getPath.toString
+          }
+        }
+        discoveredFiles.toSeq.sorted
+      }
+      logDebug("scan_directory_files_discovered", "input_path" -> inputPath, "files" -> files.size)
+
+      val supportedFiles = ArrayBuffer.empty[ScanFileEntry]
+      val errors = ArrayBuffer.empty[ScanError]
+      val directoriesWithPreScanErrors = scala.collection.mutable.Set.empty[String]
+
+      files.foreach { filePath =>
+        val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
+        val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
+        val (expandedEntries, expandedErrors) =
+          expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, stagingPaths)
+
+        supportedFiles ++= expandedEntries
+        errors ++= expandedErrors
+
+        if (expandedEntries.nonEmpty) {
+          logDebug(
+            "scan_directory_file_supported",
+            "file" -> filePath,
+            "expanded_entries" -> expandedEntries.size,
+            "formats" -> expandedEntries.map(_.format).distinct.sorted.mkString(","),
+            "directory" -> parentDirectory
+          )
+        }
+        if (expandedErrors.nonEmpty) {
+          directoriesWithPreScanErrors += parentDirectory
+          logDebug(
+            "scan_directory_file_unsupported",
+            "file" -> filePath,
+            "directory" -> parentDirectory,
+            "errors" -> expandedErrors.size
+          )
         }
       }
-      files.toSeq.sorted
-    }
-    logDebug("scan_directory_files_discovered", "input_path" -> inputPath, "files" -> files.size)
 
-    val supportedFiles = ArrayBuffer.empty[ScanFileEntry]
-    val errors = ArrayBuffer.empty[ScanError]
-    val directoriesWithPreScanErrors = scala.collection.mutable.Set.empty[String]
+      val groupedByDirectoryAndFormat = supportedFiles
+        .groupBy(file => (file.directoryPath, file.format))
+        .toSeq
+        .sortBy { case ((directoryPath, format), _) => (directoryPath, format) }
+        .map {
+          case ((directoryPath, format), groupedFiles) =>
+            val sortedFiles = groupedFiles.sortBy(_.sourceKey)
+            ScanGroup(
+              directoryPath = directoryPath,
+              format = format,
+              schemaSignature = "",
+              filePaths = sortedFiles.map(_.sourceKey),
+              physicalPathsByKey = sortedFiles.map(file => file.sourceKey -> file.physicalPath).toMap,
+              logicalIdentifiersByKey = sortedFiles.map(file => file.sourceKey -> file.logicalIdentifier).toMap,
+              readOptionsByKey = sortedFiles.collect {
+                case file if file.readOptions != ScanReadOptions() => file.sourceKey -> file.readOptions
+              }.toMap,
+              allowDirectoryIdentifier = sortedFiles.forall(_.allowDirectoryIdentifier)
+            )
+        }
+      logDebug("scan_directory_initial_groups_ready", "groups" -> groupedByDirectoryAndFormat.size, "supported_files" -> supportedFiles.size)
 
-    files.foreach { filePath =>
-      val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
-      FormatDetector.infer(filePath) match {
-        case Some(format) =>
-          supportedFiles += ScanFileEntry(filePath, parentDirectory, format)
-          logDebug("scan_directory_file_supported", "file" -> filePath, "format" -> format, "directory" -> parentDirectory)
-        case None =>
-          directoriesWithPreScanErrors += parentDirectory
-          errors += ScanError(
-            datasetPath,
-            timestamp,
-            resolveRelativeIdentifier(datasetPath, filePath),
-            s"Unsupported file format: $filePath"
-          )
-          logDebug("scan_directory_file_unsupported", "file" -> filePath, "directory" -> parentDirectory)
+      val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
+      groupedByDirectoryAndFormat.foreach { group =>
+        val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group)
+        schemaAwareGroups ++= splitGroups
+        errors ++= splitErrors
+        logDebug(
+          "scan_directory_group_schema_split",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "input_files" -> group.filePaths.size,
+          "split_groups" -> splitGroups.size,
+          "split_errors" -> splitErrors.size
+        )
+        if (splitErrors.nonEmpty) {
+          directoriesWithPreScanErrors += group.directoryPath
+        }
       }
-    }
 
-    val groupedByDirectoryAndFormat = supportedFiles
-      .groupBy(file => (file.directoryPath, file.format))
-      .toSeq
-      .sortBy { case ((directoryPath, format), _) => (directoryPath, format) }
-      .map {
-        case ((directoryPath, format), groupedFiles) =>
-          ScanGroup(
-            directoryPath = directoryPath,
-            format = format,
-            schemaSignature = "",
-            filePaths = groupedFiles.map(_.filePath).sorted
-          )
+      val groupsPerDirectory = schemaAwareGroups.groupBy(_.directoryPath).map {
+        case (directoryPath, groups) => directoryPath -> groups.size
       }
-    logDebug("scan_directory_initial_groups_ready", "groups" -> groupedByDirectoryAndFormat.size, "supported_files" -> supportedFiles.size)
 
-    val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
-    groupedByDirectoryAndFormat.foreach { group =>
-      val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group)
-      schemaAwareGroups ++= splitGroups
-      errors ++= splitErrors
+      val finalizedGroups = schemaAwareGroups.map { group =>
+        val directoryIdentifierEligible =
+          group.allowDirectoryIdentifier &&
+            groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 &&
+            group.filePaths.size > 1 &&
+            !directoriesWithPreScanErrors.contains(group.directoryPath)
+        val finalizedGroup = group.copy(
+          useDirectoryIdentifier = directoryIdentifierEligible && !group.schemaSampled,
+          directoryIdentifierEligible = directoryIdentifierEligible
+        )
+        logDebug(
+          "scan_group_planned",
+          "directory" -> finalizedGroup.directoryPath,
+          "format" -> finalizedGroup.format,
+          "schema" -> finalizedGroup.schemaSignature,
+          "files" -> finalizedGroup.filePaths.size,
+          "use_directory_identifier" -> finalizedGroup.useDirectoryIdentifier,
+          "schema_sampled" -> finalizedGroup.schemaSampled,
+          "csv_has_header" -> finalizedGroup.csvHasHeader
+        )
+        finalizedGroup
+      }
+
+      val directoryCount = files
+        .map(filePath => Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath))
+        .distinct
+        .size
+      val plannedGroups = finalizedGroups.toSeq.sortBy(group => (group.directoryPath, group.format, group.schemaSignature))
+
       logDebug(
-        "scan_directory_group_schema_split",
-        "directory" -> group.directoryPath,
-        "format" -> group.format,
-        "input_files" -> group.filePaths.size,
-        "split_groups" -> splitGroups.size,
-        "split_errors" -> splitErrors.size
+        "scan_directory_structure_complete",
+        "input_path" -> inputPath,
+        "total_files" -> files.size,
+        "supported_files" -> supportedFiles.size,
+        "groups" -> plannedGroups.size,
+        "errors" -> errors.size,
+        "directories" -> directoryCount
       )
-      if (splitErrors.nonEmpty) {
-        directoriesWithPreScanErrors += group.directoryPath
-      }
-    }
 
-    val groupsPerDirectory = schemaAwareGroups.groupBy(_.directoryPath).map {
-      case (directoryPath, groups) => directoryPath -> groups.size
-    }
-
-    val finalizedGroups = schemaAwareGroups.map { group =>
-      val directoryIdentifierEligible =
-        groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 &&
-          group.filePaths.size > 1 &&
-          !directoriesWithPreScanErrors.contains(group.directoryPath)
-      val finalizedGroup = group.copy(
-        useDirectoryIdentifier = directoryIdentifierEligible && !group.schemaSampled,
-        directoryIdentifierEligible = directoryIdentifierEligible
+      DirectoryScanPlan(
+        groups = plannedGroups,
+        errors = errors.toSeq,
+        totalFiles = files.size,
+        directoryCount = directoryCount,
+        stagingPaths = stagingPaths.toSeq
       )
-      logDebug(
-        "scan_group_planned",
-        "directory" -> finalizedGroup.directoryPath,
-        "format" -> finalizedGroup.format,
-        "schema" -> finalizedGroup.schemaSignature,
-        "files" -> finalizedGroup.filePaths.size,
-        "use_directory_identifier" -> finalizedGroup.useDirectoryIdentifier,
-        "schema_sampled" -> finalizedGroup.schemaSampled,
-        "csv_has_header" -> finalizedGroup.csvHasHeader
-      )
-      finalizedGroup
+    } catch {
+      case NonFatal(e) =>
+        cleanupStagingPaths(stagingPaths.toSeq)
+        throw e
     }
-
-    val directoryCount = files
-      .map(filePath => Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath))
-      .distinct
-      .size
-    val plannedGroups = finalizedGroups.toSeq.sortBy(group => (group.directoryPath, group.format, group.schemaSignature))
-
-    logDebug(
-      "scan_directory_structure_complete",
-      "input_path" -> inputPath,
-      "total_files" -> files.size,
-      "supported_files" -> supportedFiles.size,
-      "groups" -> plannedGroups.size,
-      "errors" -> errors.size,
-      "directories" -> directoryCount
-    )
-
-    DirectoryScanPlan(
-      groups = plannedGroups,
-      errors = errors.toSeq,
-      totalFiles = files.size,
-      directoryCount = directoryCount
-    )
   }
 
   private[privyspark] def splitGroupBySchemaFast(
@@ -629,10 +1004,13 @@ object PrivySparkApp {
         "files" -> group.filePaths.size
       )
 
+      val sampledSourceKey = group.filePaths.head
+      val sampledPhysicalPath = resolvePhysicalPath(group, sampledSourceKey)
+      val sampledReadOptions = resolveReadOptions(group, sampledSourceKey)
       val sampledSchemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, group.filePaths.head)
+        inferCsvSchemaSignature(spark, sampledPhysicalPath)
       } else {
-        inferSchemaSignature(spark, group.format, group.filePaths.head).map(signature => (signature, true))
+        inferSchemaSignature(spark, group.format, sampledPhysicalPath, sampledReadOptions).map(signature => (signature, true))
       }
 
       sampledSchemaResult match {
@@ -680,21 +1058,23 @@ object PrivySparkApp {
     val filesBySchema = scala.collection.mutable.Map.empty[(String, Boolean), ArrayBuffer[String]]
     val errors = ArrayBuffer.empty[ScanError]
 
-    group.filePaths.foreach { filePath =>
+    group.filePaths.foreach { sourceKey =>
+      val physicalPath = resolvePhysicalPath(group, sourceKey)
+      val readOptions = resolveReadOptions(group, sourceKey)
       val schemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, filePath)
+        inferCsvSchemaSignature(spark, physicalPath)
       } else {
-        inferSchemaSignature(spark, group.format, filePath).map(signature => (signature, true))
+        inferSchemaSignature(spark, group.format, physicalPath, readOptions).map(signature => (signature, true))
       }
 
       schemaResult match {
         case Right((schemaSignature, csvHasHeader)) =>
           val groupedFiles = filesBySchema.getOrElseUpdate((schemaSignature, csvHasHeader), ArrayBuffer.empty[String])
-          groupedFiles += filePath
+          groupedFiles += sourceKey
           logDebug(
             "group_schema_signature_detected",
             "directory" -> group.directoryPath,
-            "file" -> filePath,
+            "file" -> physicalPath,
             "format" -> group.format,
             "schema" -> schemaSignature,
             "csv_has_header" -> csvHasHeader
@@ -703,14 +1083,14 @@ object PrivySparkApp {
           logDebug(
             "group_schema_signature_failed",
             "directory" -> group.directoryPath,
-            "file" -> filePath,
+            "file" -> physicalPath,
             "format" -> group.format,
             "reason" -> errorMessage
           )
           errors += ScanError(
             datasetPath,
             timestamp,
-            resolveRelativeIdentifier(datasetPath, filePath),
+            resolveLogicalIdentifier(group, datasetPath, sourceKey),
             s"Schema detection failed: $errorMessage"
           )
       }
@@ -854,11 +1234,12 @@ object PrivySparkApp {
   private[privyspark] def inferSchemaSignature(
     spark: SparkSession,
     format: String,
-    filePath: String
+    filePath: String,
+    readOptions: ScanReadOptions = ScanReadOptions()
   ): Either[String, String] = {
     try {
       val schemaSignature = withFileReadRetry(spark, Seq(filePath), "schema_detection") {
-        val schema = readSchemaSource(spark, format, filePath).schema
+        val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
         val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
         if (format == "csv") {
           // CSV는 헤더 순서가 데이터 매핑에 직접 영향을 주므로 순서를 유지한다.
@@ -891,7 +1272,8 @@ object PrivySparkApp {
     spark: SparkSession,
     format: String,
     filePath: String,
-    csvHasHeader: Boolean = true
+    csvHasHeader: Boolean = true,
+    readOptions: ScanReadOptions = ScanReadOptions()
   ): DataFrame = {
     logDebug("read_schema_source_start", "format" -> format, "file" -> filePath)
     format match {
@@ -905,6 +1287,19 @@ object PrivySparkApp {
         spark.read
           .option("mode", "PERMISSIVE")
           .json(filePath)
+      case AvroFormat =>
+        spark.read.format("avro").load(filePath)
+      case XlsxFormat =>
+        spark.read
+          .format("com.crealytics.spark.excel")
+          .option("header", "true")
+          .option("inferSchema", "false")
+          .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
+            throw new IllegalArgumentException("Sheet name is required for xlsx sources")
+          }))
+          .load(filePath)
+      case TextFormat =>
+        spark.read.text(filePath)
       case "parquet" =>
         spark.read.parquet(filePath)
       case "orc" =>
@@ -953,6 +1348,20 @@ object PrivySparkApp {
         "mode" -> "sampled_csv_exact_split"
       )
       return exactSplitResult
+    }
+
+    if (!supportsBatchScan(group)) {
+      val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
+      logDebug(
+        "group_scan_complete",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "schema" -> group.schemaSignature,
+        "result_rows" -> fallbackResult._1.size,
+        "error_rows" -> fallbackResult._2.size,
+        "mode" -> "direct_file_scan"
+      )
+      return fallbackResult
     }
 
     try {
@@ -1049,21 +1458,37 @@ object PrivySparkApp {
     )
     val successfulFileMetrics = ArrayBuffer.empty[FileScanMetrics]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
-    executeInParallel(parallelism, group.filePaths.map { filePath =>
+    executeInParallel(parallelism, group.filePaths.map { sourceKey =>
       () => {
-        logDebug("group_scan_fallback_file_start", "file" -> filePath, "directory" -> group.directoryPath)
+        val physicalPath = resolvePhysicalPath(group, sourceKey)
+        val readOptions = resolveReadOptions(group, sourceKey)
+        val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
+        logDebug("group_scan_fallback_file_start", "file" -> physicalPath, "directory" -> group.directoryPath)
         val csvHasHeaderOverride =
           if (group.format == "csv" && group.schemaSampled) None else Some(group.csvHasHeader)
-        filePath -> scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp, csvHasHeaderOverride)
+        sourceKey -> scanFileMetrics(
+          spark,
+          datasetPath,
+          sourceKey,
+          rules,
+          sampleRatio,
+          timestamp,
+          csvHasHeaderOverride,
+          formatOverride = Some(group.format),
+          logicalIdentifierOverride = Some(logicalIdentifier),
+          physicalPathOverride = Some(physicalPath),
+          readOptions = readOptions
+        )
       }
     }).foreach {
-      case (filePath, fileResult) =>
+      case (sourceKey, fileResult) =>
+        val physicalPath = resolvePhysicalPath(group, sourceKey)
         fileResult match {
         case Right(fileMetrics) =>
           successfulFileMetrics += fileMetrics
           logDebug(
             "group_scan_fallback_file_success",
-            "file" -> filePath,
+            "file" -> physicalPath,
             "file_identifier" -> fileMetrics.fileIdentifier,
             "sampled_rows" -> fileMetrics.sampledRowCount,
             "matches" -> fileMetrics.matchCounts.size
@@ -1072,7 +1497,7 @@ object PrivySparkApp {
           fallbackErrors += error
           logDebug(
             "group_scan_fallback_file_error",
-            "file" -> filePath,
+            "file" -> physicalPath,
             "file_identifier" -> error.file_identifier,
             "reason" -> error.error_message
           )
@@ -1151,8 +1576,9 @@ object PrivySparkApp {
       "sample_ratio" -> sampleRatio,
       "use_directory_identifier" -> group.useDirectoryIdentifier
     )
-    withFileReadRetry(spark, group.filePaths, "group_batch_scan") {
-      val baseDf = readSource(spark, group.format, group.filePaths, group.csvHasHeader)
+    val physicalPaths = group.filePaths.map(sourceKey => resolvePhysicalPath(group, sourceKey))
+    withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
+      val baseDf = readSource(spark, group.format, physicalPaths, group.csvHasHeader)
       val fileIdentifierColumn = if (group.useDirectoryIdentifier) {
         None
       } else {
@@ -1243,7 +1669,7 @@ object PrivySparkApp {
                   buildScanResults(
                     datasetPath,
                     timestamp,
-                    resolveRelativeIdentifier(datasetPath, matchCount.fileIdentifier),
+                    resolveLogicalIdentifierForPhysicalPath(group, datasetPath, matchCount.fileIdentifier),
                     sampledRowCount,
                     Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count))
                   ).headOption
@@ -1271,24 +1697,29 @@ object PrivySparkApp {
     rules: Seq[PiiRule],
     sampleRatio: Double,
     timestamp: String,
-    csvHasHeaderOverride: Option[Boolean] = None
+    csvHasHeaderOverride: Option[Boolean] = None,
+    formatOverride: Option[String] = None,
+    logicalIdentifierOverride: Option[String] = None,
+    physicalPathOverride: Option[String] = None,
+    readOptions: ScanReadOptions = ScanReadOptions()
   ): Either[ScanError, FileScanMetrics] = {
-    val fileIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
-    logDebug("scan_file_start", "file" -> filePath, "file_identifier" -> fileIdentifier, "sample_ratio" -> sampleRatio)
+    val physicalPath = physicalPathOverride.getOrElse(filePath)
+    val fileIdentifier = logicalIdentifierOverride.getOrElse(resolveRelativeIdentifier(datasetPath, physicalPath))
+    logDebug("scan_file_start", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "sample_ratio" -> sampleRatio)
 
     try {
-      withFileReadRetry(spark, Seq(filePath), "file_scan") {
-        val format = FormatDetector.infer(filePath).getOrElse {
-          logDebug("scan_file_error", "file" -> filePath, "file_identifier" -> fileIdentifier, "reason" -> "Unsupported file format")
-          return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $filePath"))
+      withFileReadRetry(spark, Seq(physicalPath), "file_scan") {
+        val format = formatOverride.orElse(FormatDetector.infer(physicalPath)).getOrElse {
+          logDebug("scan_file_error", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "reason" -> "Unsupported file format")
+          return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $fileIdentifier"))
         }
 
         val csvHasHeader = if (format == "csv") {
-          csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, filePath))
+          csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, physicalPath))
         } else {
           true
         }
-        val sourceDf = readSource(spark, format, Seq(filePath), csvHasHeader)
+        val sourceDf = readSource(spark, format, Seq(physicalPath), csvHasHeader, readOptions)
         val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
 
         sampledDf.cache()
@@ -1296,19 +1727,19 @@ object PrivySparkApp {
           val sampledRowCount = sampledDf.count()
           logDebug(
             "scan_file_sampled_rows",
-            "file" -> filePath,
+            "file" -> physicalPath,
             "file_identifier" -> fileIdentifier,
             "sampled_rows" -> sampledRowCount
           )
 
           if (sampledRowCount == 0L) {
-            logDebug("scan_file_complete", "file" -> filePath, "file_identifier" -> fileIdentifier, "matches" -> 0)
+            logDebug("scan_file_complete", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "matches" -> 0)
             Right(FileScanMetrics(fileIdentifier, sampledRowCount, Seq.empty))
           } else {
             val matchCounts = DetectionAggregator.aggregate(sampledDf, rules)
             logDebug(
               "scan_file_complete",
-              "file" -> filePath,
+              "file" -> physicalPath,
               "file_identifier" -> fileIdentifier,
               "matches" -> matchCounts.size
             )
@@ -1321,7 +1752,7 @@ object PrivySparkApp {
     } catch {
       case NonFatal(e) =>
         val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
-        logDebug("scan_file_error", "file" -> filePath, "file_identifier" -> fileIdentifier, "reason" -> errorMessage)
+        logDebug("scan_file_error", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "reason" -> errorMessage)
         Left(ScanError(datasetPath, timestamp, fileIdentifier, errorMessage))
     }
   }
@@ -1349,7 +1780,8 @@ object PrivySparkApp {
     spark: SparkSession,
     format: String,
     filePaths: Seq[String],
-    csvHasHeader: Boolean = true
+    csvHasHeader: Boolean = true,
+    readOptions: ScanReadOptions = ScanReadOptions()
   ): DataFrame = {
     require(filePaths.nonEmpty, "filePaths must not be empty")
     logDebug("read_source_start", "format" -> format, "files" -> filePaths.size, "first_file" -> filePaths.head)
@@ -1365,6 +1797,20 @@ object PrivySparkApp {
         spark.read
           .option("mode", "PERMISSIVE")
           .json(filePaths: _*)
+      case AvroFormat =>
+        spark.read.format("avro").load(filePaths: _*)
+      case XlsxFormat =>
+        require(filePaths.size == 1, "xlsx sources must be read one sheet at a time")
+        spark.read
+          .format("com.crealytics.spark.excel")
+          .option("header", "true")
+          .option("inferSchema", "false")
+          .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
+            throw new IllegalArgumentException("Sheet name is required for xlsx sources")
+          }))
+          .load(filePaths.head)
+      case TextFormat =>
+        spark.read.text(filePaths: _*)
       case "parquet" =>
         spark.read.parquet(filePaths: _*)
       case "orc" =>
