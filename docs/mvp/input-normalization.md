@@ -34,5 +34,6 @@
 
 ## 손상 입력과 fallback
 - JSON이 corrupt record만 생성하면 해당 파일은 손상 입력으로 기록합니다.
-- 그룹 batch scan 실패 시 exact split 재시도 후, 그래도 실패하면 파일 단위 fallback으로 전환합니다.
+- sampled multi-file group은 batch scan 전에 exact split으로 먼저 재검증합니다.
+- 일반 group에서 batch scan이 실패하면 별도 schema resplit 없이 곧바로 파일 단위 fallback으로 전환합니다.
 - 읽기 중 파일 교체/삭제가 발생하면 제한된 횟수 내에서 재시도합니다.

@@ -21,9 +21,9 @@
 4. `(directory, format)` 기준 1차 그룹화
 5. 대표 파일 기준 스키마 샘플링
 6. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
-7. 그룹 batch scan
-8. sampled group exact split 재검증
-9. 필요 시 파일 단위 fallback
+7. sampled multi-file group이면 exact split 재검증 후 재분류된 그룹 스캔
+8. non-sampled group이면 그룹 batch scan
+9. 일반 group batch 실패 시 파일 단위 fallback
 10. 결과/오류 리포트 저장
 
 ## 상세 문서 맵
