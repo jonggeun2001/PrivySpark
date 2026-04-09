@@ -17,7 +17,8 @@
 
 ## file_identifier 규칙
 - 기본은 입력 경로 기준 상대경로입니다.
-- exact split으로 동일 스키마가 확인된 디렉토리 그룹만 디렉토리 상대경로를 사용합니다.
+- 디렉토리 상대경로 승격은 exact split으로 동일 스키마가 확인되고, pre-scan 오류가 없고, 디렉토리 식별자 승격이 허용된 다중 파일 그룹에서만 일어납니다.
+- plain text fallback, archive 내부 파일, Excel 시트, 단일 파일 그룹은 파일 또는 논리 입력 식별자를 유지합니다.
 - 입력 루트 디렉토리 그룹은 `.`를 사용합니다.
 - archive 내부 파일은 `<archive>!<entry>` 형식을 사용합니다.
 - Excel 시트는 `<workbook>#<sheet>` 형식을 사용합니다.
