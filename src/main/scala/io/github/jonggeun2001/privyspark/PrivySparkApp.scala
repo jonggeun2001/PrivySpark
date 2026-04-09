@@ -12,6 +12,7 @@ import org.apache.spark.sql.functions.{col, input_file_name}
 import java.io.{BufferedReader, InputStreamReader}
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.Executors
 import java.nio.file.NoSuchFileException
 import com.univocity.parsers.csv.CsvParser
@@ -637,10 +638,21 @@ object PrivySparkApp {
 
       sampledSchemaResult match {
         case Right((schemaSignature, csvHasHeader)) =>
+          val (validatedFilePaths, validationErrors) =
+            if (group.format == "json") {
+              validateSampledJsonFiles(spark, datasetPath, timestamp, group)
+            } else {
+              (group.filePaths, Seq.empty)
+            }
+
+          if (validatedFilePaths.isEmpty) {
+            return (Seq.empty, validationErrors)
+          }
+
           val sampledGroup = group.copy(
             schemaSignature = schemaSignature,
-            filePaths = group.filePaths.sorted,
-            schemaSampled = true,
+            filePaths = validatedFilePaths.sorted,
+            schemaSampled = validatedFilePaths.size > 1,
             csvHasHeader = csvHasHeader
           )
           logDebug(
@@ -648,10 +660,11 @@ object PrivySparkApp {
             "directory" -> group.directoryPath,
             "format" -> group.format,
             "schema" -> schemaSignature,
-            "files" -> group.filePaths.size,
+            "files" -> validatedFilePaths.size,
+            "filtered_errors" -> validationErrors.size,
             "csv_has_header" -> csvHasHeader
           )
-          (Seq(sampledGroup), Seq.empty)
+          (Seq(sampledGroup), validationErrors)
         case Left(errorMessage) =>
           logDebug(
             "scan_group_schema_sample_fallback",
@@ -663,6 +676,44 @@ object PrivySparkApp {
           splitGroupBySchema(spark, datasetPath, timestamp, group)
       }
     }
+  }
+
+  private def validateSampledJsonFiles(
+    spark: SparkSession,
+    datasetPath: String,
+    timestamp: String,
+    group: ScanGroup
+  ): (Seq[String], Seq[ScanError]) = {
+    val validFilePaths = ArrayBuffer.empty[String]
+    val errors = ArrayBuffer.empty[ScanError]
+
+    group.filePaths.foreach { filePath =>
+      try {
+        withFileReadRetry(spark, Seq(filePath), "schema_detection") {
+          readSchemaSource(spark, group.format, filePath, group.csvHasHeader)
+          ()
+        }
+        validFilePaths += filePath
+      } catch {
+        case NonFatal(e) =>
+          val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+          logDebug(
+            "group_schema_signature_failed",
+            "directory" -> group.directoryPath,
+            "file" -> filePath,
+            "format" -> group.format,
+            "reason" -> errorMessage
+          )
+          errors += ScanError(
+            datasetPath,
+            timestamp,
+            resolveRelativeIdentifier(datasetPath, filePath),
+            s"Schema detection failed: $errorMessage"
+          )
+      }
+    }
+
+    (validFilePaths.toSeq, errors.toSeq)
   }
 
   private[privyspark] def splitGroupBySchema(
@@ -887,26 +938,30 @@ object PrivySparkApp {
     candidate
   }
 
+  private def newJsonCorruptRecordColumnName(): String = {
+    s"${FileIdentifierColumn}_json_corrupt_${UUID.randomUUID().toString.replace("-", "")}"
+  }
+
   private def ensureReadableSourceColumns(
-    spark: SparkSession,
     format: String,
     sourcePaths: Seq[String],
-    df: DataFrame
+    df: DataFrame,
+    internalCorruptRecordColumnName: Option[String] = None
   ): DataFrame = {
     val normalizedFormat = Option(format).map(_.toLowerCase).getOrElse("")
-    if (normalizedFormat == "json" || normalizedFormat == "csv") {
-      val corruptRecordColumn = spark.sessionState.conf.columnNameOfCorruptRecord
+    if (normalizedFormat == "json") {
       val schemaFieldNames = df.schema.fieldNames.toSeq
-      val hasOnlyCorruptRecordColumn =
-        schemaFieldNames.nonEmpty && schemaFieldNames.forall(_.equalsIgnoreCase(corruptRecordColumn))
+      val hasOnlyInternalCorruptRecordColumn = internalCorruptRecordColumnName.exists { columnName =>
+        schemaFieldNames.size == 1 && schemaFieldNames.head == columnName
+      }
 
-      if (hasOnlyCorruptRecordColumn) {
+      if (hasOnlyInternalCorruptRecordColumn) {
         val sourceDescription = sourcePaths match {
           case Seq(singlePath) => singlePath
           case paths => s"${paths.size} files (first: ${paths.head})"
         }
         throw new IllegalArgumentException(
-          s"Malformed $normalizedFormat input contains only corrupt records: $sourceDescription"
+          s"Malformed json input contains only corrupt records: $sourceDescription"
         )
       }
     }
@@ -921,25 +976,33 @@ object PrivySparkApp {
     csvHasHeader: Boolean = true
   ): DataFrame = {
     logDebug("read_schema_source_start", "format" -> format, "file" -> filePath)
-    val df = format match {
+    val (df, internalCorruptRecordColumnName) = format match {
       case "csv" =>
-        spark.read
-          .option("header", csvHasHeader.toString)
-          .option("inferSchema", "false")
-          .option("mode", "PERMISSIVE")
-          .csv(filePath)
+        (
+          spark.read
+            .option("header", csvHasHeader.toString)
+            .option("inferSchema", "false")
+            .option("mode", "PERMISSIVE")
+            .csv(filePath),
+          None
+        )
       case "json" =>
-        spark.read
-          .option("mode", "PERMISSIVE")
-          .json(filePath)
+        val corruptRecordColumnName = newJsonCorruptRecordColumnName()
+        (
+          spark.read
+            .option("mode", "PERMISSIVE")
+            .option("columnNameOfCorruptRecord", corruptRecordColumnName)
+            .json(filePath),
+          Some(corruptRecordColumnName)
+        )
       case "parquet" =>
-        spark.read.parquet(filePath)
+        (spark.read.parquet(filePath), None)
       case "orc" =>
-        spark.read.orc(filePath)
+        (spark.read.orc(filePath), None)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
-    ensureReadableSourceColumns(spark, format, Seq(filePath), df)
+    ensureReadableSourceColumns(format, Seq(filePath), df, internalCorruptRecordColumnName)
   }
 
   private[privyspark] def scanGroup(
@@ -1382,25 +1445,33 @@ object PrivySparkApp {
     require(filePaths.nonEmpty, "filePaths must not be empty")
     logDebug("read_source_start", "format" -> format, "files" -> filePaths.size, "first_file" -> filePaths.head)
 
-    val df = format match {
+    val (df, internalCorruptRecordColumnName) = format match {
       case "csv" =>
-        spark.read
-          .option("header", csvHasHeader.toString)
-          .option("inferSchema", "false")
-          .option("mode", "PERMISSIVE")
-          .csv(filePaths: _*)
+        (
+          spark.read
+            .option("header", csvHasHeader.toString)
+            .option("inferSchema", "false")
+            .option("mode", "PERMISSIVE")
+            .csv(filePaths: _*),
+          None
+        )
       case "json" =>
-        spark.read
-          .option("mode", "PERMISSIVE")
-          .json(filePaths: _*)
+        val corruptRecordColumnName = newJsonCorruptRecordColumnName()
+        (
+          spark.read
+            .option("mode", "PERMISSIVE")
+            .option("columnNameOfCorruptRecord", corruptRecordColumnName)
+            .json(filePaths: _*),
+          Some(corruptRecordColumnName)
+        )
       case "parquet" =>
-        spark.read.parquet(filePaths: _*)
+        (spark.read.parquet(filePaths: _*), None)
       case "orc" =>
-        spark.read.orc(filePaths: _*)
+        (spark.read.orc(filePaths: _*), None)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
-    ensureReadableSourceColumns(spark, format, filePaths, df)
+    ensureReadableSourceColumns(format, filePaths, df, internalCorruptRecordColumnName)
   }
 
   private def createCsvOptions(spark: SparkSession): CSVOptions = {
