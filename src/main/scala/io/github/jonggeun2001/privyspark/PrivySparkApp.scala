@@ -664,7 +664,8 @@ object PrivySparkApp {
     physicalPath: String,
     logicalIdentifier: String,
     groupingDirectoryPath: String,
-    stagingPaths: ArrayBuffer[String]
+    stagingPaths: ArrayBuffer[String],
+    forceDisableDirectoryIdentifier: Boolean = false
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
     val detectedFormat = FormatDetector.infer(physicalPath).orElse(FormatDetector.infer(logicalIdentifier))
     detectedFormat match {
@@ -681,7 +682,7 @@ object PrivySparkApp {
               directoryPath = groupingDirectoryPath,
               format = format,
               logicalIdentifier = logicalIdentifier,
-              allowDirectoryIdentifier = !NonDirectoryIdentifierFormats.contains(format)
+              allowDirectoryIdentifier = !forceDisableDirectoryIdentifier && !NonDirectoryIdentifierFormats.contains(format)
             )
           ),
           Seq.empty
@@ -759,16 +760,28 @@ object PrivySparkApp {
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
     val sourcePath = new Path(archivePath)
     val fs = sourcePath.getFileSystem(conf)
-    val archiveInputStream = fs.open(sourcePath)
-    val zipInputStream = new ZipInputStream(archiveInputStream)
     val extractedEntries = ArrayBuffer.empty[ScanFileEntry]
     val archiveErrors = ArrayBuffer.empty[ScanError]
+    val stagingBase = new Path(fs.getHomeDirectory, ".privyspark-staging")
+    if (!fs.exists(stagingBase) && !fs.mkdirs(stagingBase)) {
+      return (
+        Seq.empty,
+        Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Archive staging base creation failed: ${stagingBase.toString}"))
+      )
+    }
     val stagingRoot = new Path(
-      Option(sourcePath.getParent).getOrElse(sourcePath),
-      s".privyspark-archive-${System.currentTimeMillis()}-${math.abs(scala.util.Random.nextLong())}"
+      stagingBase,
+      s"archive-${System.currentTimeMillis()}-${math.abs(scala.util.Random.nextLong())}"
     )
-    fs.mkdirs(stagingRoot)
+    if (!fs.mkdirs(stagingRoot) && !fs.exists(stagingRoot)) {
+      return (
+        Seq.empty,
+        Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Archive staging directory creation failed: ${stagingRoot.toString}"))
+      )
+    }
     stagingPaths += stagingRoot.toString
+    val archiveInputStream = fs.open(sourcePath)
+    val zipInputStream = new ZipInputStream(archiveInputStream)
 
     try {
       var entry = zipInputStream.getNextEntry
@@ -802,7 +815,8 @@ object PrivySparkApp {
                     targetPath.toString,
                     childLogicalIdentifier,
                     logicalIdentifier,
-                    stagingPaths
+                    stagingPaths,
+                    forceDisableDirectoryIdentifier = true
                   )
                   extractedEntries ++= childEntries
                   archiveErrors ++= childErrors
@@ -858,7 +872,8 @@ object PrivySparkApp {
                         targetPath.toString,
                         childLogicalIdentifier,
                         logicalIdentifier,
-                        stagingPaths
+                        stagingPaths,
+                        forceDisableDirectoryIdentifier = true
                       )
                       extractedEntries ++= childEntries
                       archiveErrors ++= childErrors
