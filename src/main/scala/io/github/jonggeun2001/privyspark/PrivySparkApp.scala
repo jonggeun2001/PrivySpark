@@ -1041,7 +1041,7 @@ object PrivySparkApp {
         val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
         val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
         val preScanErrorScope = FormatDetector.infer(filePath) match {
-          case Some(format) if ArchiveFormats.contains(format) => logicalIdentifier
+          case Some(format) if ArchiveFormats.contains(format) || format == XlsxFormat => logicalIdentifier
           case _ => parentDirectory
         }
         val (expandedEntries, expandedErrors) =

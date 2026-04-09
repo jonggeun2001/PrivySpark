@@ -1970,6 +1970,31 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("workbook pre-scan errors do not disable directory aggregation for sibling flat files") {
+    val inputDir = Files.createTempDirectory("privyspark-xlsx-error-scope-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("part-a.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(inputDir.resolve("part-b.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n")
+      writeText(inputDir.resolve("broken.xlsx"), "not a real workbook")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set((".", "email", 2L)))
+      assert(errors.exists(_.file_identifier == "broken.xlsx"))
+      assert(errors.exists(_.error_message.contains("Workbook read failed")))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules scans text-like unknown extensions through the value column") {
     val inputDir = Files.createTempDirectory("privyspark-text-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
