@@ -487,6 +487,29 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure records malformed json files without exposing Spark corrupt-record errors") {
+    val inputDir = Files.createTempDirectory("privyspark-malformed-json-")
+
+    try {
+      writeText(inputDir.resolve("broken.json"),
+        "{\"email\":\"alice@example.com\"\n")
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-09T00:00:00Z"
+      )
+
+      assert(plan.groups.isEmpty)
+      assert(plan.errors.map(_.file_identifier) == Seq("broken.json"))
+      assert(plan.errors.head.error_message.contains("Malformed json input contains only corrupt records"))
+      assert(!plan.errors.head.error_message.contains("Since Spark 2.3"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure keeps a single CSV file unsampled and preserves headerless mode") {
     val inputDir = Files.createTempDirectory("privyspark-single-headerless-csv-")
     val timestamp = "2026-03-13T00:00:00Z"

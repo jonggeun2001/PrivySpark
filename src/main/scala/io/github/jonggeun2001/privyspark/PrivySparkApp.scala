@@ -887,6 +887,33 @@ object PrivySparkApp {
     candidate
   }
 
+  private def ensureReadableSourceColumns(
+    spark: SparkSession,
+    format: String,
+    sourcePaths: Seq[String],
+    df: DataFrame
+  ): DataFrame = {
+    val normalizedFormat = Option(format).map(_.toLowerCase).getOrElse("")
+    if (normalizedFormat == "json" || normalizedFormat == "csv") {
+      val corruptRecordColumn = spark.sessionState.conf.columnNameOfCorruptRecord
+      val schemaFieldNames = df.schema.fieldNames.toSeq
+      val hasOnlyCorruptRecordColumn =
+        schemaFieldNames.nonEmpty && schemaFieldNames.forall(_.equalsIgnoreCase(corruptRecordColumn))
+
+      if (hasOnlyCorruptRecordColumn) {
+        val sourceDescription = sourcePaths match {
+          case Seq(singlePath) => singlePath
+          case paths => s"${paths.size} files (first: ${paths.head})"
+        }
+        throw new IllegalArgumentException(
+          s"Malformed $normalizedFormat input contains only corrupt records: $sourceDescription"
+        )
+      }
+    }
+
+    df
+  }
+
   private def readSchemaSource(
     spark: SparkSession,
     format: String,
@@ -894,7 +921,7 @@ object PrivySparkApp {
     csvHasHeader: Boolean = true
   ): DataFrame = {
     logDebug("read_schema_source_start", "format" -> format, "file" -> filePath)
-    format match {
+    val df = format match {
       case "csv" =>
         spark.read
           .option("header", csvHasHeader.toString)
@@ -912,6 +939,7 @@ object PrivySparkApp {
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
+    ensureReadableSourceColumns(spark, format, Seq(filePath), df)
   }
 
   private[privyspark] def scanGroup(
@@ -1354,7 +1382,7 @@ object PrivySparkApp {
     require(filePaths.nonEmpty, "filePaths must not be empty")
     logDebug("read_source_start", "format" -> format, "files" -> filePaths.size, "first_file" -> filePaths.head)
 
-    format match {
+    val df = format match {
       case "csv" =>
         spark.read
           .option("header", csvHasHeader.toString)
@@ -1372,6 +1400,7 @@ object PrivySparkApp {
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
+    ensureReadableSourceColumns(spark, format, filePaths, df)
   }
 
   private def createCsvOptions(spark: SparkSession): CSVOptions = {
