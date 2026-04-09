@@ -42,8 +42,10 @@
 - 다중 파일 그룹은 대표 파일 1개로 스키마를 샘플링하고 `schemaSampled=true`로 표시한다
 - sampled group은 exact split으로 동질성이 확인되기 전까지 `useDirectoryIdentifier=false`로 유지한다
 - archive 내부 파일과 Excel 시트는 논리 입력(`archive!entry`, `workbook#sheet`) 기준 식별자를 유지하며 디렉토리 식별자로 승격하지 않는다
-- CSV sampled group은 대표 파일의 헤더 유무 판정을 전체에 전파하지 않도록 batch scan 전에 exact split으로 재확인한다
-- sampled group 배치 읽기 실패 시 전체 파일 exact split으로 재분류하고, 여러 서브그룹으로 갈라지면 `useDirectoryIdentifier=false`로 강등한다
+- sampled multi-file group은 batch scan 전에 exact split으로 재확인하고, 단일 동일-스키마 그룹이면 `useDirectoryIdentifier=true`로 복원한다
+- CSV는 exact split 단계에서 대표 파일의 헤더 유무 판정을 전체에 전파하지 않도록 헤더 드리프트도 함께 재확인한다
+- exact split 이후에도 batch 읽기가 실패하면 파일 단위 폴백으로 전환하고, 여러 서브그룹으로 갈라지면 `useDirectoryIdentifier=false`를 유지한다
+- JSON 스키마 판별 또는 배치 읽기 결과가 Spark 내부 corrupt record 컬럼만 남기면 해당 파일/배치는 손상 입력으로 간주하고 내부 Spark 예외 대신 PrivySpark 오류 메시지로 전환한다
 - CSV는 헤더 유무를 자동 감지한다. 헤더가 있으면 헤더 순서를 유지한 시그니처를 만들고, 헤더가 없으면 컬럼 수 기반 시그니처(`cols:N`)를 사용한다. plain-text 2행 tie-case는 header 쪽으로 처리한다
 - unknown-extension text fallback은 단일 `value` 컬럼 스키마로 취급한다
 - exact split으로 동일 스키마가 확인되고 pre-scan 오류가 없는 단일 디렉토리 그룹이면 결과 `file_identifier`는 파일명이 아니라 디렉토리 상대경로를 사용하며, 입력 루트 디렉토리 그룹은 `.`로 표기
@@ -53,6 +55,7 @@
 - 기본/커스텀 ruleset 모두 `pii_type: name`은 지원하지 않으며, 포함 시 로드 단계에서 실패한다.
 - 기본/커스텀 ruleset 모두 제거된 `validator` 필드와 `__KOREAN_NAME_RULE_REGEX__` 내부 참조를 지원하지 않으며, 포함 시 로드 단계에서 실패한다.
 - 기본 ruleset은 전화번호, 이메일, 주민등록번호, 외국인 등록번호, 운전면허번호, 주소, 계좌번호, 카드번호, 한국 여권번호, IP를 기본 탐지 대상으로 포함한다.
+- 기본 `resident_registration_number`는 하이픈 포함/미포함 입력 모두에서 성별/세기 코드 1자리만 있는 축약형과 전체 형식을 모두 허용하고, 더 긴 숫자 토큰 내부 substring 매치는 제외한다.
 - 기본 `driver_license_number`는 candidate regex에 매칭된 값에 대해 하이픈 정규화 후 구형 10자리 또는 현행 12자리 형식만 통과시키는 내장 strict validator를 적용한다. 현행 12자리는 지역코드 `11`~`26`, `28`만 허용한다.
 - 기본 ruleset의 `passport_number`는 한국 여권번호 형식만 대상으로 하고, 다른 영숫자 토큰 내부 substring 매치는 제외한다.
 - 규칙이 `column_hints`를 가지면 컬럼명 힌트와 매칭되는 컬럼에만 metric을 생성하고, 힌트가 없으면 모든 컬럼에 적용한다.

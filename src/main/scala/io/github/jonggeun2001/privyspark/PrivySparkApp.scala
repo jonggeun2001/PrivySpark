@@ -13,6 +13,7 @@ import org.apache.spark.sql.functions.{col, input_file_name}
 import java.io.{BufferedReader, InputStreamReader}
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.zip.ZipInputStream
 import java.nio.file.NoSuchFileException
@@ -1108,10 +1109,21 @@ object PrivySparkApp {
 
       sampledSchemaResult match {
         case Right((schemaSignature, csvHasHeader)) =>
+          val (validatedFilePaths, validationErrors) =
+            if (group.format == "json") {
+              validateSampledJsonFiles(spark, datasetPath, timestamp, group)
+            } else {
+              (group.filePaths, Seq.empty)
+            }
+
+          if (validatedFilePaths.isEmpty) {
+            return (Seq.empty, validationErrors)
+          }
+
           val sampledGroup = group.copy(
             schemaSignature = schemaSignature,
-            filePaths = group.filePaths.sorted,
-            schemaSampled = true,
+            filePaths = validatedFilePaths.sorted,
+            schemaSampled = validatedFilePaths.size > 1,
             csvHasHeader = csvHasHeader
           )
           logDebug(
@@ -1119,10 +1131,11 @@ object PrivySparkApp {
             "directory" -> group.directoryPath,
             "format" -> group.format,
             "schema" -> schemaSignature,
-            "files" -> group.filePaths.size,
+            "files" -> validatedFilePaths.size,
+            "filtered_errors" -> validationErrors.size,
             "csv_has_header" -> csvHasHeader
           )
-          (Seq(sampledGroup), Seq.empty)
+          (Seq(sampledGroup), validationErrors)
         case Left(errorMessage) =>
           logDebug(
             "scan_group_schema_sample_fallback",
@@ -1134,6 +1147,44 @@ object PrivySparkApp {
           splitGroupBySchema(spark, datasetPath, timestamp, group)
       }
     }
+  }
+
+  private def validateSampledJsonFiles(
+    spark: SparkSession,
+    datasetPath: String,
+    timestamp: String,
+    group: ScanGroup
+  ): (Seq[String], Seq[ScanError]) = {
+    val validFilePaths = ArrayBuffer.empty[String]
+    val errors = ArrayBuffer.empty[ScanError]
+
+    group.filePaths.foreach { filePath =>
+      try {
+        withFileReadRetry(spark, Seq(filePath), "schema_detection") {
+          readSchemaSource(spark, group.format, filePath, group.csvHasHeader)
+          ()
+        }
+        validFilePaths += filePath
+      } catch {
+        case NonFatal(e) =>
+          val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+          logDebug(
+            "group_schema_signature_failed",
+            "directory" -> group.directoryPath,
+            "file" -> filePath,
+            "format" -> group.format,
+            "reason" -> errorMessage
+          )
+          errors += ScanError(
+            datasetPath,
+            timestamp,
+            resolveRelativeIdentifier(datasetPath, filePath),
+            s"Schema detection failed: $errorMessage"
+          )
+      }
+    }
+
+    (validFilePaths.toSeq, errors.toSeq)
   }
 
   private[privyspark] def splitGroupBySchema(
@@ -1361,6 +1412,38 @@ object PrivySparkApp {
     candidate
   }
 
+  private def newJsonCorruptRecordColumnName(): String = {
+    s"${FileIdentifierColumn}_json_corrupt_${UUID.randomUUID().toString.replace("-", "")}"
+  }
+
+  private def ensureReadableSourceColumns(
+    format: String,
+    sourcePaths: Seq[String],
+    df: DataFrame,
+    internalCorruptRecordColumnName: Option[String] = None
+  ): DataFrame = {
+    val normalizedFormat = Option(format).map(_.toLowerCase).getOrElse("")
+    if (normalizedFormat == "json") {
+      val schemaFieldNames = df.schema.fieldNames.toSeq
+      internalCorruptRecordColumnName match {
+        case Some(columnName) if schemaFieldNames.size == 1 && schemaFieldNames.head == columnName =>
+          val sourceDescription = sourcePaths match {
+            case Seq(singlePath) => singlePath
+            case paths => s"${paths.size} files (first: ${paths.head})"
+          }
+          throw new IllegalArgumentException(
+            s"Malformed json input contains only corrupt records: $sourceDescription"
+          )
+        case Some(columnName) if schemaFieldNames.contains(columnName) =>
+          df.drop(columnName)
+        case _ =>
+          df
+      }
+    } else {
+      df
+    }
+  }
+
   private def readSchemaSource(
     spark: SparkSession,
     format: String,
@@ -1369,37 +1452,49 @@ object PrivySparkApp {
     readOptions: ScanReadOptions = ScanReadOptions()
   ): DataFrame = {
     logDebug("read_schema_source_start", "format" -> format, "file" -> filePath)
-    format match {
+    val (df, internalCorruptRecordColumnName) = format match {
       case "csv" =>
-        spark.read
-          .option("header", csvHasHeader.toString)
-          .option("inferSchema", "false")
-          .option("mode", "PERMISSIVE")
-          .csv(filePath)
+        (
+          spark.read
+            .option("header", csvHasHeader.toString)
+            .option("inferSchema", "false")
+            .option("mode", "PERMISSIVE")
+            .csv(filePath),
+          None
+        )
       case "json" =>
-        spark.read
-          .option("mode", "PERMISSIVE")
-          .json(filePath)
+        val corruptRecordColumnName = newJsonCorruptRecordColumnName()
+        (
+          spark.read
+            .option("mode", "PERMISSIVE")
+            .option("columnNameOfCorruptRecord", corruptRecordColumnName)
+            .json(filePath),
+          Some(corruptRecordColumnName)
+        )
       case AvroFormat =>
-        spark.read.format("avro").load(filePath)
+        (spark.read.format("avro").load(filePath), None)
       case XlsxFormat =>
-        spark.read
-          .format("com.crealytics.spark.excel")
-          .option("header", "true")
-          .option("inferSchema", "false")
-          .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
-            throw new IllegalArgumentException("Sheet name is required for xlsx sources")
-          }))
-          .load(filePath)
+        (
+          spark.read
+            .format("com.crealytics.spark.excel")
+            .option("header", "true")
+            .option("inferSchema", "false")
+            .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
+              throw new IllegalArgumentException("Sheet name is required for xlsx sources")
+            }))
+            .load(filePath),
+          None
+        )
       case TextFormat =>
-        spark.read.text(filePath)
+        (spark.read.text(filePath), None)
       case "parquet" =>
-        spark.read.parquet(filePath)
+        (spark.read.parquet(filePath), None)
       case "orc" =>
-        spark.read.orc(filePath)
+        (spark.read.orc(filePath), None)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
+    ensureReadableSourceColumns(format, Seq(filePath), df, internalCorruptRecordColumnName)
   }
 
   private[privyspark] def scanGroup(
@@ -1421,7 +1516,7 @@ object PrivySparkApp {
       "schema_sampled" -> group.schemaSampled,
       "csv_has_header" -> group.csvHasHeader
     )
-    if (group.schemaSampled && group.format == "csv" && group.filePaths.size > 1) {
+    if (group.schemaSampled && group.filePaths.size > 1) {
       val exactSplitResult = rescanSampledGroupWithExactSplit(
         spark,
         datasetPath,
@@ -1429,7 +1524,7 @@ object PrivySparkApp {
         rules,
         sampleRatio,
         timestamp,
-        "sampled_csv_exact_split"
+        "sampled_exact_split"
       )
       logDebug(
         "group_scan_complete",
@@ -1438,7 +1533,7 @@ object PrivySparkApp {
         "schema" -> group.schemaSignature,
         "result_rows" -> exactSplitResult._1.size,
         "error_rows" -> exactSplitResult._2.size,
-        "mode" -> "sampled_csv_exact_split"
+        "mode" -> "sampled_exact_split"
       )
       return exactSplitResult
     }
@@ -1879,38 +1974,50 @@ object PrivySparkApp {
     require(filePaths.nonEmpty, "filePaths must not be empty")
     logDebug("read_source_start", "format" -> format, "files" -> filePaths.size, "first_file" -> filePaths.head)
 
-    format match {
+    val (df, internalCorruptRecordColumnName) = format match {
       case "csv" =>
-        spark.read
-          .option("header", csvHasHeader.toString)
-          .option("inferSchema", "false")
-          .option("mode", "PERMISSIVE")
-          .csv(filePaths: _*)
+        (
+          spark.read
+            .option("header", csvHasHeader.toString)
+            .option("inferSchema", "false")
+            .option("mode", "PERMISSIVE")
+            .csv(filePaths: _*),
+          None
+        )
       case "json" =>
-        spark.read
-          .option("mode", "PERMISSIVE")
-          .json(filePaths: _*)
+        val corruptRecordColumnName = newJsonCorruptRecordColumnName()
+        (
+          spark.read
+            .option("mode", "PERMISSIVE")
+            .option("columnNameOfCorruptRecord", corruptRecordColumnName)
+            .json(filePaths: _*),
+          Some(corruptRecordColumnName)
+        )
       case AvroFormat =>
-        spark.read.format("avro").load(filePaths: _*)
+        (spark.read.format("avro").load(filePaths: _*), None)
       case XlsxFormat =>
         require(filePaths.size == 1, "xlsx sources must be read one sheet at a time")
-        spark.read
-          .format("com.crealytics.spark.excel")
-          .option("header", "true")
-          .option("inferSchema", "false")
-          .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
-            throw new IllegalArgumentException("Sheet name is required for xlsx sources")
-          }))
-          .load(filePaths.head)
+        (
+          spark.read
+            .format("com.crealytics.spark.excel")
+            .option("header", "true")
+            .option("inferSchema", "false")
+            .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
+              throw new IllegalArgumentException("Sheet name is required for xlsx sources")
+            }))
+            .load(filePaths.head),
+          None
+        )
       case TextFormat =>
-        spark.read.text(filePaths: _*)
+        (spark.read.text(filePaths: _*), None)
       case "parquet" =>
-        spark.read.parquet(filePaths: _*)
+        (spark.read.parquet(filePaths: _*), None)
       case "orc" =>
-        spark.read.orc(filePaths: _*)
+        (spark.read.orc(filePaths: _*), None)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
+    ensureReadableSourceColumns(format, filePaths, df, internalCorruptRecordColumnName)
   }
 
   private def createCsvOptions(spark: SparkSession): CSVOptions = {

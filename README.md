@@ -8,9 +8,10 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - `--sample-ratio`는 `0.0 < ratio <= 1.0` 범위만 허용
 - 파일 단위 스캔을 기본으로 하되, exact-confirmed 동일 스키마 파일 묶음은 디렉토리 그룹 기준으로 식별 가능
 - 디렉토리 구조 선스캔 후 `(디렉토리, 포맷)` 그룹 단위로 배치 처리
-- 그룹 내부는 대표 파일 1개로 스키마를 우선 샘플링하고, sampled group은 파일 식별자를 유지한 채 배치 읽기를 시도한다. 다만 CSV sampled group은 헤더 유무 드리프트를 막기 위해 batch scan 전에 exact split으로 재확인한다. sampled group 배치 읽기 실패 시 전체 파일 exact split 후 재시도한다.
+- 그룹 내부는 대표 파일 1개로 스키마를 우선 샘플링하고, sampled multi-file group은 batch scan 전에 전체 파일 exact split으로 동질성을 재확인한다. exact split 결과가 단일 동일-스키마 그룹이면 디렉토리 식별자를 복원하고, 아니면 파일 식별자를 유지한다. CSV는 이 단계에서 헤더 유무 드리프트도 함께 재확인한다.
 - `file_identifier`는 입력 경로 기준 상대경로를 사용하고, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 충돌 방지를 위해 `.`로 표기한다.
 - 외부 규칙 파일 기반 정규식 탐지 (기본 제공 탐지 타입: 전화번호, 이메일, 주민등록번호, 외국인 등록번호, 운전면허번호, 주소, 계좌번호, 카드번호, 한국 여권번호, IP / 선택적 `column_hints` 지원 + 배치 집계 + 메트릭 50,000 초과 시 소배치 폴백 + 집계 예외 시 안전 legacy 폴백)
+- 기본 `resident_registration_number` 규칙은 하이픈 포함/미포함 입력 모두에서 성별/세기 코드 1자리만 있는 축약형(`901225-1`, `9012251`)과 전체 형식(`901225-1234567`, `9012251234567`)을 모두 허용하고, 더 긴 숫자 토큰 내부 substring 매치는 제외
 - 기본 `driver_license_number` 규칙은 하이픈 포함/미포함 입력을 모두 허용하고, 구형 10자리 또는 현행 12자리 형식만 strict 검증한다. 현행 12자리는 지역코드 `11`~`26`, `28`만 허용한다.
 - 기본 `passport_number` 규칙은 한국 여권번호 형식만 검출하며, 다른 영숫자 토큰에 붙은 substring은 제외
 - `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`를 지정하거나, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 지정하면 드라이버 debug 로그에 스캔 계획, 스키마 분할, 그룹/파일 스캔, 리포트 저장 진행사항을 기록
@@ -19,6 +20,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - `zip`, `jar`는 내부 엔트리를 선스캔해 지원 포맷 파일만 staging 후 스캔한다. archive 내부 식별자는 `<archive>!<entry>` 형식을 사용한다.
 - `xlsx`는 `spark-excel`로 시트 단위 스캔을 수행하며, `file_identifier`는 `<workbook>#<sheet>` 형식을 사용한다.
 - 확장자가 미지원이어도 내용이 text로 보이면 plain text 파일로 읽어 단일 `value` 컬럼을 스캔한다. binary로 판단되면 오류 리포트로 분류한다.
+- JSON 입력이 Spark 내부 corrupt record 컬럼만 생성할 정도로 손상돼 있으면 해당 파일은 스캔 대상 그룹에 포함하지 않고 오류 리포트에 기록한다.
 - CSV는 헤더 유무를 자동 감지한다. 헤더가 있으면 헤더명 기반 시그니처를 사용하고, 헤더가 없으면 컬럼 수 기반 시그니처와 Spark 기본 `_c0`, `_c1`, ... 컬럼명을 사용한다. plain-text 2행 tie-case는 header 쪽으로 보수 처리한다.
 - 샘플링 지원(`--sample-ratio`, 기본값 `0.2`, 비결정적 랜덤)
 - 결과 출력: Parquet + CSV (Spark 기본 포맷)
