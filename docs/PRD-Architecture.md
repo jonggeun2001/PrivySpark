@@ -17,11 +17,11 @@
 ### 2.1 구현 컴포넌트 매핑
 - `Cli.scala`: `privyspark scan` CLI 파싱과 `sample-ratio`, 병렬도 옵션 유효성 검증
 - `PathValidator.scala`: 입력/출력 경로의 절대경로/URI 판별
-- `FormatDetector.scala`: `csv`, `json/jsonl/ndjson`, `parquet`, `orc` 확장자 판별
+- `FormatDetector.scala`: `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar` 확장자 판별
 - `RulesetLoader.scala`: 기본 ruleset 탐색, 커스텀 ruleset 파싱, 금지 필드 검증
 - `DetectionAggregator.scala`: 규칙별 metric 구성, `match_type` 처리, 집계/폴백 경로
 - `DriverLicenseNumberValidator.scala`: `driver_license_number` 내장 strict validator
-- `PrivySparkApp.scala`: 선스캔, 그룹화, exact split, 재시도, 리포트 저장 오케스트레이션
+- `PrivySparkApp.scala`: 선스캔, archive/xlsx/text 입력 정규화, 그룹화, exact split, 재시도, 리포트 저장 오케스트레이션
 - `Models.scala`: `PiiRule`, `ScanResult`, `ScanError` 스키마 정의
 
 ## 3. 스캔 처리 아키텍처
@@ -29,22 +29,26 @@
 ### 3.1 플로우
 1. 입력 경로 검증(절대경로/URI)
 2. 디렉토리 구조 선스캔 및 파일 목록 수집
-3. `(directory, format)` 기준 1차 그룹화
-4. 그룹 내 대표 파일 1개 기준 스키마 샘플링
-5. 그룹 단위 배치 스캔 수행
-6. sampled group 실패 시 전체 파일 exact split 후 서브그룹 재스캔
-7. 그룹 실패 시 파일 단위 폴백
-8. 결과/오류 리포트 저장
+3. archive 엔트리 확장(1단계 제한), workbook 시트 확장, unknown-extension text probe 수행
+4. `(directory, format)` 기준 1차 그룹화
+5. 그룹 내 대표 파일 1개 기준 스키마 샘플링
+6. 그룹 단위 배치 스캔 수행
+7. sampled group 실패 시 전체 파일 exact split 후 서브그룹 재스캔
+8. 그룹 실패 시 파일 단위 폴백
+9. 결과/오류 리포트 저장
 
 ### 3.2 그룹 전략
 - 그룹 키: `directoryPath`, `format`, `schemaSignature`
 - 다중 파일 그룹은 대표 파일 1개로 스키마를 샘플링하고 `schemaSampled=true`로 표시한다
 - sampled group은 exact split으로 동질성이 확인되기 전까지 `useDirectoryIdentifier=false`로 유지한다
+- archive 내부 파일과 Excel 시트는 논리 입력(`archive!entry`, `workbook#sheet`) 기준 식별자를 유지하며 디렉토리 식별자로 승격하지 않는다
+- archive 내부의 nested `zip`/`jar` 엔트리는 재귀 확장하지 않고 해당 논리 식별자 범위의 오류로 기록한다
 - sampled multi-file group은 batch scan 전에 exact split으로 재확인하고, 단일 동일-스키마 그룹이면 `useDirectoryIdentifier=true`로 복원한다
 - CSV는 exact split 단계에서 대표 파일의 헤더 유무 판정을 전체에 전파하지 않도록 헤더 드리프트도 함께 재확인한다
 - exact split 이후에도 batch 읽기가 실패하면 파일 단위 폴백으로 전환하고, 여러 서브그룹으로 갈라지면 `useDirectoryIdentifier=false`를 유지한다
 - JSON 스키마 판별 또는 배치 읽기 결과가 Spark 내부 corrupt record 컬럼만 남기면 해당 파일/배치는 손상 입력으로 간주하고 내부 Spark 예외 대신 PrivySpark 오류 메시지로 전환한다
 - CSV는 헤더 유무를 자동 감지한다. 헤더가 있으면 헤더 순서를 유지한 시그니처를 만들고, 헤더가 없으면 컬럼 수 기반 시그니처(`cols:N`)를 사용한다. plain-text 2행 tie-case는 header 쪽으로 처리한다
+- unknown-extension text fallback은 단일 `value` 컬럼 스키마로 취급한다
 - exact split으로 동일 스키마가 확인되고 pre-scan 오류가 없는 단일 디렉토리 그룹이면 결과 `file_identifier`는 파일명이 아니라 디렉토리 상대경로를 사용하며, 입력 루트 디렉토리 그룹은 `.`로 표기
 
 ### 3.3 탐지 집계 전략
@@ -67,7 +71,7 @@
 - 결과 리포트
   - Parquet: `<output>/parquet/scan_results` (`coalesce(1)`로 단일 data part file 저장)
   - CSV: `<output>/csv/scan_results` (`coalesce(1)`로 단일 data part file 저장)
-- `file_identifier`는 입력 경로 기준 상대경로를 사용하며, pre-scan 오류가 없는 단일 디렉토리 그룹은 디렉토리 상대경로로 집계한다. 입력 루트 디렉토리 그룹은 `.`를 사용한다.
+- `file_identifier`는 입력 경로 기준 상대경로를 사용하며, archive 내부 파일은 `<archive>!<entry>`, Excel 시트는 `<workbook>#<sheet>` 형식을 사용한다. pre-scan 오류가 없는 단일 디렉토리 그룹만 디렉토리 상대경로로 집계하며, 입력 루트 디렉토리 그룹은 `.`를 사용한다.
 - 오류 리포트
   - Parquet: `<output>/parquet/scan_errors` (`coalesce(1)`로 단일 data part file 저장)
   - CSV: `<output>/csv/scan_errors` (`coalesce(1)`로 단일 data part file 저장)

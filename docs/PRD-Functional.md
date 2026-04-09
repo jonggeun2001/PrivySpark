@@ -20,8 +20,10 @@
 
 ### 2.2 입력 처리
 - 포맷 인자는 받지 않음.
-- 확장자 기반 자동 감지(`csv`, `json/jsonl/ndjson`, `parquet`, `orc`).
-- 미지원 확장자는 해당 파일을 실패로 기록하고 오류 리포트에 포함.
+- 확장자 기반 자동 감지(`csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`).
+- `zip`, `jar`는 내부 엔트리를 선스캔해 지원 포맷 파일만 staging 후 스캔한다. archive 확장은 1단계까지만 허용하며, nested `zip`/`jar` 엔트리는 실패로 기록한다.
+- `xlsx`는 workbook을 시트 단위 논리 입력으로 확장해 스캔한다.
+- 미지원 확장자는 먼저 text probe를 수행하고, text로 판단되면 plain text 파일로 읽어 스캔한다. binary로 판단되면 해당 파일을 실패로 기록하고 오류 리포트에 포함한다.
 - JSON 입력이 Spark 내부 corrupt record 컬럼만 생성할 정도로 손상돼 있으면 해당 파일을 실패로 기록하고 오류 리포트에 포함.
 - 스캔 단위는 파일 단위를 기본으로 하며, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 디렉토리 식별자로 결과를 집계할 수 있다.
 - CSV 스키마 그룹핑은 전체 파일 타입 추론이 아니라 헤더 자동 감지 후 헤더 라인 파싱 또는 컬럼 수 기준으로 판단한다. plain-text 2행 tie-case는 header 쪽으로 처리한다.
@@ -48,7 +50,7 @@
 - 포맷: Parquet + CSV(Spark 기본 포맷, 각 출력 경로는 단일 data part file로 저장).
 - 결과 리포트는 아래 필드 포함:
   - `dataset_path`, `scan_timestamp`, `file_identifier`, `column_name`, `pii_type`, `match_count`, `match_ratio`, `confidence`
-- `file_identifier`는 입력 경로 기준 상대경로를 사용하며, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 해당 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 `.`를 사용한다.
+- `file_identifier`는 입력 경로 기준 상대경로를 사용하며, archive 내부 파일은 `<archive>!<entry>`, Excel 시트는 `<workbook>#<sheet>` 형식을 사용한다. exact split으로 동일 스키마가 확인된 디렉토리 그룹만 해당 디렉토리 상대경로를 사용하며, 입력 루트 디렉토리 그룹은 `.`를 사용한다.
 - `match_ratio`, `confidence`는 소수점 둘째 자리까지 반올림하며, MVP의 `confidence = match_ratio`.
 - 실제 매칭값(원문 PII)은 저장하지 않음.
 
