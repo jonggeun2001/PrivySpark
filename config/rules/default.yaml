@@ -4,7 +4,7 @@ rules:
   - pii_type: email
     regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}'
   - pii_type: resident_registration_number
-    regex: '[0-9]{6}-?[1-4][0-9]{6}'
+    regex: '(?:[0-9]{6}-[1-4](?:[0-9]{6})?|[0-9]{6}[1-4](?:[0-9]{6})?)'
   - pii_type: foreign_registration_number
     regex: '(?<![0-9])[0-9]{6}-?[5-8][0-9]{6}(?![0-9])'
   - pii_type: driver_license_number

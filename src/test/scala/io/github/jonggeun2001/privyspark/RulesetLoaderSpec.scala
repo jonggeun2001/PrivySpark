@@ -7,6 +7,7 @@ import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import scala.util.matching.Regex
 
 @RunWith(classOf[JUnitRunner])
 class RulesetLoaderSpec extends AnyFunSuite {
@@ -24,6 +25,18 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(!rules.exists(_.piiType == "name"))
     assert(rules.forall(_.columnHints.isEmpty))
     assert(rules.forall(_.matchType == "value"))
+  }
+
+  test("default resident registration rule accepts short and full forms only") {
+    val residentRegistrationNumberRule = RulesetLoader.load("default").find(_.piiType == "resident_registration_number")
+    assert(residentRegistrationNumberRule.nonEmpty)
+
+    val regex = new Regex(s"\\A(?:${residentRegistrationNumberRule.get.regex})\\z").pattern
+    assert(regex.matcher("901225-1").matches())
+    assert(regex.matcher("9012251").matches())
+    assert(regex.matcher("901225-1234567").matches())
+    assert(regex.matcher("9012251234567").matches())
+    assert(!regex.matcher("20251027").matches())
   }
 
   test("loads optional column hints and match type from ruleset file and ignores blank entries") {
