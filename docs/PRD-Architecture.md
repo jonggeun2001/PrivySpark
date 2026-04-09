@@ -18,12 +18,13 @@
 1. 입력 경로 검증
 2. 물리 파일 수집
 3. archive 엔트리 확장, workbook 시트 확장, unknown-extension text probe
-4. `(directory, format, schemaSignature)` 기준 그룹화
+4. `(directory, format)` 기준 1차 그룹화
 5. 대표 파일 기준 스키마 샘플링
-6. 그룹 batch scan
-7. sampled group exact split 재검증
-8. 필요 시 파일 단위 fallback
-9. 결과/오류 리포트 저장
+6. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
+7. 그룹 batch scan
+8. sampled group exact split 재검증
+9. 필요 시 파일 단위 fallback
+10. 결과/오류 리포트 저장
 
 ## 상세 문서 맵
 - 실행 환경과 운영 옵션: [mvp/execution-and-operations.md](mvp/execution-and-operations.md)

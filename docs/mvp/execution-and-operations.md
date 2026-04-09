@@ -51,6 +51,29 @@ spark-submit \
   scan --path hdfs:///data/input --output hdfs:///data/output
 ```
 
+커스텀 ruleset을 YARN cluster에서 사용할 때는 ruleset 파일도 함께 배포해야 합니다.
+
+제출 스크립트에서 기본 ruleset 대신 커스텀 ruleset 배포:
+```bash
+PRIVYSPARK_SPARK_FILES=/abs/path/my-rules.yaml#my-rules.yaml \
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ruleset my-rules.yaml
+```
+
+직접 실행에서 커스텀 ruleset 배포:
+```bash
+spark-submit \
+  --class io.github.jonggeun2001.privyspark.PrivySparkApp \
+  --master yarn \
+  --deploy-mode cluster \
+  --files /abs/path/my-rules.yaml#my-rules.yaml \
+  /abs/path/privyspark-<version>-all.jar \
+  scan --path hdfs:///data/input --output hdfs:///data/output --ruleset my-rules.yaml
+```
+
 ## 운영 로그
 - 기본 로그에는 스캔 요약과 fallback 원인이 출력됩니다.
 - `PRIVYSPARK_DEBUG=true` 또는 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true`, `-Dprivyspark.debug=true`가 설정되면 debug 이벤트가 추가됩니다.
