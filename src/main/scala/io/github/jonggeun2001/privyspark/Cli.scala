@@ -6,7 +6,9 @@ final case class CliConfig(
   inputPath: String = "",
   outputPath: String = "",
   ruleset: String = "default",
-  sampleRatio: Double = 0.2
+  sampleRatio: Double = 0.2,
+  groupParallelism: Option[Int] = None,
+  fileParallelism: Option[Int] = None
 )
 
 object Cli {
@@ -37,7 +39,23 @@ object Cli {
           if (value > 0.0 && value <= 1.0) success
           else failure("sample-ratio must be > 0.0 and <= 1.0")
         }
-        .text("샘플링 비율(0.0, 1.0]")
+        .text("샘플링 비율(0.0, 1.0]"),
+      opt[Int]("group-parallelism")
+        .optional()
+        .action((value, config) => config.copy(groupParallelism = Some(value)))
+        .validate { value =>
+          if (value > 0) success
+          else failure("group-parallelism must be > 0")
+        }
+        .text("그룹 스캔 병렬도(정수 > 0)"),
+      opt[Int]("file-parallelism")
+        .optional()
+        .action((value, config) => config.copy(fileParallelism = Some(value)))
+        .validate { value =>
+          if (value > 0) success
+          else failure("file-parallelism must be > 0")
+        }
+        .text("파일 폴백 스캔 병렬도(정수 > 0)")
     )
   }
 

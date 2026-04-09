@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "io.github.jonggeun2001"
-version = "1.0.8"
+version = "1.0.9"
 
 repositories {
     mavenCentral()
@@ -22,6 +22,9 @@ dependencies {
 
     compileOnly("org.apache.spark:spark-sql_2.12:$sparkVersion")
     compileOnly("org.apache.spark:spark-core_2.12:$sparkVersion")
+
+    implementation("org.apache.spark:spark-avro_2.12:$sparkVersion")
+    implementation("com.crealytics:spark-excel_2.12:3.5.1_0.20.4")
 
     implementation("com.github.scopt:scopt_2.12:4.1.0")
     implementation("org.yaml:snakeyaml:2.2")
