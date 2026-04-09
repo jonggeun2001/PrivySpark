@@ -298,6 +298,10 @@ object PrivySparkApp {
 
   private def safeResolveArchiveEntryPath(root: Path, entryName: String): Option[Path] = {
     val sanitizedEntryName = normalizeArchiveEntryName(entryName)
+    val pathSegments = sanitizedEntryName.split('/').filter(_.nonEmpty)
+    if (pathSegments.isEmpty || pathSegments.exists(segment => segment == "." || segment == "..")) {
+      return None
+    }
     val resolvedPath = new Path(root, sanitizedEntryName)
     val rootComparable = canonicalizePath(root.toString)
     val resolvedComparable = canonicalizePath(resolvedPath.toString)
@@ -794,6 +798,7 @@ object PrivySparkApp {
     stagingPaths += stagingRoot.toString
     val archiveInputStream = fs.open(sourcePath)
     val zipInputStream = new ZipInputStream(archiveInputStream)
+    val stagedTargetPaths = scala.collection.mutable.Set.empty[String]
 
     try {
       var entry = zipInputStream.getNextEntry
@@ -803,7 +808,15 @@ object PrivySparkApp {
           val childLogicalIdentifier = s"$logicalIdentifier!$normalizedEntryName"
           safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
             case Some(targetPath) =>
-              FormatDetector.infer(normalizedEntryName) match {
+              val targetComparablePath = canonicalizePath(targetPath.toString)
+              if (!stagedTargetPaths.add(targetComparablePath)) {
+                archiveErrors += ScanError(
+                  datasetPath,
+                  timestamp,
+                  childLogicalIdentifier,
+                  s"Conflicting archive entry path: $normalizedEntryName"
+                )
+              } else FormatDetector.infer(normalizedEntryName) match {
                 case Some(_) =>
                   Option(targetPath.getParent).foreach(parent => fs.mkdirs(parent))
                   val outputStream = fs.create(targetPath, true)
@@ -970,6 +983,10 @@ object PrivySparkApp {
       files.foreach { filePath =>
         val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
         val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
+        val preScanErrorScope = FormatDetector.infer(filePath) match {
+          case Some(format) if ArchiveFormats.contains(format) => logicalIdentifier
+          case _ => parentDirectory
+        }
         val (expandedEntries, expandedErrors) =
           expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, stagingPaths)
 
@@ -986,11 +1003,11 @@ object PrivySparkApp {
           )
         }
         if (expandedErrors.nonEmpty) {
-          directoriesWithPreScanErrors += parentDirectory
+          directoriesWithPreScanErrors += preScanErrorScope
           logDebug(
             "scan_directory_file_unsupported",
             "file" -> filePath,
-            "directory" -> parentDirectory,
+            "directory" -> preScanErrorScope,
             "errors" -> expandedErrors.size
           )
         }

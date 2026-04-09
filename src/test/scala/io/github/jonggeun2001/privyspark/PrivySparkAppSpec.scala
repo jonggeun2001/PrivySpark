@@ -1850,6 +1850,62 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules rejects archive entries with dot-dot segments instead of overwriting staged files") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-dotdot-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "report.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n"),
+          "nested/../report.csv" ->
+            ("name,email\n" +
+              "mallory,mallory@example.com\n")
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.zip!report.csv", "email", 1L)))
+      assert(errors.map(_.file_identifier) == Seq("bundle.zip!nested/../report.csv"))
+      assert(errors.head.error_message.contains("Unsafe archive entry path"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("archive pre-scan errors do not disable directory aggregation for sibling flat files") {
+    val inputDir = Files.createTempDirectory("privyspark-archive-error-scope-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("part-a.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(inputDir.resolve("part-b.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n")
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq("Widget.class" -> "\u0000\u0001\u0002\u0003")
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set((".", "email", 2L)))
+      assert(errors.exists(_.file_identifier == "bundle.zip!Widget.class"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules scans text-like unknown extensions through the value column") {
     val inputDir = Files.createTempDirectory("privyspark-text-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
