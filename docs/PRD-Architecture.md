@@ -52,6 +52,7 @@
 - 기본/커스텀 ruleset 모두 `pii_type: name`은 지원하지 않으며, 포함 시 로드 단계에서 실패한다.
 - 기본/커스텀 ruleset 모두 제거된 `validator` 필드와 `__KOREAN_NAME_RULE_REGEX__` 내부 참조를 지원하지 않으며, 포함 시 로드 단계에서 실패한다.
 - 기본 ruleset은 전화번호, 이메일, 주민등록번호, 외국인 등록번호, 운전면허번호, 주소, 계좌번호, 카드번호, 한국 여권번호, IP를 기본 탐지 대상으로 포함한다.
+- 기본 `resident_registration_number`는 하이픈 포함/미포함 입력 모두에서 성별/세기 코드 1자리만 있는 축약형과 전체 형식을 모두 허용하고, 더 긴 숫자 토큰 내부 substring 매치는 제외한다.
 - 기본 `driver_license_number`는 candidate regex에 매칭된 값에 대해 하이픈 정규화 후 구형 10자리 또는 현행 12자리 형식만 통과시키는 내장 strict validator를 적용한다. 현행 12자리는 지역코드 `11`~`26`, `28`만 허용한다.
 - 기본 ruleset의 `passport_number`는 한국 여권번호 형식만 대상으로 하고, 다른 영숫자 토큰 내부 substring 매치는 제외한다.
 - 규칙이 `column_hints`를 가지면 컬럼명 힌트와 매칭되는 컬럼에만 metric을 생성하고, 힌트가 없으면 모든 컬럼에 적용한다.
