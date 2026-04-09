@@ -340,6 +340,10 @@ object PrivySparkApp {
     resolveParallelism(fileCount, spark.sparkContext.getConf.getInt(FileParallelismConfKey, DefaultFileParallelism))
   }
 
+  private[privyspark] def resolveCliParallelism(config: CliConfig): (Int, Int) = {
+    (config.groupParallelism.getOrElse(-1), config.fileParallelism.getOrElse(-1))
+  }
+
   private def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
     if (tasks.isEmpty) {
       Seq.empty
@@ -394,8 +398,11 @@ object PrivySparkApp {
       "input_path" -> config.inputPath,
       "output_path" -> config.outputPath,
       "ruleset" -> config.ruleset,
-      "sample_ratio" -> config.sampleRatio
+      "sample_ratio" -> config.sampleRatio,
+      "group_parallelism" -> config.groupParallelism.getOrElse("spark_conf_or_default"),
+      "file_parallelism" -> config.fileParallelism.getOrElse("spark_conf_or_default")
     )
+    val (groupParallelism, fileParallelism) = resolveCliParallelism(config)
     val rules = RulesetLoader.load(config.ruleset)
     logDebug("ruleset_loaded", "rules" -> rules.size, "ruleset" -> config.ruleset)
     val timestamp = Instant.now().toString
@@ -417,7 +424,9 @@ object PrivySparkApp {
       scanPlan.groups,
       rules,
       config.sampleRatio,
-      timestamp
+      timestamp,
+      groupParallelism,
+      fileParallelism
     ).foreach {
       case (_, groupResults, groupErrors) =>
         results ++= groupResults
@@ -440,7 +449,8 @@ object PrivySparkApp {
     rules: Seq[PiiRule],
     sampleRatio: Double,
     timestamp: String,
-    groupParallelism: Int = -1
+    groupParallelism: Int = -1,
+    fileParallelism: Int = -1
   ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] = {
     if (groups.isEmpty) {
       return Seq.empty
@@ -465,7 +475,7 @@ object PrivySparkApp {
           "parallelism" -> parallelism
         )
         val (groupResults, groupErrors) =
-          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp)
+          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism)
         logDebug(
           "group_scan_recorded",
           "directory" -> group.directoryPath,
@@ -1012,7 +1022,8 @@ object PrivySparkApp {
     group: ScanGroup,
     rules: Seq[PiiRule],
     sampleRatio: Double,
-    timestamp: String
+    timestamp: String,
+    fileParallelism: Int = -1
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logDebug(
       "group_scan_start",
@@ -1033,7 +1044,8 @@ object PrivySparkApp {
         rules,
         sampleRatio,
         timestamp,
-        "sampled_exact_split"
+        "sampled_exact_split",
+        fileParallelism
       )
       logDebug(
         "group_scan_complete",
@@ -1084,7 +1096,8 @@ object PrivySparkApp {
             rules,
             sampleRatio,
             timestamp,
-            "fallback_schema_resplit"
+            "fallback_schema_resplit",
+            fileParallelism
           )
 
           logDebug(
@@ -1098,7 +1111,7 @@ object PrivySparkApp {
           )
           exactSplitResult
         } else {
-          val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
+          val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism)
           logDebug(
             "group_scan_complete",
             "directory" -> group.directoryPath,
@@ -1625,7 +1638,8 @@ object PrivySparkApp {
     rules: Seq[PiiRule],
     sampleRatio: Double,
     timestamp: String,
-    mode: String
+    mode: String,
+    fileParallelism: Int
   ): (Seq[ScanResult], Seq[ScanError]) = {
     val (splitGroups, splitErrors) = splitGroupBySchema(
       spark,
@@ -1653,7 +1667,8 @@ object PrivySparkApp {
         rescannedGroup,
         rules,
         sampleRatio,
-        timestamp
+        timestamp,
+        fileParallelism
       )
       rescannedResults ++= groupResults
       rescannedErrors ++= groupErrors

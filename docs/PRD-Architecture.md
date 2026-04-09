@@ -15,7 +15,7 @@
 - 기본 규칙셋은 `spark-submit --files`로 드라이버에 배포
 
 ### 2.1 구현 컴포넌트 매핑
-- `Cli.scala`: `privyspark scan` CLI 파싱과 `sample-ratio` 유효성 검증
+- `Cli.scala`: `privyspark scan` CLI 파싱과 `sample-ratio`, 병렬도 옵션 유효성 검증
 - `PathValidator.scala`: 입력/출력 경로의 절대경로/URI 판별
 - `FormatDetector.scala`: `csv`, `json/jsonl/ndjson`, `parquet`, `orc` 확장자 판별
 - `RulesetLoader.scala`: 기본 ruleset 탐색, 커스텀 ruleset 파싱, 금지 필드 검증
@@ -77,5 +77,5 @@
 ## 5. 운영 특성
 - 로그는 스캔 요약(`scanned_files`, `groups`, `detections`, `errors`)과 폴백 원인/실행 경로를 드라이버 로그에 출력하고, `bin/privyspark-submit`의 `PRIVYSPARK_DEBUG=true` 또는 `spark-submit`의 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true`/`-Dprivyspark.debug=true`가 설정되면 debug 진행 이벤트(플랜 수립, 스키마 분할, 그룹/파일 스캔, 리포트 저장)를 추가로 출력
 - 실패 허용 전략: 파일/그룹 단위 오류를 누적 기록하고 나머지 처리를 지속
-- 그룹 스캔 병렬도는 `spark.privyspark.groupParallelism`(기본 `4`), 파일 폴백 병렬도는 `spark.privyspark.fileParallelism`(기본 `3`)으로 조정한다
+- 그룹 스캔 병렬도는 `--group-parallelism` 또는 `spark.privyspark.groupParallelism`(기본 `4`), 파일 폴백 병렬도는 `--file-parallelism` 또는 `spark.privyspark.fileParallelism`(기본 `3`)으로 조정한다. CLI 값이 주어지면 Spark conf보다 우선한다
 - report DataFrame은 cache 후 Parquet/CSV 저장을 재사용하고, `sampledDf`/report DataFrame 해제는 non-blocking `unpersist(false)`를 사용한다
