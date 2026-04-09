@@ -37,6 +37,11 @@ class FormatDetectorSpec extends AnyFunSuite {
     assert(FormatDetector.infer("/data/input.jar").contains("jar"))
   }
 
+  test("preserves ordinary hash characters in structured filenames") {
+    assert(FormatDetector.infer("/data/report#1.json").contains("json"))
+    assert(FormatDetector.infer("/data/nested/users#2024.csv").contains("csv"))
+  }
+
   test("returns empty for unsupported extensions") {
     assert(FormatDetector.infer("/data/input.unknown").isEmpty)
   }

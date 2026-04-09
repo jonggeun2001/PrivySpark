@@ -234,6 +234,17 @@ object PrivySparkApp {
     normalizedPath
   }
 
+  private def comparablePathVariants(path: String): Set[String] = {
+    val canonical = canonicalizePath(path)
+    Set(
+      canonical,
+      canonical.replace("%2523", "%23"),
+      canonical.replace("%23", "#"),
+      canonical.replace("%2523", "#"),
+      canonical.replace("#", "%23")
+    )
+  }
+
   private def resolvePhysicalPath(group: ScanGroup, sourceKey: String): String = {
     group.physicalPathsByKey.getOrElse(sourceKey, sourceKey)
   }
@@ -254,9 +265,9 @@ object PrivySparkApp {
     datasetPath: String,
     physicalPath: String
   ): String = {
-    val canonical = canonicalizePath(physicalPath)
+    val targetVariants = comparablePathVariants(physicalPath)
     group.filePaths.iterator.collectFirst {
-      case sourceKey if canonicalizePath(resolvePhysicalPath(group, sourceKey)) == canonical =>
+      case sourceKey if comparablePathVariants(resolvePhysicalPath(group, sourceKey)).exists(targetVariants.contains) =>
         resolveLogicalIdentifier(group, datasetPath, sourceKey)
     }.getOrElse(resolveRelativeIdentifier(datasetPath, physicalPath))
   }
@@ -668,7 +679,7 @@ object PrivySparkApp {
     stagingPaths: ArrayBuffer[String],
     forceDisableDirectoryIdentifier: Boolean = false
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
-    val detectedFormat = FormatDetector.infer(physicalPath).orElse(FormatDetector.infer(logicalIdentifier))
+    val detectedFormat = FormatDetector.infer(physicalPath)
     detectedFormat match {
       case Some(format) if ArchiveFormats.contains(format) =>
         expandArchiveSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier, stagingPaths)
@@ -1158,27 +1169,29 @@ object PrivySparkApp {
     val validFilePaths = ArrayBuffer.empty[String]
     val errors = ArrayBuffer.empty[ScanError]
 
-    group.filePaths.foreach { filePath =>
+    group.filePaths.foreach { sourceKey =>
+      val physicalPath = resolvePhysicalPath(group, sourceKey)
+      val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
       try {
-        withFileReadRetry(spark, Seq(filePath), "schema_detection") {
-          readSchemaSource(spark, group.format, filePath, group.csvHasHeader)
+        withFileReadRetry(spark, Seq(physicalPath), "schema_detection") {
+          readSchemaSource(spark, group.format, physicalPath, group.csvHasHeader)
           ()
         }
-        validFilePaths += filePath
+        validFilePaths += sourceKey
       } catch {
         case NonFatal(e) =>
           val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
           logDebug(
             "group_schema_signature_failed",
             "directory" -> group.directoryPath,
-            "file" -> filePath,
+            "file" -> physicalPath,
             "format" -> group.format,
             "reason" -> errorMessage
           )
           errors += ScanError(
             datasetPath,
             timestamp,
-            resolveRelativeIdentifier(datasetPath, filePath),
+            logicalIdentifier,
             s"Schema detection failed: $errorMessage"
           )
       }

@@ -1798,6 +1798,58 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules expands zip archives when entry filenames contain hash characters") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-hash-fixture-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "nested/users#2024.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n" +
+              "bob,bob@example.com\n")
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.zip!nested/users#2024.csv", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules preserves logical identifiers for malformed archive json entries") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-json-errors-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "good.json" -> "{\"email\":\"alice@example.com\"}\n",
+          "broken.json" -> "{\"email\":\"broken@example.com\"\n"
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.zip!good.json", "email", 1L)))
+      assert(errors.map(_.file_identifier) == Seq("bundle.zip!broken.json"))
+      assert(errors.head.error_message.contains("Malformed json input contains only corrupt records"))
+      assert(!errors.head.file_identifier.contains(".privyspark-staging"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules scans text-like unknown extensions through the value column") {
     val inputDir = Files.createTempDirectory("privyspark-text-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
