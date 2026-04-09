@@ -1341,6 +1341,64 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroup exact split restores directory identifier for eligible sampled parquet groups") {
+    val inputDir = Files.createTempDirectory("privyspark-sampled-parquet-dir-id-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      import spark.implicits._
+
+      Seq(("alice@example.com", "010-1234-5678", "ok"))
+        .toDF("email", "phone", "message")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq(("bob@example.com", "031-555-7777", "ok"))
+        .toDF("email", "phone", "message")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      Files.move(findDataFile(leftWriteDir, ".parquet").get, groupedDir.resolve("part-a.parquet"))
+      Files.move(findDataFile(rightWriteDir, ".parquet").get, groupedDir.resolve("part-b.parquet"))
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        timestamp
+      )
+      val group = plan.groups.head
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+      )
+
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(group.schemaSampled)
+      assert(!group.useDirectoryIdentifier)
+      assert(errors.isEmpty)
+      assert(results.map(_.file_identifier).toSet == Set("users"))
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("users", "email", 2L), ("users", "phone", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroup resplit preserves file identifiers when directory aggregation was already disabled") {
     val inputDir = Files.createTempDirectory("privyspark-sampled-resplit-no-dir-id-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))

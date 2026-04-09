@@ -22,7 +22,7 @@
 - JSON 입력이 Spark 내부 corrupt record 컬럼만 생성할 정도로 손상돼 있으면 해당 파일을 실패로 기록하고 오류 리포트에 포함.
 - 스캔 단위는 파일 단위를 기본으로 하며, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 디렉토리 식별자로 결과를 집계할 수 있다.
 - CSV 스키마 그룹핑은 전체 파일 타입 추론이 아니라 헤더 자동 감지 후 헤더 라인 파싱 또는 컬럼 수 기준으로 판단한다. plain-text 2행 tie-case는 header 쪽으로 처리한다.
-- 다중 파일 디렉토리 그룹은 대표 파일 1개로 스키마를 우선 샘플링할 수 있고, sampled group은 우선 파일 식별자를 유지한 채 배치 스캔을 시도한다. 단, CSV sampled group은 헤더 유무가 파일마다 다를 수 있으므로 batch scan 전에 exact split으로 재확인한다. sampled group 배치 스캔 실패 시 전체 파일 exact split 후 재시도한다. 그룹 파일 수만으로 파일 단위 폴백을 강제하지 않는다.
+- 다중 파일 디렉토리 그룹은 대표 파일 1개로 스키마를 우선 샘플링할 수 있고, sampled multi-file group은 batch scan 전에 전체 파일 exact split으로 동질성을 재확인한다. exact split 결과가 단일 동일-스키마 그룹이면 디렉토리 식별자를 복원하고, 아니면 파일 식별자를 유지한다. CSV는 이 단계에서 헤더 유무 드리프트도 함께 재확인한다. exact split 이후 batch scan이 실패하면 파일 단위 폴백으로 전환한다. 그룹 파일 수만으로 파일 단위 폴백을 강제하지 않는다.
 
 ### 2.3 탐지
 - MVP는 regex 기반 후보 탐지를 사용하며, 필요한 기본 규칙에는 내장 strict validator를 추가로 적용할 수 있다.

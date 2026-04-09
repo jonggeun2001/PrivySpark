@@ -1025,7 +1025,7 @@ object PrivySparkApp {
       "schema_sampled" -> group.schemaSampled,
       "csv_has_header" -> group.csvHasHeader
     )
-    if (group.schemaSampled && group.format == "csv" && group.filePaths.size > 1) {
+    if (group.schemaSampled && group.filePaths.size > 1) {
       val exactSplitResult = rescanSampledGroupWithExactSplit(
         spark,
         datasetPath,
@@ -1033,7 +1033,7 @@ object PrivySparkApp {
         rules,
         sampleRatio,
         timestamp,
-        "sampled_csv_exact_split"
+        "sampled_exact_split"
       )
       logDebug(
         "group_scan_complete",
@@ -1042,7 +1042,7 @@ object PrivySparkApp {
         "schema" -> group.schemaSignature,
         "result_rows" -> exactSplitResult._1.size,
         "error_rows" -> exactSplitResult._2.size,
-        "mode" -> "sampled_csv_exact_split"
+        "mode" -> "sampled_exact_split"
       )
       return exactSplitResult
     }
