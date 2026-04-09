@@ -570,6 +570,51 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("inferSchemaSignature ignores internal corrupt json columns for mixed files") {
+    val inputDir = Files.createTempDirectory("privyspark-mixed-json-schema-")
+
+    try {
+      val mixedFile = inputDir.resolve("mixed.json")
+      val cleanFile = inputDir.resolve("clean.json")
+      writeText(mixedFile,
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":\"broken@example.com\"\n")
+      writeText(cleanFile,
+        "{\"email\":\"bob@example.com\"}\n")
+
+      assert(PrivySparkApp.inferSchemaSignature(spark, "json", mixedFile.toString) == Right("email"))
+      assert(PrivySparkApp.inferSchemaSignature(spark, "json", cleanFile.toString) == Right("email"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules ignores malformed json payloads when valid rows are present") {
+    val inputDir = Files.createTempDirectory("privyspark-mixed-json-payload-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("records.json"),
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":\"broken@example.com\"\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(
+        inputDir.toString,
+        inputDir.toString,
+        rules,
+        timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)) == Seq(
+        ("records.json", "email", 1L)
+      ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure keeps a single CSV file unsampled and preserves headerless mode") {
     val inputDir = Files.createTempDirectory("privyspark-single-headerless-csv-")
     val timestamp = "2026-03-13T00:00:00Z"

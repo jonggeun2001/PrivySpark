@@ -951,22 +951,23 @@ object PrivySparkApp {
     val normalizedFormat = Option(format).map(_.toLowerCase).getOrElse("")
     if (normalizedFormat == "json") {
       val schemaFieldNames = df.schema.fieldNames.toSeq
-      val hasOnlyInternalCorruptRecordColumn = internalCorruptRecordColumnName.exists { columnName =>
-        schemaFieldNames.size == 1 && schemaFieldNames.head == columnName
+      internalCorruptRecordColumnName match {
+        case Some(columnName) if schemaFieldNames.size == 1 && schemaFieldNames.head == columnName =>
+          val sourceDescription = sourcePaths match {
+            case Seq(singlePath) => singlePath
+            case paths => s"${paths.size} files (first: ${paths.head})"
+          }
+          throw new IllegalArgumentException(
+            s"Malformed json input contains only corrupt records: $sourceDescription"
+          )
+        case Some(columnName) if schemaFieldNames.contains(columnName) =>
+          df.drop(columnName)
+        case _ =>
+          df
       }
-
-      if (hasOnlyInternalCorruptRecordColumn) {
-        val sourceDescription = sourcePaths match {
-          case Seq(singlePath) => singlePath
-          case paths => s"${paths.size} files (first: ${paths.head})"
-        }
-        throw new IllegalArgumentException(
-          s"Malformed json input contains only corrupt records: $sourceDescription"
-        )
-      }
+    } else {
+      df
     }
-
-    df
   }
 
   private def readSchemaSource(
