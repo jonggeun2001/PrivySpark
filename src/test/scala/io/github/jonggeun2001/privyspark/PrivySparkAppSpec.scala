@@ -514,6 +514,29 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure records extensionless text files as unsupported when magic bytes do not match") {
+    val inputDir = Files.createTempDirectory("privyspark-extensionless-unsupported-")
+
+    try {
+      writeText(inputDir.resolve("notes"),
+        "alice@example.com\n" +
+          "bob@example.com\n")
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-09T00:00:00Z"
+      )
+
+      assert(plan.groups.isEmpty)
+      assert(plan.errors.map(_.file_identifier) == Seq("notes"))
+      assert(plan.errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure records malformed json files without exposing Spark corrupt-record errors") {
     val inputDir = Files.createTempDirectory("privyspark-malformed-json-")
 
@@ -1725,6 +1748,47 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules detects extensionless parquet and orc files via magic bytes") {
+    val outputDir = Files.createTempDirectory("privyspark-columnar-magic-fixture-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    try {
+      val parquetFilePath = Paths.get(createColumnarDataFile(outputDir, "parquet"))
+      val orcFilePath = Paths.get(createColumnarDataFile(outputDir, "orc"))
+      val parquetWithoutExtension = Files.move(parquetFilePath, outputDir.resolve("parquet-fixture"))
+      val orcWithoutExtension = Files.move(orcFilePath, outputDir.resolve("orc-fixture"))
+
+      val (parquetResults, parquetErrors) = scanWithRules(
+        parquetWithoutExtension.toString,
+        parquetWithoutExtension.toString,
+        rules,
+        timestamp
+      )
+      val (orcResults, orcErrors) = scanWithRules(
+        orcWithoutExtension.toString,
+        orcWithoutExtension.toString,
+        rules,
+        timestamp
+      )
+
+      assert(parquetErrors.isEmpty)
+      assert(orcErrors.isEmpty)
+      assert(parquetResults.map(result => (result.column_name, result.pii_type)).toSet == Set(("email", "email"), ("phone", "phone")))
+      assert(orcResults.map(result => (result.column_name, result.pii_type)).toSet == Set(("email", "email"), ("phone", "phone")))
+      assert(parquetResults.forall(_.match_count == 2L))
+      assert(orcResults.forall(_.match_count == 2L))
+      assert(parquetResults.forall(_.file_identifier == "parquet-fixture"))
+      assert(orcResults.forall(_.file_identifier == "orc-fixture"))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("scanWithRules detects expected pii counts from avro files") {
     val outputDir = Files.createTempDirectory("privyspark-avro-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
@@ -1794,6 +1858,36 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(results.forall(_.dataset_path == inputDir.toString))
       assert(archivePath.endsWith(".zip"))
     } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules expands archive entries without extensions when parquet magic bytes match") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-parquet-magic-fixture-")
+    val payloadDir = Files.createTempDirectory("privyspark-zip-parquet-payload-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      val parquetPayload = Files.readAllBytes(Paths.get(createColumnarDataFile(payloadDir, "parquet")))
+      createArchiveFileWithBytes(
+        inputDir.resolve("bundle.zip"),
+        Seq("customers" -> parquetPayload)
+      )
+
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+      )
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(
+          ("bundle.zip!customers", "email", 2L),
+          ("bundle.zip!customers", "phone", 2L)
+        ))
+    } finally {
+      deleteRecursively(payloadDir)
       deleteRecursively(inputDir)
     }
   }

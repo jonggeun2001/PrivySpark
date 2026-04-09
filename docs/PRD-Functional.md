@@ -6,7 +6,9 @@
 ## 기능 기준선
 - 실행 진입점은 `privyspark scan` 단일 명령입니다.
 - 입력은 절대경로 또는 URI만 허용합니다.
-- 지원 포맷은 코드 기준으로 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`이며, 그 외 확장자는 text probe 후 plain text fallback 여부를 결정합니다.
+- 지원 포맷은 코드 기준으로 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`입니다.
+- 확장자가 없는 파일은 앞부분 매직바이트로 `parquet`, `orc`를 추가 판별하고, 일치하지 않으면 `Unsupported file format`으로 기록합니다.
+- 그 외 미지원 확장자는 text probe 후 plain text fallback 여부를 결정합니다.
 - 탐지는 ruleset 기반 regex + 일부 타입의 strict validator 조합입니다.
 - 출력은 Parquet + CSV 2종이며 `scan_results`, `scan_errors`를 함께 생성합니다.
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
