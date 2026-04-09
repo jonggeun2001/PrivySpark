@@ -351,8 +351,27 @@ object PrivySparkApp {
     val inputStream = fs.open(sourcePath)
     try {
       val buffer = new Array[Byte](limit)
-      val bytesRead = inputStream.read(buffer)
-      if (bytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, bytesRead)
+      var totalBytesRead = 0
+      var continueReading = true
+
+      while (continueReading && totalBytesRead < limit) {
+        val bytesRead = inputStream.read(buffer, totalBytesRead, limit - totalBytesRead)
+        if (bytesRead < 0) {
+          continueReading = false
+        } else if (bytesRead == 0) {
+          val singleByte = inputStream.read()
+          if (singleByte < 0) {
+            continueReading = false
+          } else {
+            buffer(totalBytesRead) = singleByte.toByte
+            totalBytesRead += 1
+          }
+        } else {
+          totalBytesRead += bytesRead
+        }
+      }
+
+      if (totalBytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, totalBytesRead)
     } finally {
       inputStream.close()
     }

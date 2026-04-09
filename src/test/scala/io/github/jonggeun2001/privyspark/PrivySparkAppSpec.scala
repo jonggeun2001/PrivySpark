@@ -10,6 +10,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
 import java.io.{ByteArrayOutputStream, PrintStream}
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.nio.file.attribute.PosixFilePermissions
@@ -17,6 +18,7 @@ import java.util.Comparator
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
+import scala.collection.concurrent.TrieMap
 
 @RunWith(classOf[JUnitRunner])
 class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
@@ -561,6 +563,31 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         Files.setPosixFilePermissions(unreadableFile, PosixFilePermissions.fromString("rw-------"))
       }
       deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure detects extensionless parquet files when probe reads are short") {
+    val outputDir = Files.createTempDirectory("privyspark-partial-read-parquet-")
+    val partialPath = "partial:///fixture"
+
+    try {
+      val parquetBytes = Files.readAllBytes(Paths.get(createColumnarDataFile(outputDir, "parquet")))
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(partialPath, parquetBytes)
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        partialPath,
+        partialPath,
+        "2026-04-09T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.map(_.format) == Seq("parquet"))
+      assert(plan.groups.map(_.filePaths.map(path => new org.apache.hadoop.fs.Path(path).toUri.getPath)) == Seq(Seq("/fixture")))
+    } finally {
+      PartialReadFileSystem.clear()
+      deleteRecursively(outputDir)
     }
   }
 
@@ -2475,5 +2502,115 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         stream.close()
       }
     }
+  }
+}
+
+object PartialReadFileSystem {
+  private val fileContents = TrieMap.empty[String, Array[Byte]]
+  private def key(path: String): String = new org.apache.hadoop.fs.Path(path).toUri.getPath
+  private def key(path: org.apache.hadoop.fs.Path): String = path.toUri.getPath
+
+  def register(path: String, bytes: Array[Byte]): Unit = {
+    fileContents.put(key(path), bytes.clone())
+  }
+
+  def clear(): Unit = {
+    fileContents.clear()
+  }
+
+  private[privyspark] def contents(path: org.apache.hadoop.fs.Path): Array[Byte] = {
+    fileContents.getOrElse(key(path), throw new java.io.FileNotFoundException(path.toString))
+  }
+}
+
+class PartialReadFileSystem extends org.apache.hadoop.fs.FileSystem {
+  private val fsUri = URI.create("partial:///")
+  private var workingDirectory: org.apache.hadoop.fs.Path = new org.apache.hadoop.fs.Path("/")
+
+  override def getUri: URI = fsUri
+
+  override def open(path: org.apache.hadoop.fs.Path, bufferSize: Int): org.apache.hadoop.fs.FSDataInputStream = {
+    val bytes = PartialReadFileSystem.contents(path)
+    new org.apache.hadoop.fs.FSDataInputStream(new org.apache.hadoop.fs.FSInputStream {
+      private var position = 0
+
+      override def read(): Int = {
+        if (position >= bytes.length) -1
+        else {
+          val value = bytes(position) & 0xFF
+          position += 1
+          value
+        }
+      }
+
+      override def read(buffer: Array[Byte], offset: Int, length: Int): Int = {
+        if (position >= bytes.length) {
+          -1
+        } else {
+          val chunkSize = math.min(2, math.min(length, bytes.length - position))
+          System.arraycopy(bytes, position, buffer, offset, chunkSize)
+          position += chunkSize
+          chunkSize
+        }
+      }
+
+      override def seek(targetPos: Long): Unit = {
+        position = targetPos.toInt
+      }
+
+      override def getPos: Long = position.toLong
+
+      override def seekToNewSource(targetPos: Long): Boolean = false
+    })
+  }
+
+  override def create(
+    path: org.apache.hadoop.fs.Path,
+    permission: org.apache.hadoop.fs.permission.FsPermission,
+    overwrite: Boolean,
+    bufferSize: Int,
+    replication: Short,
+    blockSize: Long,
+    progress: org.apache.hadoop.util.Progressable
+  ): org.apache.hadoop.fs.FSDataOutputStream = {
+    throw new UnsupportedOperationException("create is not supported")
+  }
+
+  override def append(
+    path: org.apache.hadoop.fs.Path,
+    bufferSize: Int,
+    progress: org.apache.hadoop.util.Progressable
+  ): org.apache.hadoop.fs.FSDataOutputStream = {
+    throw new UnsupportedOperationException("append is not supported")
+  }
+
+  override def rename(src: org.apache.hadoop.fs.Path, dst: org.apache.hadoop.fs.Path): Boolean = false
+
+  override def delete(path: org.apache.hadoop.fs.Path, recursive: Boolean): Boolean = false
+
+  override def listStatus(path: org.apache.hadoop.fs.Path): Array[org.apache.hadoop.fs.FileStatus] =
+    Array(getFileStatus(path))
+
+  override def setWorkingDirectory(path: org.apache.hadoop.fs.Path): Unit = {
+    workingDirectory = path
+  }
+
+  override def getWorkingDirectory: org.apache.hadoop.fs.Path = workingDirectory
+
+  override def mkdirs(
+    path: org.apache.hadoop.fs.Path,
+    permission: org.apache.hadoop.fs.permission.FsPermission
+  ): Boolean = false
+
+  override def getFileStatus(path: org.apache.hadoop.fs.Path): org.apache.hadoop.fs.FileStatus = {
+    val bytes = PartialReadFileSystem.contents(path)
+    new org.apache.hadoop.fs.FileStatus(
+      bytes.length.toLong,
+      false,
+      1,
+      4096L,
+      0L,
+      path.makeQualified(fsUri, workingDirectory)
+    )
   }
 }
