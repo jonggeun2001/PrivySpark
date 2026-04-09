@@ -71,6 +71,9 @@ object PrivySparkApp {
   private val ArchiveFormats = Set(ZipFormat, JarFormat)
   private val NonDirectoryIdentifierFormats = Set(TextFormat, XlsxFormat)
   private val TextProbeByteLimit = 4096
+  private val MagicProbeByteLimit = 4
+  private val ParquetMagicBytes = Array[Byte]('P'.toByte, 'A'.toByte, 'R'.toByte, '1'.toByte)
+  private val OrcMagicBytes = Array[Byte]('O'.toByte, 'R'.toByte, 'C'.toByte)
   private val MaxArchiveExpansionDepth = 1
   private[privyspark] val MaxFileReadAttempts = 2
   private[privyspark] val FileReadRetryDelayMillis = 200L
@@ -348,10 +351,57 @@ object PrivySparkApp {
     val inputStream = fs.open(sourcePath)
     try {
       val buffer = new Array[Byte](limit)
-      val bytesRead = inputStream.read(buffer)
-      if (bytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, bytesRead)
+      var totalBytesRead = 0
+      var continueReading = true
+
+      while (continueReading && totalBytesRead < limit) {
+        val bytesRead = inputStream.read(buffer, totalBytesRead, limit - totalBytesRead)
+        if (bytesRead < 0) {
+          continueReading = false
+        } else if (bytesRead == 0) {
+          val singleByte = inputStream.read()
+          if (singleByte < 0) {
+            continueReading = false
+          } else {
+            buffer(totalBytesRead) = singleByte.toByte
+            totalBytesRead += 1
+          }
+        } else {
+          totalBytesRead += bytesRead
+        }
+      }
+
+      if (totalBytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, totalBytesRead)
     } finally {
       inputStream.close()
+    }
+  }
+
+  private def hasExplicitFileExtension(pathLike: String): Boolean = {
+    val fileName = Option(pathLike).filter(_.nonEmpty).map(path => new Path(path).getName).getOrElse("")
+    val lastDot = fileName.lastIndexOf('.')
+    lastDot > 0 && lastDot < fileName.length - 1
+  }
+
+  private def inferMagicByteFormat(bytes: Array[Byte]): Option[String] = {
+    if (bytes.length >= ParquetMagicBytes.length && ParquetMagicBytes.indices.forall(index => bytes(index) == ParquetMagicBytes(index))) {
+      Some("parquet")
+    } else if (bytes.length >= OrcMagicBytes.length && OrcMagicBytes.indices.forall(index => bytes(index) == OrcMagicBytes(index))) {
+      Some("orc")
+    } else {
+      None
+    }
+  }
+
+  private def detectPhysicalFormat(
+    conf: org.apache.hadoop.conf.Configuration,
+    filePath: String
+  ): Option[String] = {
+    val extensionFormat = FormatDetector.infer(filePath)
+    if (extensionFormat.isDefined || hasExplicitFileExtension(filePath)) {
+      extensionFormat
+    } else {
+      inferMagicByteFormat(readProbeBytes(conf, filePath, MagicProbeByteLimit))
     }
   }
 
@@ -728,7 +778,17 @@ object PrivySparkApp {
     archiveExpansionDepth: Int = 0,
     forceDisableDirectoryIdentifier: Boolean = false
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
-    val detectedFormat = FormatDetector.infer(physicalPath)
+    val hasExplicitExtension = hasExplicitFileExtension(physicalPath)
+    val detectedFormat =
+      try {
+        detectPhysicalFormat(conf, physicalPath)
+      } catch {
+        case NonFatal(e) =>
+          return (
+            Seq.empty,
+            Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
+          )
+      }
     detectedFormat match {
       case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth < MaxArchiveExpansionDepth =>
         expandArchiveSource(
@@ -763,7 +823,7 @@ object PrivySparkApp {
         )
       case None =>
         try {
-          if (looksLikeText(readProbeBytes(conf, physicalPath))) {
+          if (hasExplicitExtension && looksLikeText(readProbeBytes(conf, physicalPath))) {
             (
               Seq(
                 ScanFileEntry(
@@ -869,6 +929,7 @@ object PrivySparkApp {
             case Some(targetPath) =>
               try {
                 val targetComparablePath = canonicalizePath(targetPath.toString)
+                val entryHasExplicitExtension = hasExplicitFileExtension(normalizedEntryName)
                 if (!stagedTargetPaths.add(targetComparablePath)) {
                   archiveErrors += ScanError(
                     datasetPath,
@@ -916,6 +977,69 @@ object PrivySparkApp {
                         )
                         extractedEntries ++= childEntries
                         archiveErrors ++= childErrors
+                    }
+                  case None if !entryHasExplicitExtension =>
+                    val probeBuffer = new java.io.ByteArrayOutputStream()
+                    val buffer = new Array[Byte](8192)
+                    var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
+                    var detectedMagicFormat: Option[String] = None
+                    var bytesRead = zipInputStream.read(buffer)
+
+                    try {
+                      while (bytesRead >= 0) {
+                        if (bytesRead > 0) {
+                          detectedMagicFormat match {
+                            case Some(_) =>
+                              outputStream.write(buffer, 0, bytesRead)
+                            case None =>
+                              val remainingProbeSpace = MagicProbeByteLimit - probeBuffer.size()
+                              val bytesForProbe = math.min(bytesRead, math.max(0, remainingProbeSpace))
+                              if (bytesForProbe > 0) {
+                                probeBuffer.write(buffer, 0, bytesForProbe)
+                              }
+                              inferMagicByteFormat(probeBuffer.toByteArray) match {
+                                case Some(format) =>
+                                  ensureArchiveEntryParent(fs, targetPath) match {
+                                    case Left(errorMessage) =>
+                                      throw new IllegalStateException(errorMessage)
+                                    case Right(_) =>
+                                      outputStream = fs.create(targetPath, true)
+                                      outputStream.write(probeBuffer.toByteArray)
+                                      if (bytesRead > bytesForProbe) {
+                                        outputStream.write(buffer, bytesForProbe, bytesRead - bytesForProbe)
+                                      }
+                                      detectedMagicFormat = Some(format)
+                                  }
+                                case None =>
+                                  ()
+                              }
+                          }
+                        }
+                        bytesRead = zipInputStream.read(buffer)
+                      }
+
+                      detectedMagicFormat match {
+                        case Some(format) =>
+                          extractedEntries += ScanFileEntry(
+                            sourceKey = targetPath.toString,
+                            physicalPath = targetPath.toString,
+                            directoryPath = logicalIdentifier,
+                            format = format,
+                            logicalIdentifier = childLogicalIdentifier,
+                            allowDirectoryIdentifier = false
+                          )
+                        case None =>
+                          archiveErrors += ScanError(
+                            datasetPath,
+                            timestamp,
+                            childLogicalIdentifier,
+                            s"Unsupported file format: $childLogicalIdentifier"
+                          )
+                      }
+                    } finally {
+                      if (outputStream != null) {
+                        outputStream.close()
+                      }
                     }
                   case None =>
                     val probeBuffer = new java.io.ByteArrayOutputStream()
