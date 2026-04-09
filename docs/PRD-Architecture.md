@@ -22,9 +22,10 @@
 5. 대표 파일 기준 스키마 샘플링
 6. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
 7. sampled multi-file group이면 exact split 재검증 후 재분류된 그룹 스캔
-8. non-sampled group이면 그룹 batch scan
-9. 일반 group batch 실패 시 파일 단위 fallback
-10. 결과/오류 리포트 저장
+8. non-sampled group 중 batch-capable group이면 그룹 batch scan
+9. non-sampled `xlsx` group은 direct file scan
+10. 일반 group batch 실패 시 파일 단위 fallback
+11. 결과/오류 리포트 저장
 
 ## 상세 문서 맵
 - 실행 환경과 운영 옵션: [mvp/execution-and-operations.md](mvp/execution-and-operations.md)
@@ -35,6 +36,7 @@
 
 ## 운영 불변 조건
 - 원문 PII는 저장하지 않습니다.
-- CLI 병렬도 값이 있으면 앱 로직 전달값이 우선합니다.
+- CLI 병렬도 값이 있으면 `scanGroups`와 일반 파일 fallback 경로의 앱 로직 전달값이 우선합니다.
+- batch scan을 지원하지 않는 `xlsx` direct file scan 경로는 현재 CLI `--file-parallelism` 전달 대상이 아닙니다.
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
