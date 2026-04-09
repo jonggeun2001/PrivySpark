@@ -328,6 +328,19 @@ object PrivySparkApp {
     if (resolvedComparable == rootComparable || resolvedComparable.startsWith(s"$rootComparable/")) Some(resolvedPath) else None
   }
 
+  private def ensureArchiveEntryParent(
+    fs: org.apache.hadoop.fs.FileSystem,
+    targetPath: Path
+  ): Either[String, Unit] = {
+    Option(targetPath.getParent) match {
+      case None => Right(())
+      case Some(parent) if fs.exists(parent) && fs.getFileStatus(parent).isDirectory => Right(())
+      case Some(parent) if fs.exists(parent) => Left(s"Archive entry parent is not a directory: ${parent.toString}")
+      case Some(parent) if fs.mkdirs(parent) => Right(())
+      case Some(parent) => Left(s"Archive entry parent creation failed: ${parent.toString}")
+    }
+  }
+
   private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int = TextProbeByteLimit): Array[Byte] = {
     val sourcePath = new Path(filePath)
     val fs = sourcePath.getFileSystem(conf)
@@ -828,113 +841,137 @@ object PrivySparkApp {
           val childLogicalIdentifier = s"$logicalIdentifier!$normalizedEntryName"
           safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
             case Some(targetPath) =>
-              val targetComparablePath = canonicalizePath(targetPath.toString)
-              if (!stagedTargetPaths.add(targetComparablePath)) {
-                archiveErrors += ScanError(
-                  datasetPath,
-                  timestamp,
-                  childLogicalIdentifier,
-                  s"Conflicting archive entry path: $normalizedEntryName"
-                )
-              } else FormatDetector.infer(normalizedEntryName) match {
-                case Some(_) =>
-                  Option(targetPath.getParent).foreach(parent => fs.mkdirs(parent))
-                  val outputStream = fs.create(targetPath, true)
-                  try {
-                    val buffer = new Array[Byte](8192)
-                    var bytesRead = zipInputStream.read(buffer)
-                    while (bytesRead >= 0) {
-                      if (bytesRead > 0) {
-                        outputStream.write(buffer, 0, bytesRead)
-                      }
-                      bytesRead = zipInputStream.read(buffer)
-                    }
-                  } finally {
-                    outputStream.close()
-                  }
-
-                  val (childEntries, childErrors) = expandPhysicalSource(
-                    conf,
+              try {
+                val targetComparablePath = canonicalizePath(targetPath.toString)
+                if (!stagedTargetPaths.add(targetComparablePath)) {
+                  archiveErrors += ScanError(
                     datasetPath,
                     timestamp,
-                    targetPath.toString,
                     childLogicalIdentifier,
-                    logicalIdentifier,
-                    stagingPaths,
-                    forceDisableDirectoryIdentifier = true
+                    s"Conflicting archive entry path: $normalizedEntryName"
                   )
-                  extractedEntries ++= childEntries
-                  archiveErrors ++= childErrors
-                case None =>
-                  val probeBuffer = new java.io.ByteArrayOutputStream()
-                  val buffer = new Array[Byte](8192)
-                  var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
-                  var textDecision: Option[Boolean] = None
-                  var bytesRead = zipInputStream.read(buffer)
-
-                  try {
-                    while (bytesRead >= 0) {
-                      if (bytesRead > 0) {
-                        textDecision match {
-                          case Some(true) =>
-                            outputStream.write(buffer, 0, bytesRead)
-                          case Some(false) =>
-                            ()
-                          case None =>
-                            val remainingProbeSpace = TextProbeByteLimit - probeBuffer.size()
-                            val bytesForProbe = math.min(bytesRead, math.max(0, remainingProbeSpace))
-                            if (bytesForProbe > 0) {
-                              probeBuffer.write(buffer, 0, bytesForProbe)
+                } else FormatDetector.infer(normalizedEntryName) match {
+                  case Some(_) =>
+                    ensureArchiveEntryParent(fs, targetPath) match {
+                      case Left(errorMessage) =>
+                        archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                      case Right(_) =>
+                        val outputStream = fs.create(targetPath, true)
+                        try {
+                          val buffer = new Array[Byte](8192)
+                          var bytesRead = zipInputStream.read(buffer)
+                          while (bytesRead >= 0) {
+                            if (bytesRead > 0) {
+                              outputStream.write(buffer, 0, bytesRead)
                             }
-                            if (probeBuffer.size() >= TextProbeByteLimit) {
-                              val isText = looksLikeText(probeBuffer.toByteArray)
-                              textDecision = Some(isText)
-                              if (isText) {
-                                Option(targetPath.getParent).foreach(parent => fs.mkdirs(parent))
-                                outputStream = fs.create(targetPath, true)
-                                outputStream.write(probeBuffer.toByteArray)
-                                if (bytesRead > bytesForProbe) {
-                                  outputStream.write(buffer, bytesForProbe, bytesRead - bytesForProbe)
+                            bytesRead = zipInputStream.read(buffer)
+                          }
+                        } finally {
+                          outputStream.close()
+                        }
+
+                        val (childEntries, childErrors) = expandPhysicalSource(
+                          conf,
+                          datasetPath,
+                          timestamp,
+                          targetPath.toString,
+                          childLogicalIdentifier,
+                          logicalIdentifier,
+                          stagingPaths,
+                          forceDisableDirectoryIdentifier = true
+                        )
+                        extractedEntries ++= childEntries
+                        archiveErrors ++= childErrors
+                    }
+                  case None =>
+                    val probeBuffer = new java.io.ByteArrayOutputStream()
+                    val buffer = new Array[Byte](8192)
+                    var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
+                    var textDecision: Option[Boolean] = None
+                    var bytesRead = zipInputStream.read(buffer)
+
+                    try {
+                      while (bytesRead >= 0) {
+                        if (bytesRead > 0) {
+                          textDecision match {
+                            case Some(true) =>
+                              outputStream.write(buffer, 0, bytesRead)
+                            case Some(false) =>
+                              ()
+                            case None =>
+                              val remainingProbeSpace = TextProbeByteLimit - probeBuffer.size()
+                              val bytesForProbe = math.min(bytesRead, math.max(0, remainingProbeSpace))
+                              if (bytesForProbe > 0) {
+                                probeBuffer.write(buffer, 0, bytesForProbe)
+                              }
+                              if (probeBuffer.size() >= TextProbeByteLimit) {
+                                val isText = looksLikeText(probeBuffer.toByteArray)
+                                textDecision = Some(isText)
+                                if (isText) {
+                                  ensureArchiveEntryParent(fs, targetPath) match {
+                                    case Left(errorMessage) =>
+                                      throw new IllegalStateException(errorMessage)
+                                    case Right(_) =>
+                                      outputStream = fs.create(targetPath, true)
+                                      outputStream.write(probeBuffer.toByteArray)
+                                      if (bytesRead > bytesForProbe) {
+                                        outputStream.write(buffer, bytesForProbe, bytesRead - bytesForProbe)
+                                      }
+                                  }
                                 }
                               }
-                            }
+                          }
                         }
+                        bytesRead = zipInputStream.read(buffer)
                       }
-                      bytesRead = zipInputStream.read(buffer)
-                    }
 
-                    val isText = textDecision.getOrElse(looksLikeText(probeBuffer.toByteArray))
-                    if (isText) {
-                      if (outputStream == null) {
-                        Option(targetPath.getParent).foreach(parent => fs.mkdirs(parent))
-                        outputStream = fs.create(targetPath, true)
-                        outputStream.write(probeBuffer.toByteArray)
+                      val isText = textDecision.getOrElse(looksLikeText(probeBuffer.toByteArray))
+                      if (isText) {
+                        if (outputStream == null) {
+                          ensureArchiveEntryParent(fs, targetPath) match {
+                            case Left(errorMessage) =>
+                              archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                            case Right(_) =>
+                              outputStream = fs.create(targetPath, true)
+                              outputStream.write(probeBuffer.toByteArray)
+                          }
+                        }
+                        if (outputStream != null) {
+                          val (childEntries, childErrors) = expandPhysicalSource(
+                            conf,
+                            datasetPath,
+                            timestamp,
+                            targetPath.toString,
+                            childLogicalIdentifier,
+                            logicalIdentifier,
+                            stagingPaths,
+                            forceDisableDirectoryIdentifier = true
+                          )
+                          extractedEntries ++= childEntries
+                          archiveErrors ++= childErrors
+                        }
+                      } else {
+                        archiveErrors += ScanError(
+                          datasetPath,
+                          timestamp,
+                          childLogicalIdentifier,
+                          s"Unsupported file format: $childLogicalIdentifier"
+                        )
                       }
-                      val (childEntries, childErrors) = expandPhysicalSource(
-                        conf,
-                        datasetPath,
-                        timestamp,
-                        targetPath.toString,
-                        childLogicalIdentifier,
-                        logicalIdentifier,
-                        stagingPaths,
-                        forceDisableDirectoryIdentifier = true
-                      )
-                      extractedEntries ++= childEntries
-                      archiveErrors ++= childErrors
-                    } else {
-                      archiveErrors += ScanError(
-                        datasetPath,
-                        timestamp,
-                        childLogicalIdentifier,
-                        s"Unsupported file format: $childLogicalIdentifier"
-                      )
+                    } finally {
+                      if (outputStream != null) {
+                        outputStream.close()
+                      }
                     }
-                  } finally {
-                    if (outputStream != null) {
-                      outputStream.close()
-                    }
-                  }
+                }
+              } catch {
+                case NonFatal(e) =>
+                  archiveErrors += ScanError(
+                    datasetPath,
+                    timestamp,
+                    childLogicalIdentifier,
+                    s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+                  )
               }
             case None =>
               archiveErrors += ScanError(

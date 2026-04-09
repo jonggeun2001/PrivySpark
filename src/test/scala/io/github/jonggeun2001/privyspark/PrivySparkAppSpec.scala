@@ -1937,6 +1937,39 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("archive entry path conflicts do not abort later valid entries") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-entry-conflicts-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "foo.json" -> "{\"email\":\"alice@example.com\"}\n",
+          "foo.json/bar.csv" ->
+            ("name,email\n" +
+              "mallory,mallory@example.com\n"),
+          "good.csv" ->
+            ("name,email\n" +
+              "bob,bob@example.com\n")
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(
+          ("bundle.zip!foo.json", "email", 1L),
+          ("bundle.zip!good.csv", "email", 1L)
+        ))
+      assert(errors.map(_.file_identifier) == Seq("bundle.zip!foo.json/bar.csv"))
+      assert(errors.head.error_message.contains("Archive entry parent is not a directory"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules scans text-like unknown extensions through the value column") {
     val inputDir = Files.createTempDirectory("privyspark-text-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
