@@ -4,7 +4,7 @@
 
 **Goal:** `privyspark scan`가 그룹/파일 병렬도 값을 직접 인자로 받아 기존 병렬도 해석 로직에 반영하도록 만든다.
 
-**Architecture:** CLI는 병렬도 옵션을 파싱하고 검증만 수행한다. 런타임은 CLI 값을 Spark conf에 주입한 뒤 기존 `resolveGroupParallelism`/`resolveFileParallelism` 경로를 그대로 사용해 동작 변경 범위를 작게 유지한다.
+**Architecture:** CLI는 병렬도 옵션을 파싱하고 검증만 수행한다. 런타임은 CLI 값을 직접 `scanGroups`/`scanGroupByFile` 경로로 전달하고, 값이 없을 때만 기존 `resolveGroupParallelism`/`resolveFileParallelism` fallback을 사용한다.
 
 **Tech Stack:** Scala 2.12, scopt, Spark 3.5, ScalaTest, bash submit script, markdown docs
 
@@ -36,25 +36,25 @@ Expected: PASS
 ### Task 2: 런타임 병렬도 연결
 
 **Files:**
-- Modify: `src/test/scala/io/github/jonggeun2001/privyspark/PrivySparkAppSpec.scala`
+- Modify: `src/test/scala/io/github/jonggeun2001/privyspark/ParallelismConfigSpec.scala`
 - Modify: `src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala`
 
 - [ ] **Step 1: Write the failing test**
 
-CLI 설정을 Spark conf에 반영한 뒤 그룹/파일 병렬도 해석이 해당 값을 사용하는 테스트를 추가한다.
+CLI 설정이 런타임 병렬도 튜플로 정규화되는지 검증하는 테스트를 추가한다.
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `./gradlew test --tests io.github.jonggeun2001.privyspark.PrivySparkAppSpec`
+Run: `./gradlew test --tests io.github.jonggeun2001.privyspark.ParallelismConfigSpec`
 Expected: helper 부재 또는 동작 불일치로 FAIL
 
 - [ ] **Step 3: Write minimal implementation**
 
-CLI 병렬도 값을 Spark conf에 적용하는 helper를 만들고 `main`에서 호출한다.
+CLI 병렬도 값을 직접 호출 경로에 전달하는 helper와 배선을 추가한다.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `./gradlew test --tests io.github.jonggeun2001.privyspark.PrivySparkAppSpec`
+Run: `./gradlew test --tests io.github.jonggeun2001.privyspark.ParallelismConfigSpec`
 Expected: PASS
 
 ### Task 3: 사용자 문서와 제출 스크립트 정렬
@@ -71,7 +71,7 @@ Expected: PASS
 
 - [ ] **Step 2: Run focused verification**
 
-Run: `./gradlew test --tests io.github.jonggeun2001.privyspark.CliSpec --tests io.github.jonggeun2001.privyspark.PrivySparkAppSpec`
+Run: `./gradlew test --tests io.github.jonggeun2001.privyspark.CliSpec --tests io.github.jonggeun2001.privyspark.ParallelismConfigSpec`
 Expected: PASS
 
 - [ ] **Step 3: Run full verification**
@@ -86,7 +86,7 @@ Run:
 git add src/main/scala/io/github/jonggeun2001/privyspark/Cli.scala \
   src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala \
   src/test/scala/io/github/jonggeun2001/privyspark/CliSpec.scala \
-  src/test/scala/io/github/jonggeun2001/privyspark/PrivySparkAppSpec.scala \
+  src/test/scala/io/github/jonggeun2001/privyspark/ParallelismConfigSpec.scala \
   bin/privyspark-submit README.md docs/PRD-Functional.md docs/PRD-Architecture.md \
   docs/superpowers/specs/2026-04-09-cli-parallelism-design.md \
   docs/superpowers/plans/2026-04-09-cli-parallelism.md
