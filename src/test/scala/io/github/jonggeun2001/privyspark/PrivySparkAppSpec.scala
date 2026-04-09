@@ -12,6 +12,7 @@ import org.scalatestplus.junit.JUnitRunner
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.Comparator
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.{ZipEntry, ZipOutputStream}
@@ -533,6 +534,32 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(plan.errors.map(_.file_identifier) == Seq("notes"))
       assert(plan.errors.head.error_message.contains("Unsupported file format"))
     } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure records extensionless probe read failures as file errors") {
+    val inputDir = Files.createTempDirectory("privyspark-extensionless-probe-failure-")
+    val unreadableFile = inputDir.resolve("locked")
+
+    try {
+      writeBytes(unreadableFile, Array[Byte](0x50.toByte, 0x41.toByte, 0x52.toByte, 0x31.toByte))
+      Files.setPosixFilePermissions(unreadableFile, PosixFilePermissions.fromString("---------"))
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-09T00:00:00Z"
+      )
+
+      assert(plan.groups.isEmpty)
+      assert(plan.errors.map(_.file_identifier) == Seq("locked"))
+      assert(plan.errors.head.error_message.nonEmpty)
+    } finally {
+      if (Files.exists(unreadableFile)) {
+        Files.setPosixFilePermissions(unreadableFile, PosixFilePermissions.fromString("rw-------"))
+      }
       deleteRecursively(inputDir)
     }
   }

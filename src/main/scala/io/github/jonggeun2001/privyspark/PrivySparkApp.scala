@@ -760,7 +760,16 @@ object PrivySparkApp {
     forceDisableDirectoryIdentifier: Boolean = false
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
     val hasExplicitExtension = hasExplicitFileExtension(physicalPath)
-    val detectedFormat = detectPhysicalFormat(conf, physicalPath)
+    val detectedFormat =
+      try {
+        detectPhysicalFormat(conf, physicalPath)
+      } catch {
+        case NonFatal(e) =>
+          return (
+            Seq.empty,
+            Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
+          )
+      }
     detectedFormat match {
       case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth < MaxArchiveExpansionDepth =>
         expandArchiveSource(
