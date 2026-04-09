@@ -11,7 +11,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - 그룹 내부는 대표 파일 1개로 스키마를 우선 샘플링하고, sampled multi-file group은 batch scan 전에 전체 파일 exact split으로 동질성을 재확인한다. exact split 결과가 단일 동일-스키마 그룹이면 디렉토리 식별자를 복원하고, 아니면 파일 식별자를 유지한다. CSV는 이 단계에서 헤더 유무 드리프트도 함께 재확인한다.
 - `file_identifier`는 입력 경로 기준 상대경로를 사용하고, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 충돌 방지를 위해 `.`로 표기한다.
 - 외부 규칙 파일 기반 정규식 탐지 (기본 제공 탐지 타입: 전화번호, 이메일, 주민등록번호, 외국인 등록번호, 운전면허번호, 주소, 계좌번호, 카드번호, 한국 여권번호, IP / 선택적 `column_hints` 지원 + 배치 집계 + 메트릭 50,000 초과 시 소배치 폴백 + 집계 예외 시 안전 legacy 폴백)
-- 기본 `resident_registration_number` 규칙은 하이픈 포함/미포함 입력 모두에서 성별/세기 코드 1자리만 있는 축약형(`901225-1`, `9012251`)과 전체 형식(`901225-1234567`, `9012251234567`)을 모두 허용
+- 기본 `resident_registration_number` 규칙은 하이픈 포함/미포함 입력 모두에서 성별/세기 코드 1자리만 있는 축약형(`901225-1`, `9012251`)과 전체 형식(`901225-1234567`, `9012251234567`)을 모두 허용하고, 더 긴 숫자 토큰 내부 substring 매치는 제외
 - 기본 `driver_license_number` 규칙은 하이픈 포함/미포함 입력을 모두 허용하고, 구형 10자리 또는 현행 12자리 형식만 strict 검증한다. 현행 12자리는 지역코드 `11`~`26`, `28`만 허용한다.
 - 기본 `passport_number` 규칙은 한국 여권번호 형식만 검출하며, 다른 영숫자 토큰에 붙은 substring은 제외
 - `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`를 지정하거나, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 지정하면 드라이버 debug 로그에 스캔 계획, 스키마 분할, 그룹/파일 스캔, 리포트 저장 진행사항을 기록

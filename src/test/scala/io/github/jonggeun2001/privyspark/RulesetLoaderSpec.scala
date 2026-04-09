@@ -27,16 +27,18 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(rules.forall(_.matchType == "value"))
   }
 
-  test("default resident registration rule accepts short and full forms only") {
+  test("default resident registration rule accepts short and full forms without matching numeric dates") {
     val residentRegistrationNumberRule = RulesetLoader.load("default").find(_.piiType == "resident_registration_number")
     assert(residentRegistrationNumberRule.nonEmpty)
 
-    val regex = new Regex(s"\\A(?:${residentRegistrationNumberRule.get.regex})\\z").pattern
-    assert(regex.matcher("901225-1").matches())
-    assert(regex.matcher("9012251").matches())
-    assert(regex.matcher("901225-1234567").matches())
-    assert(regex.matcher("9012251234567").matches())
-    assert(!regex.matcher("20251027").matches())
+    val regex = new Regex(residentRegistrationNumberRule.get.regex)
+    val fullMatchRegex = new Regex(s"\\A(?:${residentRegistrationNumberRule.get.regex})\\z").pattern
+
+    assert(fullMatchRegex.matcher("901225-1").matches())
+    assert(fullMatchRegex.matcher("9012251").matches())
+    assert(fullMatchRegex.matcher("901225-1234567").matches())
+    assert(fullMatchRegex.matcher("9012251234567").matches())
+    assert(!regex.findFirstIn("20251027").nonEmpty)
   }
 
   test("loads optional column hints and match type from ruleset file and ignores blank entries") {
