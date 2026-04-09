@@ -265,11 +265,30 @@ object PrivySparkApp {
     datasetPath: String,
     physicalPath: String
   ): String = {
-    val targetVariants = comparablePathVariants(physicalPath)
-    group.filePaths.iterator.collectFirst {
-      case sourceKey if comparablePathVariants(resolvePhysicalPath(group, sourceKey)).exists(targetVariants.contains) =>
+    val canonicalPhysicalPath = canonicalizePath(physicalPath)
+    val exactMatches = group.filePaths.filter { sourceKey =>
+      canonicalizePath(resolvePhysicalPath(group, sourceKey)) == canonicalPhysicalPath
+    }
+    val matchingSourceKeys =
+      if (exactMatches.nonEmpty) {
+        exactMatches
+      } else {
+        val targetVariants = comparablePathVariants(physicalPath)
+        group.filePaths.filter { sourceKey =>
+          comparablePathVariants(resolvePhysicalPath(group, sourceKey)).exists(targetVariants.contains)
+        }
+      }
+
+    matchingSourceKeys.distinct match {
+      case Seq(sourceKey) =>
         resolveLogicalIdentifier(group, datasetPath, sourceKey)
-    }.getOrElse(resolveRelativeIdentifier(datasetPath, physicalPath))
+      case Seq() =>
+        resolveRelativeIdentifier(datasetPath, physicalPath)
+      case multiple =>
+        throw new IllegalStateException(
+          s"Ambiguous logical identifier mapping for physical path: $physicalPath (${multiple.mkString(",")})"
+        )
+    }
   }
 
   private def supportsBatchScan(group: ScanGroup): Boolean = {
@@ -284,11 +303,12 @@ object PrivySparkApp {
     try {
       val stagingPath = new Path(path)
       val fs = stagingPath.getFileSystem(conf)
-      if (fs.exists(stagingPath)) {
-        fs.delete(stagingPath, true)
+      if (fs.exists(stagingPath) && !fs.delete(stagingPath, true)) {
+        logDriver(s"staging_cleanup_failed path=$path reason=delete returned false")
       }
     } catch {
-      case NonFatal(_) => ()
+      case NonFatal(e) =>
+        logDriver(s"staging_cleanup_failed path=$path reason=${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}")
     }
   }
 

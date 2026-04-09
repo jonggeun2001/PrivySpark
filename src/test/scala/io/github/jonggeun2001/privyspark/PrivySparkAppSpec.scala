@@ -1906,6 +1906,37 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules preserves distinct archive identifiers for hash and percent-encoded filenames") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-hash-variants-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "users#2024.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n"),
+          "users%232024.csv" ->
+            ("name,email\n" +
+              "bob,bob@example.com\n")
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(
+          ("bundle.zip!users#2024.csv", "email", 1L),
+          ("bundle.zip!users%232024.csv", "email", 1L)
+        ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules scans text-like unknown extensions through the value column") {
     val inputDir = Files.createTempDirectory("privyspark-text-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
