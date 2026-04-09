@@ -21,7 +21,7 @@
 ### 2.2 입력 처리
 - 포맷 인자는 받지 않음.
 - 확장자 기반 자동 감지(`csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`).
-- `zip`, `jar`는 내부 엔트리를 선스캔해 지원 포맷 파일만 staging 후 스캔한다.
+- `zip`, `jar`는 내부 엔트리를 선스캔해 지원 포맷 파일만 staging 후 스캔한다. archive 확장은 1단계까지만 허용하며, nested `zip`/`jar` 엔트리는 실패로 기록한다.
 - `xlsx`는 workbook을 시트 단위 논리 입력으로 확장해 스캔한다.
 - 미지원 확장자는 먼저 text probe를 수행하고, text로 판단되면 plain text 파일로 읽어 스캔한다. binary로 판단되면 해당 파일을 실패로 기록하고 오류 리포트에 포함한다.
 - JSON 입력이 Spark 내부 corrupt record 컬럼만 생성할 정도로 손상돼 있으면 해당 파일을 실패로 기록하고 오류 리포트에 포함.

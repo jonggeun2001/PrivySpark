@@ -1970,6 +1970,42 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules rejects nested archives instead of expanding them recursively") {
+    val inputDir = Files.createTempDirectory("privyspark-nested-archive-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      val nestedArchiveBytes = createArchiveBytes(
+        Seq(
+          "customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n").getBytes(StandardCharsets.UTF_8)
+        )
+      )
+      createArchiveFileWithBytes(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "good.csv" ->
+            ("name,email\n" +
+              "bob,bob@example.com\n").getBytes(StandardCharsets.UTF_8),
+          "nested/inner.zip" -> nestedArchiveBytes
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.zip!good.csv", "email", 1L)))
+      assert(!results.exists(_.file_identifier.contains("customers.csv")))
+      assert(errors.exists(error =>
+        error.file_identifier == "bundle.zip!nested/inner.zip" &&
+          error.error_message.contains("Nested archive expansion is not supported")))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("workbook pre-scan errors do not disable directory aggregation for sibling flat files") {
     val inputDir = Files.createTempDirectory("privyspark-xlsx-error-scope-")
     val timestamp = "2026-04-09T00:00:00Z"
@@ -2195,18 +2231,41 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   private def createArchiveFile(path: Path, entries: Seq[(String, String)]): String = {
+    createArchiveFileWithBytes(
+      path,
+      entries.map { case (entryName, content) => entryName -> content.getBytes(StandardCharsets.UTF_8) }
+    )
+  }
+
+  private def createArchiveFileWithBytes(path: Path, entries: Seq[(String, Array[Byte])]): String = {
     val outputStream = new ZipOutputStream(Files.newOutputStream(path))
     try {
       entries.foreach {
         case (entryName, content) =>
           outputStream.putNextEntry(new ZipEntry(entryName))
-          outputStream.write(content.getBytes(StandardCharsets.UTF_8))
+          outputStream.write(content)
           outputStream.closeEntry()
       }
     } finally {
       outputStream.close()
     }
     path.toString
+  }
+
+  private def createArchiveBytes(entries: Seq[(String, Array[Byte])]): Array[Byte] = {
+    val outputStream = new ByteArrayOutputStream()
+    val zipOutputStream = new ZipOutputStream(outputStream)
+    try {
+      entries.foreach {
+        case (entryName, content) =>
+          zipOutputStream.putNextEntry(new ZipEntry(entryName))
+          zipOutputStream.write(content)
+          zipOutputStream.closeEntry()
+      }
+    } finally {
+      zipOutputStream.close()
+    }
+    outputStream.toByteArray
   }
 
   private def findDataFile(root: Path, extension: String): Option[Path] = {

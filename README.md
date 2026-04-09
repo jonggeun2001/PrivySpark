@@ -18,7 +18,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`를 지정하거나, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 지정하면 드라이버 debug 로그에 스캔 계획, 스키마 분할, 그룹/파일 스캔, 리포트 저장 진행사항을 기록
 - 그룹/집계 폴백 발생 시 원인과 실행 경로를 드라이버 로그에 기록
 - 지원 확장자: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`
-- `zip`, `jar`는 내부 엔트리를 선스캔해 지원 포맷 파일만 staging 후 스캔한다. archive 내부 식별자는 `<archive>!<entry>` 형식을 사용한다.
+- `zip`, `jar`는 내부 엔트리를 선스캔해 지원 포맷 파일만 staging 후 스캔한다. archive 확장은 1단계까지만 허용하며, nested `zip`/`jar` 엔트리는 오류 리포트로 기록한다. archive 내부 식별자는 `<archive>!<entry>` 형식을 사용한다.
 - `xlsx`는 `spark-excel`로 시트 단위 스캔을 수행하며, `file_identifier`는 `<workbook>#<sheet>` 형식을 사용한다.
 - 확장자가 미지원이어도 내용이 text로 보이면 plain text 파일로 읽어 단일 `value` 컬럼을 스캔한다. binary로 판단되면 오류 리포트로 분류한다.
 - JSON 입력이 Spark 내부 corrupt record 컬럼만 생성할 정도로 손상돼 있으면 해당 파일은 스캔 대상 그룹에 포함하지 않고 오류 리포트에 기록한다.

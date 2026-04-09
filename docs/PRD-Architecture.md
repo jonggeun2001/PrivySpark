@@ -29,7 +29,7 @@
 ### 3.1 플로우
 1. 입력 경로 검증(절대경로/URI)
 2. 디렉토리 구조 선스캔 및 파일 목록 수집
-3. archive 엔트리 확장, workbook 시트 확장, unknown-extension text probe 수행
+3. archive 엔트리 확장(1단계 제한), workbook 시트 확장, unknown-extension text probe 수행
 4. `(directory, format)` 기준 1차 그룹화
 5. 그룹 내 대표 파일 1개 기준 스키마 샘플링
 6. 그룹 단위 배치 스캔 수행
@@ -42,6 +42,7 @@
 - 다중 파일 그룹은 대표 파일 1개로 스키마를 샘플링하고 `schemaSampled=true`로 표시한다
 - sampled group은 exact split으로 동질성이 확인되기 전까지 `useDirectoryIdentifier=false`로 유지한다
 - archive 내부 파일과 Excel 시트는 논리 입력(`archive!entry`, `workbook#sheet`) 기준 식별자를 유지하며 디렉토리 식별자로 승격하지 않는다
+- archive 내부의 nested `zip`/`jar` 엔트리는 재귀 확장하지 않고 해당 논리 식별자 범위의 오류로 기록한다
 - sampled multi-file group은 batch scan 전에 exact split으로 재확인하고, 단일 동일-스키마 그룹이면 `useDirectoryIdentifier=true`로 복원한다
 - CSV는 exact split 단계에서 대표 파일의 헤더 유무 판정을 전체에 전파하지 않도록 헤더 드리프트도 함께 재확인한다
 - exact split 이후에도 batch 읽기가 실패하면 파일 단위 폴백으로 전환하고, 여러 서브그룹으로 갈라지면 `useDirectoryIdentifier=false`를 유지한다

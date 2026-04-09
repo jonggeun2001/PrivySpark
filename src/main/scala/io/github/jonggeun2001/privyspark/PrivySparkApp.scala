@@ -71,6 +71,7 @@ object PrivySparkApp {
   private val ArchiveFormats = Set(ZipFormat, JarFormat)
   private val NonDirectoryIdentifierFormats = Set(TextFormat, XlsxFormat)
   private val TextProbeByteLimit = 4096
+  private val MaxArchiveExpansionDepth = 1
   private[privyspark] val MaxFileReadAttempts = 2
   private[privyspark] val FileReadRetryDelayMillis = 200L
   private val CommonCsvHeaderTokens = Set(
@@ -724,12 +725,26 @@ object PrivySparkApp {
     logicalIdentifier: String,
     groupingDirectoryPath: String,
     stagingPaths: ArrayBuffer[String],
+    archiveExpansionDepth: Int = 0,
     forceDisableDirectoryIdentifier: Boolean = false
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
     val detectedFormat = FormatDetector.infer(physicalPath)
     detectedFormat match {
+      case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth < MaxArchiveExpansionDepth =>
+        expandArchiveSource(
+          conf,
+          datasetPath,
+          timestamp,
+          physicalPath,
+          logicalIdentifier,
+          stagingPaths,
+          archiveExpansionDepth + 1
+        )
       case Some(format) if ArchiveFormats.contains(format) =>
-        expandArchiveSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier, stagingPaths)
+        (
+          Seq.empty,
+          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Nested archive expansion is not supported: $logicalIdentifier"))
+        )
       case Some(XlsxFormat) =>
         expandWorkbookSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier)
       case Some(format) =>
@@ -815,7 +830,8 @@ object PrivySparkApp {
     timestamp: String,
     archivePath: String,
     logicalIdentifier: String,
-    stagingPaths: ArrayBuffer[String]
+    stagingPaths: ArrayBuffer[String],
+    archiveExpansionDepth: Int
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
     val sourcePath = new Path(archivePath)
     val fs = sourcePath.getFileSystem(conf)
@@ -861,6 +877,13 @@ object PrivySparkApp {
                     s"Conflicting archive entry path: $normalizedEntryName"
                   )
                 } else FormatDetector.infer(normalizedEntryName) match {
+                  case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth >= MaxArchiveExpansionDepth =>
+                    archiveErrors += ScanError(
+                      datasetPath,
+                      timestamp,
+                      childLogicalIdentifier,
+                      s"Nested archive expansion is not supported: $childLogicalIdentifier"
+                    )
                   case Some(_) =>
                     ensureArchiveEntryParent(fs, targetPath) match {
                       case Left(errorMessage) =>
@@ -888,6 +911,7 @@ object PrivySparkApp {
                           childLogicalIdentifier,
                           logicalIdentifier,
                           stagingPaths,
+                          archiveExpansionDepth = archiveExpansionDepth,
                           forceDisableDirectoryIdentifier = true
                         )
                         extractedEntries ++= childEntries
@@ -955,6 +979,7 @@ object PrivySparkApp {
                             childLogicalIdentifier,
                             logicalIdentifier,
                             stagingPaths,
+                            archiveExpansionDepth = archiveExpansionDepth,
                             forceDisableDirectoryIdentifier = true
                           )
                           extractedEntries ++= childEntries
