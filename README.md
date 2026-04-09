@@ -6,6 +6,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - 일회성 배치 실행
 - 입력/출력 경로는 절대경로(또는 URI)만 허용
 - `--sample-ratio`는 `0.0 < ratio <= 1.0` 범위만 허용
+- `--group-parallelism`, `--file-parallelism`은 `0`보다 큰 정수만 허용하며, 지정 시 Spark conf 기반 기본 병렬도보다 우선한다
 - 파일 단위 스캔을 기본으로 하되, exact-confirmed 동일 스키마 파일 묶음은 디렉토리 그룹 기준으로 식별 가능
 - 디렉토리 구조 선스캔 후 `(디렉토리, 포맷)` 그룹 단위로 배치 처리
 - 그룹 내부는 대표 파일 1개로 스키마를 우선 샘플링하고, sampled multi-file group은 batch scan 전에 전체 파일 exact split으로 동질성을 재확인한다. exact split 결과가 단일 동일-스키마 그룹이면 디렉토리 식별자를 복원하고, 아니면 파일 식별자를 유지한다. CSV는 이 단계에서 헤더 유무 드리프트도 함께 재확인한다.
@@ -23,6 +24,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - JSON 입력이 Spark 내부 corrupt record 컬럼만 생성할 정도로 손상돼 있으면 해당 파일은 스캔 대상 그룹에 포함하지 않고 오류 리포트에 기록한다.
 - CSV는 헤더 유무를 자동 감지한다. 헤더가 있으면 헤더명 기반 시그니처를 사용하고, 헤더가 없으면 컬럼 수 기반 시그니처와 Spark 기본 `_c0`, `_c1`, ... 컬럼명을 사용한다. plain-text 2행 tie-case는 header 쪽으로 보수 처리한다.
 - 샘플링 지원(`--sample-ratio`, 기본값 `0.2`, 비결정적 랜덤)
+- 앱 병렬도 조정 지원(`--group-parallelism`, `--file-parallelism`) / 미지정 시 `spark.privyspark.groupParallelism=4`, `spark.privyspark.fileParallelism=3` 기본 경로 사용
 - 결과 출력: Parquet + CSV (Spark 기본 포맷)
 - 실패 파일은 스킵하고 별도 오류 리포트 생성
 - PII 원문값 저장 금지(파일/컬럼/집계 정보만 저장)
@@ -66,12 +68,15 @@ bin/privyspark-submit \
   --path /abs/input \
   --output /abs/output \
   --ruleset default \
-  --sample-ratio 0.2
+  --sample-ratio 0.2 \
+  --group-parallelism 8 \
+  --file-parallelism 4
 ```
 
 스크립트는 `spark-submit --master yarn --deploy-mode cluster`를 기본 사용합니다.
 오프라인 YARN 환경 대응을 위해 기본적으로 `--packages`를 사용하지 않으며, Shadow fat JAR(`*-all.jar`)를 제출합니다.
 또한 기본 규칙 파일(`config/rules/default.yaml`)을 `--files`로 YARN 드라이버에 배포합니다.
+CLI 병렬도 옵션을 생략하면 기존 Spark conf 또는 앱 기본값을 사용합니다.
 
 ## spark-submit 직접 실행
 ```bash
@@ -86,10 +91,13 @@ spark-submit \
   --path hdfs:///data/input \
   --output hdfs:///data/privyspark-report \
   --ruleset default \
-  --sample-ratio 0.2
+  --sample-ratio 0.2 \
+  --group-parallelism 8 \
+  --file-parallelism 4
 ```
 
 커스텀 ruleset 사용 시 `--files /abs/path/my-rules.yaml#my-rules.yaml`와 `--ruleset my-rules.yaml`를 함께 지정합니다.
+CLI에 병렬도 값을 주면 `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`보다 우선합니다.
 debug 로그가 필요 없으면 `PRIVYSPARK_DEBUG`를 생략하면 됩니다.
 debug 로그를 끄더라도 스캔 요약과 fallback 로그는 계속 출력됩니다.
 
