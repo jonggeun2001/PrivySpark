@@ -1,66 +1,27 @@
 # PrivySpark
 
-PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개인정보(PII)를 정규식으로 탐지해 리포트를 생성합니다.
+PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개인정보(PII)를 정규식으로 탐지해 결과 리포트와 오류 리포트를 생성합니다.
 
-## 현재 범위 (MVP v0.1)
+## MVP 요약
 - 일회성 배치 실행
-- 입력/출력 경로는 절대경로(또는 URI)만 허용
-- `--sample-ratio`는 `0.0 < ratio <= 1.0` 범위만 허용
-- `--group-parallelism`, `--file-parallelism`은 `0`보다 큰 정수만 허용하며, 지정 시 Spark conf 기반 기본 병렬도보다 우선한다
-- 파일 단위 스캔을 기본으로 하되, exact-confirmed 동일 스키마 파일 묶음은 디렉토리 그룹 기준으로 식별 가능
-- 디렉토리 구조 선스캔 후 `(디렉토리, 포맷)` 그룹 단위로 배치 처리
-- 그룹 내부는 대표 파일 1개로 스키마를 우선 샘플링하고, sampled multi-file group은 batch scan 전에 전체 파일 exact split으로 동질성을 재확인한다. exact split 결과가 단일 동일-스키마 그룹이면 디렉토리 식별자를 복원하고, 아니면 파일 식별자를 유지한다. CSV는 이 단계에서 헤더 유무 드리프트도 함께 재확인한다.
-- `file_identifier`는 입력 경로 기준 상대경로를 사용하고, exact split으로 동일 스키마가 확인된 디렉토리 그룹만 디렉토리 상대경로를 사용한다. 입력 루트 디렉토리 그룹은 충돌 방지를 위해 `.`로 표기한다.
-- 외부 규칙 파일 기반 정규식 탐지 (기본 제공 탐지 타입: 전화번호, 이메일, 주민등록번호, 외국인 등록번호, 운전면허번호, 주소, 계좌번호, 카드번호, 한국 여권번호, IP / 선택적 `column_hints` 지원 + 배치 집계 + 메트릭 50,000 초과 시 소배치 폴백 + 집계 예외 시 안전 legacy 폴백)
-- 기본 `resident_registration_number` 규칙은 하이픈 포함/미포함 입력 모두에서 성별/세기 코드 1자리만 있는 축약형(`901225-1`, `9012251`)과 전체 형식(`901225-1234567`, `9012251234567`)을 모두 허용하고, 더 긴 숫자 토큰 내부 substring 매치는 제외
-- 기본 `driver_license_number` 규칙은 하이픈 포함/미포함 입력을 모두 허용하고, 구형 10자리 또는 현행 12자리 형식만 strict 검증한다. 현행 12자리는 지역코드 `11`~`26`, `28`만 허용한다.
-- 기본 `passport_number` 규칙은 한국 여권번호 형식만 검출하며, 다른 영숫자 토큰에 붙은 substring은 제외
-- `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`를 지정하거나, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 지정하면 드라이버 debug 로그에 스캔 계획, 스키마 분할, 그룹/파일 스캔, 리포트 저장 진행사항을 기록
-- 그룹/집계 폴백 발생 시 원인과 실행 경로를 드라이버 로그에 기록
-- 지원 확장자: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`
-- `zip`, `jar`는 내부 엔트리를 선스캔해 지원 포맷 파일만 staging 후 스캔한다. archive 확장은 1단계까지만 허용하며, nested `zip`/`jar` 엔트리는 오류 리포트로 기록한다. archive 내부 식별자는 `<archive>!<entry>` 형식을 사용한다.
-- `xlsx`는 `spark-excel`로 시트 단위 스캔을 수행하며, `file_identifier`는 `<workbook>#<sheet>` 형식을 사용한다.
-- 확장자가 미지원이어도 내용이 text로 보이면 plain text 파일로 읽어 단일 `value` 컬럼을 스캔한다. binary로 판단되면 오류 리포트로 분류한다.
-- JSON 입력이 Spark 내부 corrupt record 컬럼만 생성할 정도로 손상돼 있으면 해당 파일은 스캔 대상 그룹에 포함하지 않고 오류 리포트에 기록한다.
-- CSV는 헤더 유무를 자동 감지한다. 헤더가 있으면 헤더명 기반 시그니처를 사용하고, 헤더가 없으면 컬럼 수 기반 시그니처와 Spark 기본 `_c0`, `_c1`, ... 컬럼명을 사용한다. plain-text 2행 tie-case는 header 쪽으로 보수 처리한다.
-- 샘플링 지원(`--sample-ratio`, 기본값 `0.2`, 비결정적 랜덤)
-- 앱 병렬도 조정 지원(`--group-parallelism`, `--file-parallelism`) / 미지정 시 `spark.privyspark.groupParallelism=4`, `spark.privyspark.fileParallelism=3` 기본 경로 사용
-- 결과 출력: Parquet + CSV (Spark 기본 포맷)
-- 실패 파일은 스킵하고 별도 오류 리포트 생성
-- PII 원문값 저장 금지(파일/컬럼/집계 정보만 저장)
+- 입력/출력 경로는 절대경로 또는 URI만 허용
+- 지원 입력: `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`, plain text fallback
+- 탐지 방식: ruleset 기반 regex + 일부 타입의 내장 strict validator
+- 출력: Parquet + CSV (`scan_results`, `scan_errors`)
+- 샘플링과 앱 레벨 병렬도 조정 지원
 
-## 프로젝트 구조
-- `src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala`: 스캔 오케스트레이션, 디렉토리 선스캔, archive/xlsx/text 입력 정규화, 그룹/파일 폴백, 리포트 저장
-- `src/main/scala/io/github/jonggeun2001/privyspark/Cli.scala`: CLI 파싱과 `CliConfig`
-- `src/main/scala/io/github/jonggeun2001/privyspark/PathValidator.scala`: 절대경로/URI 검증
-- `src/main/scala/io/github/jonggeun2001/privyspark/FormatDetector.scala`: 지원 포맷 판별
-- `src/main/scala/io/github/jonggeun2001/privyspark/DetectionAggregator.scala`: 규칙별 집계, `match_type` 처리, 배치/legacy 폴백
-- `src/main/scala/io/github/jonggeun2001/privyspark/DriverLicenseNumberValidator.scala`: 운전면허번호 strict validator
-- `src/main/scala/io/github/jonggeun2001/privyspark/config/RulesetLoader.scala`: 기본/외부 ruleset 로딩
-- `src/main/scala/io/github/jonggeun2001/privyspark/model/Models.scala`: 규칙/리포트 데이터 모델
-- `src/test/scala/io/github/jonggeun2001/privyspark`: CLI, 경로 검증, 포맷 감지, ruleset 로드, 집계, 앱 플로우 테스트
-- `src/test/resources/datasets`: 검증용 테스트 데이터셋
-- `config/rules/default.yaml`: 기본 규칙셋
-- `bin/privyspark-submit`: YARN cluster 제출 스크립트
-- `docs/PRD-Functional.md`: 기능 요구사항 문서
-- `docs/PRD-Architecture.md`: 아키텍처 요구사항 문서
-
-## 빌드 타겟 버전
-- Spark: `3.5.3`
-- Scala: `2.12`
-- JVM 바이트코드 타겟: `1.8`
-
-## 빌드
+## 빠른 명령
+빌드:
 ```bash
 ./gradlew clean shadowJar
 ```
 
-## 테스트
+테스트:
 ```bash
 ./gradlew test
 ```
 
-## YARN Cluster 실행
+YARN cluster 실행:
 ```bash
 PRIVYSPARK_DEBUG=true \
 bin/privyspark-submit \
@@ -73,64 +34,20 @@ bin/privyspark-submit \
   --file-parallelism 4
 ```
 
-스크립트는 `spark-submit --master yarn --deploy-mode cluster`를 기본 사용합니다.
-오프라인 YARN 환경 대응을 위해 기본적으로 `--packages`를 사용하지 않으며, Shadow fat JAR(`*-all.jar`)를 제출합니다.
-또한 기본 규칙 파일(`config/rules/default.yaml`)을 `--files`로 YARN 드라이버에 배포합니다.
-CLI 병렬도 옵션을 생략하면 기존 Spark conf 또는 앱 기본값을 사용합니다.
+## 문서 맵
+- 기능 요구사항 허브: [docs/PRD-Functional.md](docs/PRD-Functional.md)
+- 아키텍처 허브: [docs/PRD-Architecture.md](docs/PRD-Architecture.md)
+- MVP 상세 문서 인덱스: [docs/mvp/README.md](docs/mvp/README.md)
+- 성능 검토 메모: [docs/PERF-PLAN-A.md](docs/PERF-PLAN-A.md), [docs/PERF-PLAN-B.md](docs/PERF-PLAN-B.md)
 
-## spark-submit 직접 실행
-```bash
-spark-submit \
-  --class io.github.jonggeun2001.privyspark.PrivySparkApp \
-  --master yarn \
-  --deploy-mode cluster \
-  --conf spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true \
-  --files /abs/path/config/rules/default.yaml#default-rules.yaml \
-  /abs/path/privyspark-<version>-all.jar \
-  scan \
-  --path hdfs:///data/input \
-  --output hdfs:///data/privyspark-report \
-  --ruleset default \
-  --sample-ratio 0.2 \
-  --group-parallelism 8 \
-  --file-parallelism 4
-```
+## 소스 구조
+- `src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala`: 입력 확장, 그룹화, 스캔 오케스트레이션, 리포트 저장
+- `src/main/scala/io/github/jonggeun2001/privyspark/Cli.scala`: CLI 파싱과 실행 옵션 정의
+- `src/main/scala/io/github/jonggeun2001/privyspark/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
+- `src/main/scala/io/github/jonggeun2001/privyspark/FormatDetector.scala`: 지원 포맷 판별
+- `src/main/scala/io/github/jonggeun2001/privyspark/config/RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
+- `src/main/scala/io/github/jonggeun2001/privyspark/model/Models.scala`: ruleset, 결과, 오류 모델
 
-커스텀 ruleset 사용 시 `--files /abs/path/my-rules.yaml#my-rules.yaml`와 `--ruleset my-rules.yaml`를 함께 지정합니다.
-CLI에 병렬도 값을 주면 `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`보다 우선합니다.
-debug 로그가 필요 없으면 `PRIVYSPARK_DEBUG`를 생략하면 됩니다.
-debug 로그를 끄더라도 스캔 요약과 fallback 로그는 계속 출력됩니다.
-
-
-## GitHub Release 산출물
-- 태그 `v*` 또는 bare semver(`0.1.3` 형식) 푸시 시 GitHub Actions가 `./gradlew clean shadowJar`를 실행합니다.
-- 릴리즈 자산 파일명은 태그를 포함한 `privyspark-<tag>-all.jar` 및 `privyspark-<tag>-all.jar.sha256` 형식으로 업로드됩니다.
-
-예시:
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-
-git tag 0.1.3
-git push origin 0.1.3
-```
-
-## 규칙셋 파일 형식
-`config/rules/default.yaml` 예시:
-```yaml
-rules:
-  - pii_type: email
-    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}'
-    match_type: full_column
-    column_hints:
-      - email
-      - mail
-```
-
-`pii_type: name`은 더 이상 지원하지 않으며, 커스텀 ruleset에 포함하면 로드 단계에서 실패합니다.
-기본 `driver_license_number` 규칙은 하이픈 포함/미포함 값을 모두 허용하되, 구형 10자리 또는 현행 12자리 형식만 strict 검증합니다. 현행 12자리는 지역코드 `11`~`26`, `28`만 허용합니다.
-기본 `passport_number` 규칙은 한국 여권번호 형식만 대상으로 하며, 앞뒤에 영문/숫자가 붙은 substring은 검출하지 않습니다.
-`column_hints`는 커스텀 ruleset에서 선택적으로 사용하는 필드입니다. 지정하면 컬럼명에 해당 힌트가 포함된 컬럼에만 규칙을 적용하고, 생략하면 기존처럼 모든 컬럼을 검사합니다. 기본 ruleset은 기존 호환성을 위해 모든 컬럼을 검사합니다.
-`match_type`도 선택 필드이며 기본값은 `value`입니다. `value`는 기존처럼 regex에 매칭되는 값 개수를 집계하고, `full_column`은 비어 있지 않은 값 전체가 regex를 만족하는 컬럼/파일에 대해서만 결과를 생성합니다.
-`validator` 필드는 더 이상 지원하지 않으며, 커스텀 ruleset에 포함하면 로드 단계에서 실패합니다.
-제거된 내부 정규식 참조 `__KOREAN_NAME_RULE_REGEX__`를 직접 포함한 ruleset도 로드 단계에서 실패합니다.
+## 릴리즈
+- 태그 `v*` 또는 bare semver(`0.1.3`) 푸시 시 GitHub Actions가 Shadow fat JAR를 빌드해 Release 자산으로 업로드합니다.
+- 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256` 형식입니다.
