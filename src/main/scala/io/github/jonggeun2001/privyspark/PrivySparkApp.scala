@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.DetectionAggregator.MatchCount
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
 import org.apache.hadoop.fs.Path
+import org.apache.spark.SparkConf
 import org.apache.spark.sql.catalyst.csv.CSVOptions
 import org.apache.spark.sql.execution.datasources.csv.CSVUtils
 import org.apache.spark.sql.{DataFrame, SparkSession}
@@ -340,6 +341,15 @@ object PrivySparkApp {
     resolveParallelism(fileCount, spark.sparkContext.getConf.getInt(FileParallelismConfKey, DefaultFileParallelism))
   }
 
+  private[privyspark] def applyCliParallelismOverrides(conf: SparkConf, config: CliConfig): Unit = {
+    config.groupParallelism.foreach { parallelism =>
+      conf.set(GroupParallelismConfKey, parallelism.toString)
+    }
+    config.fileParallelism.foreach { parallelism =>
+      conf.set(FileParallelismConfKey, parallelism.toString)
+    }
+  }
+
   private def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
     if (tasks.isEmpty) {
       Seq.empty
@@ -376,6 +386,7 @@ object PrivySparkApp {
 
     val spark = SparkSession.builder().appName("PrivySpark").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
+    applyCliParallelismOverrides(spark.sparkContext.getConf, config)
 
     try {
       runScan(spark, config)
@@ -394,7 +405,9 @@ object PrivySparkApp {
       "input_path" -> config.inputPath,
       "output_path" -> config.outputPath,
       "ruleset" -> config.ruleset,
-      "sample_ratio" -> config.sampleRatio
+      "sample_ratio" -> config.sampleRatio,
+      "group_parallelism" -> config.groupParallelism.getOrElse("spark_conf_or_default"),
+      "file_parallelism" -> config.fileParallelism.getOrElse("spark_conf_or_default")
     )
     val rules = RulesetLoader.load(config.ruleset)
     logDebug("ruleset_loaded", "rules" -> rules.size, "ruleset" -> config.ruleset)

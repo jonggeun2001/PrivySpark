@@ -12,8 +12,11 @@
   - `--output <ABS_PATH_OR_URI>`: 출력 경로 (필수)
   - `--ruleset <default|path>`: 규칙셋 (기본 `default`)
   - `--sample-ratio <(0.0, 1.0]>`: 샘플링 비율 (기본 `0.2`)
+  - `--group-parallelism <INT>`: 그룹 스캔 병렬도 (선택, `> 0`)
+  - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도 (선택, `> 0`)
 - `--path`, `--output`이 절대경로/URI가 아니면 즉시 실패.
 - `--sample-ratio`가 `0.0` 이하이거나 `1.0`을 초과하면 CLI 파싱 단계에서 즉시 실패.
+- `--group-parallelism`, `--file-parallelism`이 `0` 이하이면 CLI 파싱 단계에서 즉시 실패.
 
 ### 2.2 입력 처리
 - 포맷 인자는 받지 않음.
@@ -54,7 +57,7 @@
 - 실패 파일은 별도 오류 리포트로 저장.
 - 스키마 판별/그룹 배치 스캔/파일 폴백 스캔 중 파일이 일시적으로 교체되거나 삭제되어 읽기 오류가 나면 내부 재시도 후 계속 진행하고, 재시도 이후에도 실패하면 해당 파일/그룹 오류로 기록한다.
 - sampled group 배치 스캔 실패 시에는 전체 파일 exact split으로 재분류한 뒤 서브그룹을 다시 스캔하고, 재분류 이후에도 실패하면 파일 단위 폴백으로 전환한다.
-- 운영자는 `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 설정으로 그룹/파일 폴백 병렬도를 조정할 수 있다.
+- 운영자는 `--group-parallelism`, `--file-parallelism` 또는 `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 설정으로 그룹/파일 폴백 병렬도를 조정할 수 있다. CLI 값이 주어지면 Spark conf보다 우선한다.
 - `bin/privyspark-submit` 사용 시 `PRIVYSPARK_DEBUG=true`, `spark-submit` 직접 실행 시 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`가 설정되면 드라이버 debug 로그에는 스캔 계획, 그룹/파일 스캔 진행, 폴백 여부를 남겨 운영 중 분석 진행상황과 버그 확인이 가능해야 한다.
 - 종료 코드는 실행 성공/실패 기준이며, PII 발견 여부와 무관.
 
