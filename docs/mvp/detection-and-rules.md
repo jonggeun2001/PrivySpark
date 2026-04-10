@@ -22,6 +22,7 @@
 ## match_type
 - `value`: regex에 매칭되는 값 개수를 집계합니다.
 - `full_column`: 비어 있지 않은 값 전체가 regex를 만족하는 컬럼/파일에 대해서만 결과를 생성합니다.
+- 내부 `text` fallback 포맷에서는 자유 형식 텍스트 한 줄 전체가 값이 되므로, `full_column`도 `value`처럼 부분 매치 집계로 처리합니다.
 
 ## 타입별 제약
 - `resident_registration_number`: 하이픈 포함/미포함 입력 모두 허용, 성별/세기 코드 1자리 축약형 허용, 더 긴 숫자 토큰 내부 substring 제외
