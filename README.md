@@ -37,6 +37,8 @@ bin/privyspark-submit \
   --file-parallelism 4
 ```
 
+`PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 설정하면 debug 로그 각 줄에 ISO-8601 UTC 타임스탬프가 함께 출력됩니다.
+
 ## 문서 맵
 - 기능 요구사항 허브: [docs/PRD-Functional.md](docs/PRD-Functional.md)
 - 아키텍처 허브: [docs/PRD-Architecture.md](docs/PRD-Architecture.md)

@@ -84,7 +84,7 @@ spark-submit \
 
 ## 운영 로그
 - 기본 로그에는 스캔 요약과 fallback 원인이 출력됩니다.
-- `PRIVYSPARK_DEBUG=true` 또는 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true`, `-Dprivyspark.debug=true`가 설정되면 debug 이벤트가 추가됩니다.
+- `PRIVYSPARK_DEBUG=true` 또는 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true`, `-Dprivyspark.debug=true`가 설정되면 debug 이벤트가 추가되고 각 로그 줄에 ISO-8601 UTC 타임스탬프가 포함됩니다.
 - debug 로그에는 플랜 수립, 그룹/파일 스캔 진행, 리포트 저장 단계가 포함됩니다.
 
 ## 릴리즈

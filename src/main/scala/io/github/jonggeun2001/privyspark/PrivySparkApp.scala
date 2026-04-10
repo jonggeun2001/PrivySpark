@@ -183,6 +183,8 @@ object PrivySparkApp {
     debugLoggingEnabledCache = null
   }
 
+  private def currentDebugTimestamp(): String = Instant.now().toString
+
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
     if (!isDebugLoggingEnabled) {
       return
@@ -198,7 +200,7 @@ object PrivySparkApp {
       }.mkString(" ", " ", "")
     }
 
-    System.err.println(s"[PrivySpark][DEBUG] $event$suffix")
+    System.err.println(s"[PrivySpark][DEBUG][${currentDebugTimestamp()}] $event$suffix")
   }
 
   private def stripTrailingSlash(path: String): String = {
