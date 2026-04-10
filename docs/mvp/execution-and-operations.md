@@ -84,6 +84,7 @@ spark-submit \
 
 ## 운영 로그
 - driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...` 형식으로 출력됩니다.
+- field 값에 공백, 개행, `=` 같은 문자가 있으면 quote/escape해 구조를 유지합니다.
 - `PRIVYSPARK_DEBUG` 또는 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG`, `-Dprivyspark.debug`는 driver 로그 레벨 설정으로 동작합니다.
 - 지원값은 `error`, `warn`, `info`, `debug`이며 `off`로 driver 로그를 끌 수 있습니다. 기본값은 `warn`입니다.
 - 하위호환으로 `true`는 `debug`, `false`는 `warn`으로 해석합니다.

@@ -802,7 +802,14 @@ object PrivySparkApp {
   def main(args: Array[String]): Unit = {
     val normalizedArgs = if (args.headOption.contains("scan")) args.drop(1) else args
 
-    val config = Cli.parse(normalizedArgs).getOrElse {
+    val parseResult = Cli.parseWithErrors(normalizedArgs)
+    val config = parseResult.config.getOrElse {
+      DriverLogger.emitAlways(
+        DriverLogLevel.Error,
+        "cli_argument_invalid",
+        "errors" -> parseResult.errors.mkString(" | "),
+        "args" -> normalizedArgs.mkString(" ")
+      )
       System.exit(2)
       throw new IllegalStateException("unreachable")
     }

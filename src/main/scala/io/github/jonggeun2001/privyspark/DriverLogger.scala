@@ -83,12 +83,37 @@ private[privyspark] object DriverLogger {
     } else {
       fields.map {
         case (key, value) =>
-          val renderedValue = if (value == null) "null" else value.toString
+          val renderedValue = renderValue(value)
           s"$key=$renderedValue"
       }.mkString(" ", " ", "")
     }
 
     s"[PrivySpark][${level.label}][${Instant.now().toString}] $event$suffix"
+  }
+
+  private def renderValue(value: Any): String = {
+    val raw = if (value == null) "null" else value.toString
+    if (raw.nonEmpty && raw.forall(isSafeUnquotedCharacter)) {
+      raw
+    } else {
+      "\"" + escapeValue(raw) + "\""
+    }
+  }
+
+  private def isSafeUnquotedCharacter(char: Char): Boolean = {
+    char.isLetterOrDigit || "-._:/@%+".contains(char)
+  }
+
+  private def escapeValue(raw: String): String = {
+    raw.flatMap {
+      case '\\' => "\\\\"
+      case '"' => "\\\""
+      case '\n' => "\\n"
+      case '\r' => "\\r"
+      case '\t' => "\\t"
+      case char if Character.isISOControl(char) => f"\\u${char.toInt}%04x"
+      case char => char.toString
+    }
   }
 
   private def shouldLog(level: DriverLogLevel): Boolean = {

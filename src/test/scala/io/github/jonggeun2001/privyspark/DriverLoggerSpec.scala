@@ -51,6 +51,17 @@ class DriverLoggerSpec extends AnyFunSuite {
     assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[ERROR\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_failed.*reason=boom.*""")))
   }
 
+  test("quotes structured field values when they contain unsafe characters") {
+    val logs = captureStderr {
+      withDriverLogLevel("warn") {
+        DriverLogger.warn("staging_cleanup_failed", "reason" -> "delete returned=false\nretry")
+      }
+    }
+
+    assert(logs.linesIterator.size == 1)
+    assert(logs.contains("""reason="delete returned=false\nretry""""))
+  }
+
   private def withDriverLogLevel[A](level: String)(block: => A): A = {
     val previous = sys.props.get("privyspark.debug")
     DriverLogger.resetCache()
