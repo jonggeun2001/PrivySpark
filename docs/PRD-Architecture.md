@@ -16,16 +16,17 @@
 
 ## 처리 플로우
 1. 입력 경로 검증
-2. 물리 파일 수집
-3. archive 엔트리 확장, workbook 시트 확장, 무확장자/미지원 확장자 `parquet/orc` magic-byte 판별, text fallback 정규화
-4. `(directory, format)` 기준 1차 그룹화
-5. 대표 파일 기준 스키마 샘플링
-6. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
-7. sampled multi-file group이면 exact split 재검증 후 재분류된 그룹 스캔
-8. non-sampled group 중 batch-capable group이면 그룹 batch scan
-9. non-sampled `xlsx` group은 direct file scan
-10. 일반 group batch 실패 시 파일 단위 fallback
-11. 결과/오류 리포트 저장
+2. ruleset 로드와 regex 사전 검증
+3. 물리 파일 수집
+4. archive 엔트리 확장, workbook 시트 확장, 무확장자/미지원 확장자 `parquet/orc` magic-byte 판별, text fallback 정규화
+5. `(directory, format)` 기준 1차 그룹화
+6. 대표 파일 기준 스키마 샘플링
+7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
+8. sampled multi-file group이면 exact split 재검증 후 재분류된 그룹 스캔
+9. non-sampled group 중 batch-capable group이면 그룹 batch scan
+10. non-sampled `xlsx` group은 direct file scan
+11. 일반 group batch 실패 시 파일 단위 fallback
+12. 결과/오류 리포트 저장
 
 ## 상세 문서 맵
 - 실행 환경과 운영 옵션: [mvp/execution-and-operations.md](mvp/execution-and-operations.md)
