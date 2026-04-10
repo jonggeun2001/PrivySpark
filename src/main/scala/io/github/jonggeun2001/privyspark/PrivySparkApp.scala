@@ -587,8 +587,29 @@ object PrivySparkApp {
     if (itemCount <= 1) 1 else math.max(1, math.min(itemCount, configured))
   }
 
+  private[privyspark] def maxAllowedPreScanParallelism: Int = {
+    math.max(1, Runtime.getRuntime.availableProcessors())
+  }
+
+  private[privyspark] def resolveConfiguredPreScanParallelism(fileCount: Int, configured: Int, source: String): Int = {
+    if (configured <= 0) {
+      throw new IllegalArgumentException(s"$source must be > 0")
+    }
+
+    val maxAllowed = maxAllowedPreScanParallelism
+    if (configured > maxAllowed) {
+      throw new IllegalArgumentException(s"$source must be <= $maxAllowed")
+    }
+
+    resolveParallelism(fileCount, configured)
+  }
+
   private[privyspark] def resolvePreScanParallelism(spark: SparkSession, fileCount: Int): Int = {
-    resolveParallelism(fileCount, spark.sparkContext.getConf.getInt(PreScanParallelismConfKey, DefaultPreScanParallelism))
+    resolveConfiguredPreScanParallelism(
+      fileCount,
+      spark.sparkContext.getConf.getInt(PreScanParallelismConfKey, DefaultPreScanParallelism),
+      PreScanParallelismConfKey
+    )
   }
 
   private[privyspark] def resolveGroupParallelism(spark: SparkSession, groupCount: Int): Int = {
@@ -1080,7 +1101,7 @@ object PrivySparkApp {
       val errors = ArrayBuffer.empty[ScanError]
       val directoriesWithPreScanErrors = scala.collection.mutable.Set.empty[String]
       val resolvedPreScanParallelism = if (preScanParallelism > 0) {
-        resolveParallelism(files.size, preScanParallelism)
+        resolveConfiguredPreScanParallelism(files.size, preScanParallelism, "--pre-scan-parallelism")
       } else {
         resolvePreScanParallelism(spark, files.size)
       }

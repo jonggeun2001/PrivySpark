@@ -171,6 +171,16 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("resolveConfiguredPreScanParallelism rejects spark conf fallback values above the safe upper bound") {
+    val key = "spark.privyspark.preScanParallelism"
+    val error = intercept[IllegalArgumentException] {
+      PrivySparkApp.resolveConfiguredPreScanParallelism(32, PrivySparkApp.maxAllowedPreScanParallelism + 1, key)
+    }
+
+    assert(error.getMessage.contains(key))
+    assert(error.getMessage.contains(PrivySparkApp.maxAllowedPreScanParallelism.toString))
+  }
+
   test("scanDirectoryStructure keeps a sampled multi-file directory group on file identifiers until exact split confirms schema") {
     val inputDir = Files.createTempDirectory("privyspark-directory-identifier-plan-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))

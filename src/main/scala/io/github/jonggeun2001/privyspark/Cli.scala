@@ -45,10 +45,10 @@ object Cli {
         .optional()
         .action((value, config) => config.copy(preScanParallelism = Some(value)))
         .validate { value =>
-          if (value > 0) success
-          else failure("pre-scan-parallelism must be > 0")
+          if (value > 0 && value <= PrivySparkApp.maxAllowedPreScanParallelism) success
+          else failure(s"pre-scan-parallelism must be > 0 and <= ${PrivySparkApp.maxAllowedPreScanParallelism}")
         }
-        .text("파일 pre-scan 확장 병렬도(정수 > 0)"),
+        .text("파일 pre-scan 확장 병렬도(정수 > 0, driver CPU 수 이하)"),
       opt[Int]("group-parallelism")
         .optional()
         .action((value, config) => config.copy(groupParallelism = Some(value)))
