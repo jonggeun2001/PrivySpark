@@ -580,17 +580,7 @@ object PrivySparkApp {
   }
 
   private def effectiveRulesForFormat(format: String, rules: Seq[PiiRule]): Seq[PiiRule] = {
-    if (format == TextFormat) {
-      rules.map { rule =>
-        if (rule.matchType == PiiRuleMatchType.FullColumn) {
-          rule.copy(matchType = PiiRuleMatchType.Value)
-        } else {
-          rule
-        }
-      }
-    } else {
-      rules
-    }
+    rules
   }
 
   private def workbookDataAddress(sheetName: String): String = {

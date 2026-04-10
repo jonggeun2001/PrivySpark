@@ -18,10 +18,9 @@ object DetectionAggregator {
     columnName: String,
     piiType: String,
     matchType: String,
-    predicate: Column,
-    mismatchPredicate: Option[Column]
+    predicate: Column
   ) {
-    val expressionCount: Int = 1 + mismatchPredicate.size
+    val expressionCount: Int = 1
   }
   private val DebugPropertyName = "privyspark.debug"
   private val DebugEnvName = "PRIVYSPARK_DEBUG"
@@ -238,12 +237,6 @@ object DetectionAggregator {
                 case PiiRuleMatchType.FullColumn => valueColumn.rlike(fullMatchRegex(rule.regex)) && validatorPredicate
                 case _ => valueColumn.rlike(rule.regex) && validatorPredicate
               }
-              val mismatchPredicate = rule.matchType match {
-                case PiiRuleMatchType.FullColumn =>
-                  Some(presentValuePredicate && !matchPredicate)
-                case _ =>
-                  None
-              }
               val predicate = rule.matchType match {
                 case PiiRuleMatchType.FullColumn => presentValuePredicate && matchPredicate
                 case _ => valueColumn.isNotNull && matchPredicate
@@ -254,8 +247,7 @@ object DetectionAggregator {
                   columnName = columnName,
                   piiType = rule.piiType,
                   matchType = rule.matchType,
-                  predicate = predicate,
-                  mismatchPredicate = mismatchPredicate
+                  predicate = predicate
                 )
               )
             } else {
@@ -266,14 +258,8 @@ object DetectionAggregator {
   }
 
   private def buildExpressions(batch: Seq[Metric]): Seq[Column] = {
-    batch.flatMap { metric =>
-      val matchExpression = sparkSum(when(metric.predicate, lit(1L)).otherwise(lit(0L))).cast("long").as(metric.alias)
-      metric.mismatchPredicate match {
-        case Some(predicate) =>
-          Seq(matchExpression, sparkSum(when(predicate, lit(1L)).otherwise(lit(0L))).cast("long").as(s"${metric.alias}_mismatch"))
-        case None =>
-          Seq(matchExpression)
-      }
+    batch.map { metric =>
+      sparkSum(when(metric.predicate, lit(1L)).otherwise(lit(0L))).cast("long").as(metric.alias)
     }
   }
 
@@ -287,19 +273,10 @@ object DetectionAggregator {
 
       val row = sampledDf.agg(expressions.head, expressions.tail: _*).head()
 
-      var index = 0
-      batch.flatMap { metric =>
-        val count = if (row.isNullAt(index)) 0L else row.getLong(index)
-        index += 1
-
-        metric.mismatchPredicate match {
-          case Some(_) =>
-            val mismatchCount = if (row.isNullAt(index)) 0L else row.getLong(index)
-            index += 1
-            if (count > 0L && mismatchCount == 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
-          case None =>
-            if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
-        }
+      batch.zipWithIndex.flatMap {
+        case (metric, index) =>
+          val count = if (row.isNullAt(index)) 0L else row.getLong(index)
+          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
       }
     }
   }
@@ -328,13 +305,7 @@ object DetectionAggregator {
   private def aggregateSafeLegacy(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
     metrics.flatMap { metric =>
       val count = sampledDf.filter(metric.predicate).count()
-      metric.mismatchPredicate match {
-        case Some(predicate) =>
-          val mismatchCount = sampledDf.filter(predicate).count()
-          if (count > 0L && mismatchCount == 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
-        case None =>
-          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
-      }
+      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
     }
   }
 
@@ -353,19 +324,11 @@ object DetectionAggregator {
         if (fileIdentifier == null || fileIdentifier.isEmpty) {
           Seq.empty
         } else {
-          var index = 1
-          batch.flatMap { metric =>
-            val count = if (row.isNullAt(index)) 0L else row.getLong(index)
-            index += 1
-
-            metric.mismatchPredicate match {
-              case Some(_) =>
-                val mismatchCount = if (row.isNullAt(index)) 0L else row.getLong(index)
-                index += 1
-                if (count > 0L && mismatchCount == 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count)) else None
-              case None =>
-                if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count)) else None
-            }
+          batch.zipWithIndex.flatMap {
+            case (metric, batchIndex) =>
+              val rowIndex = batchIndex + 1
+              val count = if (row.isNullAt(rowIndex)) 0L else row.getLong(rowIndex)
+              if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count)) else None
           }
         }
       }
@@ -386,42 +349,20 @@ object DetectionAggregator {
     metrics: Seq[Metric]
   ): Seq[FileMatchCount] = {
     metrics.flatMap { metric =>
-      metric.mismatchPredicate match {
-        case Some(mismatchPredicate) =>
-          val groupedRows = sampledDf
-            .groupBy(col(fileIdentifierColumn))
-            .agg(
-              sparkSum(when(metric.predicate, lit(1L)).otherwise(lit(0L))).cast("long").as("match_count"),
-              sparkSum(when(mismatchPredicate, lit(1L)).otherwise(lit(0L))).cast("long").as("mismatch_count")
-            )
-            .collect()
+      val groupedRows = sampledDf
+        .filter(metric.predicate)
+        .groupBy(col(fileIdentifierColumn))
+        .count()
+        .collect()
 
-          groupedRows.flatMap { row =>
-            val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
-            val count = if (row.isNullAt(1)) 0L else row.getLong(1)
-            val mismatchCount = if (row.isNullAt(2)) 0L else row.getLong(2)
-            if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L || mismatchCount > 0L) {
-              None
-            } else {
-              Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
-            }
-          }
-        case None =>
-          val groupedRows = sampledDf
-            .filter(metric.predicate)
-            .groupBy(col(fileIdentifierColumn))
-            .count()
-            .collect()
-
-          groupedRows.flatMap { row =>
-            val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
-            val count = if (row.isNullAt(1)) 0L else row.getLong(1)
-            if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
-              None
-            } else {
-              Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
-            }
-          }
+      groupedRows.flatMap { row =>
+        val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+        val count = if (row.isNullAt(1)) 0L else row.getLong(1)
+        if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
+          None
+        } else {
+          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
+        }
       }
     }
   }
