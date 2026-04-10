@@ -26,7 +26,9 @@
 - 내부 `text` fallback 포맷에서는 자유 형식 텍스트 한 줄 전체가 값이 되므로, `full_column`도 `value`처럼 부분 매치 집계로 처리합니다.
 
 ## 타입별 제약
+- `phone_number`: 국내 `010`/`011`/`016`/`017`/`018`/`019` 형식과 `+82 10...` 계열 국제 표기(`+82-10-1234-5678`, `+821012345678`)를 검출
 - `resident_registration_number`: 하이픈 포함/미포함 입력 모두 허용, 성별/세기 코드 1자리 축약형 허용, 더 긴 숫자 토큰 내부 substring 제외
+- `resident_registration_number`: 기본 ruleset은 월 `01`~`12`, 일 `01`~`31` 범위만 허용
 - `driver_license_number`: 하이픈 포함/미포함 입력 모두 허용, 구형 10자리 또는 현행 12자리만 strict 검증, 현행 지역코드는 `11`~`26`, `28`만 허용
 - `passport_number`: 한국 여권번호 형식만 검출, 영숫자 토큰 내부 substring 제외
 
