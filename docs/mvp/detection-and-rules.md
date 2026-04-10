@@ -13,6 +13,7 @@
 - 각 rule은 `pii_type`, `regex`를 포함해야 합니다.
 - `column_hints`는 선택 항목이며, 지정 시 힌트가 포함된 컬럼에만 규칙을 적용합니다.
 - `match_type`은 선택 항목이며 기본값은 `value`입니다.
+- invalid regex는 ruleset 로드 단계에서 즉시 거부되며, 스캔 시작 전에 `IllegalArgumentException`으로 실패합니다.
 
 ## 지원하지 않는 규칙
 - `pii_type: name`

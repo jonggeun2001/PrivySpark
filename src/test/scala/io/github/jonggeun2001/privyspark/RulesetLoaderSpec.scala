@@ -90,6 +90,26 @@ class RulesetLoaderSpec extends AnyFunSuite {
     }
   }
 
+  test("throws on invalid regex before scanning starts") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-invalid-regex", ".yaml")
+    val yaml =
+      """rules:
+        |  - pii_type: email
+        |    regex: '[A-Za-z'
+        |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val error = intercept[IllegalArgumentException] {
+        RulesetLoader.load(rulesetPath.toString)
+      }
+      assert(error.getMessage.contains("Invalid regex"))
+      assert(error.getMessage.contains("email"))
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
   test("throws when ruleset still uses validator field") {
     val rulesetPath = Files.createTempFile("privyspark-ruleset-validator", ".yaml")
     val yaml =
