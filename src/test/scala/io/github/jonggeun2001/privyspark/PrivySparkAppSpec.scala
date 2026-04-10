@@ -2488,14 +2488,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanWithRules ignores full_column semantics for text fallback inputs") {
+  test("scanWithRules applies full_column as full-line matching for text fallback inputs") {
     val inputDir = Files.createTempDirectory("privyspark-text-full-column-fallback-")
     val timestamp = "2026-04-10T00:00:00Z"
 
     try {
       writeText(inputDir.resolve("notes.log"),
-        "Contact alice@example.com now\n" +
-          "skip\n")
+        "alice@example.com\n" +
+          "Contact bob@example.com now\n")
 
       val rules = Seq(
         PiiRule(
@@ -2507,8 +2507,35 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
 
       assert(errors.isEmpty)
-      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
-        Set(("notes.log", "value", 1L)))
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count, result.match_ratio)).toSet ==
+        Set(("notes.log", "value", 1L, 0.5)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules counts resident registration full_column matches by exact value") {
+    val inputDir = Files.createTempDirectory("privyspark-rrn-full-column-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("customers.csv"),
+        "rrn\n" +
+          "9707211\n" +
+          "19707211\n")
+
+      val rules = Seq(
+        PiiRule(
+          "resident_registration_number",
+          "(?<![0-9])[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])(?:-[1-4](?:[0-9]{6})?|[1-4](?:[0-9]{6})?)(?![0-9])",
+          matchType = PiiRuleMatchType.FullColumn
+        )
+      )
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.pii_type, result.match_count, result.match_ratio)).toSet ==
+        Set(("customers.csv", "rrn", "resident_registration_number", 1L, 0.5)))
     } finally {
       deleteRecursively(inputDir)
     }

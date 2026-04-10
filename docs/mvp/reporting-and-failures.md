@@ -25,6 +25,7 @@
 
 ## 확률 필드
 - `match_ratio`는 샘플링된 행 기준 비율입니다.
+- `full_column`도 `match_count`만 exact full match 기준으로 달라질 뿐, `match_ratio`와 `confidence`의 분모는 동일하게 샘플링된 행 수입니다.
 - `confidence`는 현재 MVP에서 `match_ratio`와 동일한 값입니다.
 - 두 값 모두 소수점 둘째 자리까지 반올림합니다.
 
