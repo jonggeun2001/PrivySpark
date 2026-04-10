@@ -5,6 +5,7 @@ import org.yaml.snakeyaml.Yaml
 
 import java.io.FileInputStream
 import java.nio.file.{Files, Paths}
+import java.util.regex.{Pattern, PatternSyntaxException}
 import scala.collection.JavaConverters._
 
 object RulesetLoader {
@@ -48,6 +49,7 @@ object RulesetLoader {
             s"Unsupported match_type: $rawMatchType. Supported values: ${PiiRuleMatchType.Supported.toSeq.sorted.mkString(", ")}"
           )
         }
+        validateRegex(piiType, regex, matchType)
 
         PiiRule(piiType, regex, columnHints, matchType)
       }.toSeq
@@ -84,5 +86,21 @@ object RulesetLoader {
     val yarnDistributed = Some(Paths.get(YarnDistributedDefaultRuleset))
     val projectLocal = Some(Paths.get(DefaultRulesetPath))
     Seq(envPath, yarnDistributed, projectLocal).flatten
+  }
+
+  private def validateRegex(piiType: String, regex: String, matchType: String): Unit = {
+    val effectiveRegex =
+      if (matchType == PiiRuleMatchType.FullColumn) s"\\A(?:$regex)\\z"
+      else regex
+
+    try {
+      Pattern.compile(effectiveRegex)
+    } catch {
+      case e: PatternSyntaxException =>
+        throw new IllegalArgumentException(
+          s"Invalid regex for pii_type '$piiType': ${e.getDescription}",
+          e
+        )
+    }
   }
 }
