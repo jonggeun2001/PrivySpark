@@ -1312,12 +1312,21 @@ object PrivySparkApp {
                     )
                 }
               case None =>
-                archiveErrors += ScanError(
-                  datasetPath,
-                  timestamp,
-                  childLogicalIdentifier,
-                  s"Unsafe archive entry path: $normalizedEntryName"
-                )
+                if (zipInputStream.read() >= 0) {
+                  archiveErrors += ScanError(
+                    datasetPath,
+                    timestamp,
+                    childLogicalIdentifier,
+                    s"Unsafe archive entry path: $normalizedEntryName"
+                  )
+                } else {
+                  logDebug(
+                    "archive_entry_skipped",
+                    "archive" -> logicalIdentifier,
+                    "entry" -> childLogicalIdentifier,
+                    "reason" -> "zero_byte"
+                  )
+                }
             }
           }
         }

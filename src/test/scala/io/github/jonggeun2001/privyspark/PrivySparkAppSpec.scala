@@ -2156,6 +2156,36 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure skips zero-byte archive entries before unsafe path errors") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-zero-byte-unsafe-entry-")
+
+    try {
+      createArchiveFileWithBytes(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "../empty.csv" -> Array.emptyByteArray,
+          "good.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n").getBytes(StandardCharsets.UTF_8)
+        )
+      )
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-10T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "csv")
+      assert(plan.groups.head.logicalIdentifiersByKey.values.toSeq == Seq("bundle.zip!good.csv"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules expands zip archives when entry filenames contain hash characters") {
     val inputDir = Files.createTempDirectory("privyspark-zip-hash-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
