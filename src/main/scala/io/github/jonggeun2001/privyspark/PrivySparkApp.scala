@@ -748,10 +748,6 @@ object PrivySparkApp {
     if (itemCount <= 1) 1 else math.max(1, math.min(itemCount, configured))
   }
 
-  private[privyspark] def maxAllowedPreScanParallelism: Int = {
-    math.max(1, Runtime.getRuntime.availableProcessors())
-  }
-
   private[privyspark] def defaultPreScanParallelism: Int = {
     DefaultPreScanParallelism
   }
@@ -759,11 +755,6 @@ object PrivySparkApp {
   private[privyspark] def resolveConfiguredPreScanParallelism(fileCount: Int, configured: Int, source: String): Int = {
     if (configured <= 0) {
       throw new IllegalArgumentException(s"$source must be > 0")
-    }
-
-    val maxAllowed = maxAllowedPreScanParallelism
-    if (configured > maxAllowed) {
-      throw new IllegalArgumentException(s"$source must be <= $maxAllowed")
     }
 
     resolveParallelism(fileCount, configured)
