@@ -1070,26 +1070,33 @@ object PrivySparkApp {
     val extractedEntries = ArrayBuffer.empty[ScanFileEntry]
     val archiveErrors = ArrayBuffer.empty[ScanError]
     val stagingBase = new Path(fs.getHomeDirectory, ".privyspark-staging")
-    if (!fs.exists(stagingBase) && !fs.mkdirs(stagingBase)) {
-      return (
-        Seq.empty,
-        Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Archive staging base creation failed: ${stagingBase.toString}"))
-      )
-    }
     val stagingRoot = new Path(
       stagingBase,
       s"archive-${System.currentTimeMillis()}-${math.abs(scala.util.Random.nextLong())}"
     )
-    if (!fs.mkdirs(stagingRoot) && !fs.exists(stagingRoot)) {
-      return (
-        Seq.empty,
-        Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Archive staging directory creation failed: ${stagingRoot.toString}"))
-      )
-    }
-    stagingPaths += stagingRoot.toString
     val archiveInputStream = fs.open(sourcePath)
     val zipInputStream = new ZipInputStream(archiveInputStream)
     val stagedTargetPaths = scala.collection.mutable.Set.empty[String]
+    var stagingPrepared = false
+
+    def ensureArchiveStagingReady(): Either[String, Unit] = {
+      if (stagingPrepared) {
+        Right(())
+      } else if (!fs.exists(stagingBase) && !fs.mkdirs(stagingBase)) {
+        Left(s"Archive staging base creation failed: ${stagingBase.toString}")
+      } else if (!fs.mkdirs(stagingRoot) && !fs.exists(stagingRoot)) {
+        Left(s"Archive staging directory creation failed: ${stagingRoot.toString}")
+      } else {
+        stagingPaths += stagingRoot.toString
+        stagingPrepared = true
+        Right(())
+      }
+    }
+
+    def reserveStagedTargetPath(normalizedEntryName: String, targetPath: Path): Either[String, Unit] = {
+      val targetComparablePath = canonicalizePath(targetPath.toString)
+      if (stagedTargetPaths.add(targetComparablePath)) Right(()) else Left(s"Conflicting archive entry path: $normalizedEntryName")
+    }
 
     try {
       var entry = zipInputStream.getNextEntry
@@ -1108,15 +1115,7 @@ object PrivySparkApp {
             safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
               case Some(targetPath) =>
                 try {
-                  val targetComparablePath = canonicalizePath(targetPath.toString)
-                  if (!stagedTargetPaths.add(targetComparablePath)) {
-                    archiveErrors += ScanError(
-                      datasetPath,
-                      timestamp,
-                      childLogicalIdentifier,
-                      s"Conflicting archive entry path: $normalizedEntryName"
-                    )
-                  } else FormatDetector.infer(normalizedEntryName) match {
+                  FormatDetector.infer(normalizedEntryName) match {
                     case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth >= MaxArchiveExpansionDepth =>
                       if (zipInputStream.read() >= 0) {
                         archiveErrors += ScanError(
@@ -1144,35 +1143,45 @@ object PrivySparkApp {
                           "reason" -> "zero_byte"
                         )
                       } else {
-                        ensureArchiveEntryParent(fs, targetPath) match {
+                        ensureArchiveStagingReady() match {
                           case Left(errorMessage) =>
                             archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
                           case Right(_) =>
-                            val outputStream = fs.create(targetPath, true)
-                            try {
-                              while (bytesRead >= 0) {
-                                if (bytesRead > 0) {
-                                  outputStream.write(buffer, 0, bytesRead)
-                                }
-                                bytesRead = zipInputStream.read(buffer)
-                              }
-                            } finally {
-                              outputStream.close()
-                            }
+                            reserveStagedTargetPath(normalizedEntryName, targetPath) match {
+                              case Left(errorMessage) =>
+                                archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                              case Right(_) =>
+                                ensureArchiveEntryParent(fs, targetPath) match {
+                                  case Left(errorMessage) =>
+                                    archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                                  case Right(_) =>
+                                    val outputStream = fs.create(targetPath, true)
+                                    try {
+                                      while (bytesRead >= 0) {
+                                        if (bytesRead > 0) {
+                                          outputStream.write(buffer, 0, bytesRead)
+                                        }
+                                        bytesRead = zipInputStream.read(buffer)
+                                      }
+                                    } finally {
+                                      outputStream.close()
+                                    }
 
-                            val (childEntries, childErrors) = expandPhysicalSource(
-                              conf,
-                              datasetPath,
-                              timestamp,
-                              targetPath.toString,
-                              childLogicalIdentifier,
-                              logicalIdentifier,
-                              stagingPaths,
-                              archiveExpansionDepth = archiveExpansionDepth,
-                              forceDisableDirectoryIdentifier = true
-                            )
-                            extractedEntries ++= childEntries
-                            archiveErrors ++= childErrors
+                                    val (childEntries, childErrors) = expandPhysicalSource(
+                                      conf,
+                                      datasetPath,
+                                      timestamp,
+                                      targetPath.toString,
+                                      childLogicalIdentifier,
+                                      logicalIdentifier,
+                                      stagingPaths,
+                                      archiveExpansionDepth = archiveExpansionDepth,
+                                      forceDisableDirectoryIdentifier = true
+                                    )
+                                    extractedEntries ++= childEntries
+                                    archiveErrors ++= childErrors
+                                }
+                            }
                         }
                       }
                     case None =>
@@ -1184,19 +1193,35 @@ object PrivySparkApp {
                       var probeRejected = false
                       var archiveEntryHasContent = false
                       var archiveEntrySkipped = false
+                      var targetPathReserved = false
                       var bytesRead = zipInputStream.read(buffer)
 
                       def materializeDetectedEntry(format: String, bytesForProbe: Int, currentChunkSize: Int): Unit = {
-                        ensureArchiveEntryParent(fs, targetPath) match {
+                        ensureArchiveStagingReady() match {
                           case Left(errorMessage) =>
                             archiveEntryError = Some(errorMessage)
                           case Right(_) =>
-                            outputStream = fs.create(targetPath, true)
-                            outputStream.write(probeBuffer.toByteArray)
-                            if (currentChunkSize > bytesForProbe) {
-                              outputStream.write(buffer, bytesForProbe, currentChunkSize - bytesForProbe)
+                            if (!targetPathReserved) {
+                              reserveStagedTargetPath(normalizedEntryName, targetPath) match {
+                                case Left(errorMessage) =>
+                                  archiveEntryError = Some(errorMessage)
+                                case Right(_) =>
+                                  targetPathReserved = true
+                              }
                             }
-                            detectedFormat = Some(format)
+                            if (archiveEntryError.isEmpty) {
+                              ensureArchiveEntryParent(fs, targetPath) match {
+                                case Left(errorMessage) =>
+                                  archiveEntryError = Some(errorMessage)
+                                case Right(_) =>
+                                  outputStream = fs.create(targetPath, true)
+                                  outputStream.write(probeBuffer.toByteArray)
+                                  if (currentChunkSize > bytesForProbe) {
+                                    outputStream.write(buffer, bytesForProbe, currentChunkSize - bytesForProbe)
+                                  }
+                                  detectedFormat = Some(format)
+                              }
+                            }
                         }
                       }
 
