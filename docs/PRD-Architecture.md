@@ -17,7 +17,7 @@
 ## 처리 플로우
 1. 입력 경로 검증
 2. 물리 파일 수집
-3. archive 엔트리 확장, workbook 시트 확장, 무확장자/미지원 확장자 `parquet/orc` magic-byte 판별
+3. archive 엔트리 확장, workbook 시트 확장, 무확장자/미지원 확장자 `parquet/orc` magic-byte 판별, text fallback 정규화
 4. `(directory, format)` 기준 1차 그룹화
 5. 대표 파일 기준 스키마 샘플링
 6. schema-aware split 및 디렉토리 식별자 승격 가능성 판정

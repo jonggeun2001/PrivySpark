@@ -6,7 +6,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - 일회성 배치 실행
 - 입력/출력 경로는 절대경로 또는 URI만 허용
 - 지원 입력: `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`
-- 무확장자 파일과 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 추가 판별하고, 일치하지 않으면 `Unsupported file format`으로 기록
+- 무확장자 파일과 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 우선 판별하고, 바이너리처럼 보이지 않는 텍스트 입력은 단일 `value` 컬럼의 내부 `text` 포맷으로 스캔합니다. 바이너리로 보이는 입력만 `Unsupported file format`으로 기록합니다.
 - 탐지 방식: ruleset 기반 regex + 일부 타입의 내장 strict validator
 - 출력: Parquet + CSV (`scan_results`, `scan_errors`)
 - 샘플링과 앱 레벨 병렬도 조정 지원

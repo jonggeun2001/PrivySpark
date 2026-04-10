@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
-import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
+import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
@@ -492,7 +492,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanDirectoryStructure records unsupported files for unsupported extensions even when content is text-like") {
+  test("scanDirectoryStructure treats unsupported extension text files as text inputs") {
     val inputDir = Files.createTempDirectory("privyspark-text-fallback-plan-")
 
     try {
@@ -508,15 +508,17 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "2026-04-09T00:00:00Z"
       )
 
-      assert(plan.groups.isEmpty)
-      assert(plan.errors.map(_.file_identifier) == Seq("notes.log"))
-      assert(plan.errors.head.error_message.contains("Unsupported file format"))
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "text")
+      assert(!plan.groups.head.useDirectoryIdentifier)
+      assert(plan.groups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("notes.log"))
     } finally {
       deleteRecursively(inputDir)
     }
   }
 
-  test("scanDirectoryStructure records extensionless text files as unsupported when magic bytes do not match") {
+  test("scanDirectoryStructure treats extensionless text files as text inputs when magic bytes do not match") {
     val inputDir = Files.createTempDirectory("privyspark-extensionless-unsupported-")
 
     try {
@@ -531,9 +533,11 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "2026-04-09T00:00:00Z"
       )
 
-      assert(plan.groups.isEmpty)
-      assert(plan.errors.map(_.file_identifier) == Seq("notes"))
-      assert(plan.errors.head.error_message.contains("Unsupported file format"))
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "text")
+      assert(!plan.groups.head.useDirectoryIdentifier)
+      assert(plan.groups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("notes"))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1945,7 +1949,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanWithRules records unsupported errors for archive entries with unsupported extensions even when content is text-like") {
+  test("scanWithRules scans archive entries with unsupported extensions as text when content is text-like") {
     val inputDir = Files.createTempDirectory("privyspark-zip-unsupported-extension-fixture-")
     val timestamp = "2026-04-10T00:00:00Z"
 
@@ -1962,9 +1966,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
 
-      assert(results.isEmpty)
-      assert(errors.map(_.file_identifier) == Seq("bundle.zip!notes.log"))
-      assert(errors.head.error_message.contains("Unsupported file format"))
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.zip!notes.log", "value", 2L)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2203,7 +2207,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanWithRules records unsupported errors for unsupported extensions even when content is text-like") {
+  test("scanWithRules scans unsupported extension text files through the text fallback") {
     val inputDir = Files.createTempDirectory("privyspark-text-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
 
@@ -2216,9 +2220,35 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
 
-      assert(results.isEmpty)
-      assert(errors.map(_.file_identifier) == Seq("notes.log"))
-      assert(errors.head.error_message.contains("Unsupported file format"))
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("notes.log", "value", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules ignores full_column semantics for text fallback inputs") {
+    val inputDir = Files.createTempDirectory("privyspark-text-full-column-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("notes.log"),
+        "Contact alice@example.com now\n" +
+          "skip\n")
+
+      val rules = Seq(
+        PiiRule(
+          "email",
+          "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
+          matchType = PiiRuleMatchType.FullColumn
+        )
+      )
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("notes.log", "value", 1L)))
     } finally {
       deleteRecursively(inputDir)
     }
