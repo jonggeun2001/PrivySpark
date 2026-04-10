@@ -1375,27 +1375,43 @@ object PrivySparkApp {
           val localStagingPaths = ArrayBuffer.empty[String]
 
           try {
-            if (isZeroBytePhysicalFile(conf, filePath)) {
-              PreScanFileOutcome(
-                filePath = filePath,
-                groupingDirectoryPath = parentDirectory,
-                preScanErrorScope = preScanErrorScope,
-                expandedEntries = Seq.empty,
-                expandedErrors = Seq.empty,
-                stagingPaths = localStagingPaths.toSeq,
-                skipped = true
-              )
-            } else {
-              val (expandedEntries, expandedErrors) =
-                expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
-              PreScanFileOutcome(
-                filePath = filePath,
-                groupingDirectoryPath = parentDirectory,
-                preScanErrorScope = preScanErrorScope,
-                expandedEntries = expandedEntries,
-                expandedErrors = expandedErrors,
-                stagingPaths = localStagingPaths.toSeq
-              )
+            val zeroByteStatus = try {
+              Right(isZeroBytePhysicalFile(conf, filePath))
+            } catch {
+              case NonFatal(e) => Left(e)
+            }
+
+            zeroByteStatus match {
+              case Left(e) =>
+                PreScanFileOutcome(
+                  filePath = filePath,
+                  groupingDirectoryPath = parentDirectory,
+                  preScanErrorScope = preScanErrorScope,
+                  expandedEntries = Seq.empty,
+                  expandedErrors = Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
+                  stagingPaths = localStagingPaths.toSeq
+                )
+              case Right(true) =>
+                PreScanFileOutcome(
+                  filePath = filePath,
+                  groupingDirectoryPath = parentDirectory,
+                  preScanErrorScope = preScanErrorScope,
+                  expandedEntries = Seq.empty,
+                  expandedErrors = Seq.empty,
+                  stagingPaths = localStagingPaths.toSeq,
+                  skipped = true
+                )
+              case Right(false) =>
+                val (expandedEntries, expandedErrors) =
+                  expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
+                PreScanFileOutcome(
+                  filePath = filePath,
+                  groupingDirectoryPath = parentDirectory,
+                  preScanErrorScope = preScanErrorScope,
+                  expandedEntries = expandedEntries,
+                  expandedErrors = expandedErrors,
+                  stagingPaths = localStagingPaths.toSeq
+                )
             }
           } catch {
             case NonFatal(e) =>
