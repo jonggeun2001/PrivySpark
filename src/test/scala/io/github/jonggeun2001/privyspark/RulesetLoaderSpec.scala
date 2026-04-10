@@ -38,7 +38,25 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(fullMatchRegex.matcher("9012251").matches())
     assert(fullMatchRegex.matcher("901225-1234567").matches())
     assert(fullMatchRegex.matcher("9012251234567").matches())
+    assert(!fullMatchRegex.matcher("901332-1234567").matches())
+    assert(!fullMatchRegex.matcher("9013001234567").matches())
+    assert(!fullMatchRegex.matcher("901232-1234567").matches())
+    assert(!fullMatchRegex.matcher("9012001234567").matches())
     assert(!regex.findFirstIn("20251027").nonEmpty)
+  }
+
+  test("default phone rule accepts domestic and +82 mobile forms") {
+    val phoneRule = RulesetLoader.load("default").find(_.piiType == "phone_number")
+    assert(phoneRule.nonEmpty)
+
+    val fullMatchRegex = new Regex(s"\\A(?:${phoneRule.get.regex})\\z").pattern
+
+    assert(fullMatchRegex.matcher("010-1234-5678").matches())
+    assert(fullMatchRegex.matcher("01012345678").matches())
+    assert(fullMatchRegex.matcher("+821012345678").matches())
+    assert(fullMatchRegex.matcher("+82-10-1234-5678").matches())
+    assert(!fullMatchRegex.matcher("+821312345678").matches())
+    assert(!fullMatchRegex.matcher("821012345678").matches())
   }
 
   test("loads optional column hints and match type from ruleset file and ignores blank entries") {
