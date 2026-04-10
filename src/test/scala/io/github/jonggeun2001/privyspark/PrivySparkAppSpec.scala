@@ -97,6 +97,80 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure skips zero-byte files when grouping supported files") {
+    val inputDir = Files.createTempDirectory("privyspark-zero-byte-group-")
+
+    try {
+      writeText(inputDir.resolve("users_a.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(inputDir.resolve("users_b.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n")
+      writeBytes(inputDir.resolve("_SUCCESS"), Array.emptyByteArray)
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-10T00:00:00Z"
+      )
+
+      val csvGroups = plan.groups.filter(_.format == "csv")
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 2)
+      assert(plan.groups.size == 1)
+      assert(csvGroups.size == 1)
+      assert(csvGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("users_a.csv", "users_b.csv"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure skips zero-byte files in parquet directories") {
+    val inputDir = Files.createTempDirectory("privyspark-zero-byte-parquet-group-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+
+    try {
+      import spark.implicits._
+
+      Seq(("alice@example.com", "010-1234-5678"))
+        .toDF("email", "phone")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq(("bob@example.com", "031-555-7777"))
+        .toDF("email", "phone")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      Files.move(findDataFile(leftWriteDir, ".parquet").get, groupedDir.resolve("part-a.parquet"))
+      Files.move(findDataFile(rightWriteDir, ".parquet").get, groupedDir.resolve("part-b.parquet"))
+      writeBytes(groupedDir.resolve("_SUCCESS"), Array.emptyByteArray)
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        groupedDir.toString,
+        groupedDir.toString,
+        "2026-04-10T00:00:00Z"
+      )
+
+      val parquetGroups = plan.groups.filter(_.format == "parquet")
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 2)
+      assert(plan.groups.size == 1)
+      assert(parquetGroups.size == 1)
+      assert(parquetGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("part-a.parquet", "part-b.parquet"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure emits debug logs for planning lifecycle") {
     val inputDir = Files.createTempDirectory("privyspark-debug-plan-")
 
@@ -2017,6 +2091,36 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errors.isEmpty)
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
         Set(("bundle.zip!notes.log", "value", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure skips zero-byte archive entries") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-zero-byte-entry-")
+
+    try {
+      createArchiveFileWithBytes(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "_SUCCESS" -> Array.emptyByteArray,
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n").getBytes(StandardCharsets.UTF_8)
+        )
+      )
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-10T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "csv")
+      assert(plan.groups.head.logicalIdentifiersByKey.values.toSeq == Seq("bundle.zip!nested/customers.csv"))
     } finally {
       deleteRecursively(inputDir)
     }

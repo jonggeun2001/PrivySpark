@@ -71,6 +71,7 @@ object PrivySparkApp {
     expandedEntries: Seq[ScanFileEntry],
     expandedErrors: Seq[ScanError],
     stagingPaths: Seq[String],
+    skipped: Boolean = false,
     failure: Option[Throwable] = None
   )
 
@@ -558,6 +559,12 @@ object PrivySparkApp {
     }
   }
 
+  private def isZeroBytePhysicalFile(conf: org.apache.hadoop.conf.Configuration, filePath: String): Boolean = {
+    val sourcePath = new Path(filePath)
+    val fs = sourcePath.getFileSystem(conf)
+    fs.getFileStatus(sourcePath).getLen == 0L
+  }
+
   private def effectiveRulesForFormat(format: String, rules: Seq[PiiRule]): Seq[PiiRule] = {
     if (format == TextFormat) {
       rules.map { rule =>
@@ -956,6 +963,18 @@ object PrivySparkApp {
     archiveExpansionDepth: Int = 0,
     forceDisableDirectoryIdentifier: Boolean = false
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
+    try {
+      if (isZeroBytePhysicalFile(conf, physicalPath)) {
+        return (Seq.empty, Seq.empty)
+      }
+    } catch {
+      case NonFatal(e) =>
+        return (
+          Seq.empty,
+          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
+        )
+    }
+
     val detectedFormat =
       try {
         detectPhysicalFormat(conf, physicalPath)
@@ -1137,6 +1156,8 @@ object PrivySparkApp {
                     var detectedFormat: Option[String] = None
                     var archiveEntryError: Option[String] = None
                     var probeRejected = false
+                    var archiveEntryHasContent = false
+                    var archiveEntrySkipped = false
                     var bytesRead = zipInputStream.read(buffer)
 
                     def materializeDetectedEntry(format: String, bytesForProbe: Int, currentChunkSize: Int): Unit = {
@@ -1156,6 +1177,7 @@ object PrivySparkApp {
                     try {
                       while (bytesRead >= 0 && archiveEntryError.isEmpty) {
                         if (bytesRead > 0) {
+                          archiveEntryHasContent = true
                           if (detectedFormat.isDefined) {
                             outputStream.write(buffer, 0, bytesRead)
                           } else if (!probeRejected) {
@@ -1186,12 +1208,16 @@ object PrivySparkApp {
                       }
 
                       if (archiveEntryError.isEmpty && detectedFormat.isEmpty && !probeRejected) {
-                        inferMagicByteFormat(probeBuffer.toByteArray)
-                          .orElse(inferTextFormat(probeBuffer.toByteArray, allowIncompleteTrailingSequence = false)) match {
-                          case Some(format) =>
-                            materializeDetectedEntry(format, bytesForProbe = probeBuffer.size(), currentChunkSize = probeBuffer.size())
-                          case None =>
-                            probeRejected = true
+                        if (archiveEntryHasContent || probeBuffer.size() > 0) {
+                          inferMagicByteFormat(probeBuffer.toByteArray)
+                            .orElse(inferTextFormat(probeBuffer.toByteArray, allowIncompleteTrailingSequence = false)) match {
+                            case Some(format) =>
+                              materializeDetectedEntry(format, bytesForProbe = probeBuffer.size(), currentChunkSize = probeBuffer.size())
+                            case None =>
+                              probeRejected = true
+                          }
+                        } else {
+                          archiveEntrySkipped = true
                         }
                       }
 
@@ -1199,7 +1225,9 @@ object PrivySparkApp {
                         case Some(errorMessage) =>
                           archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
                         case None =>
-                          detectedFormat match {
+                          if (archiveEntrySkipped) {
+                            ()
+                          } else detectedFormat match {
                             case Some(format) =>
                               extractedEntries += ScanFileEntry(
                                 sourceKey = targetPath.toString,
@@ -1321,16 +1349,28 @@ object PrivySparkApp {
           val localStagingPaths = ArrayBuffer.empty[String]
 
           try {
-            val (expandedEntries, expandedErrors) =
-              expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
-            PreScanFileOutcome(
-              filePath = filePath,
-              groupingDirectoryPath = parentDirectory,
-              preScanErrorScope = preScanErrorScope,
-              expandedEntries = expandedEntries,
-              expandedErrors = expandedErrors,
-              stagingPaths = localStagingPaths.toSeq
-            )
+            if (isZeroBytePhysicalFile(conf, filePath)) {
+              PreScanFileOutcome(
+                filePath = filePath,
+                groupingDirectoryPath = parentDirectory,
+                preScanErrorScope = preScanErrorScope,
+                expandedEntries = Seq.empty,
+                expandedErrors = Seq.empty,
+                stagingPaths = localStagingPaths.toSeq,
+                skipped = true
+              )
+            } else {
+              val (expandedEntries, expandedErrors) =
+                expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
+              PreScanFileOutcome(
+                filePath = filePath,
+                groupingDirectoryPath = parentDirectory,
+                preScanErrorScope = preScanErrorScope,
+                expandedEntries = expandedEntries,
+                expandedErrors = expandedErrors,
+                stagingPaths = localStagingPaths.toSeq
+              )
+            }
           } catch {
             case NonFatal(e) =>
               PreScanFileOutcome(
@@ -1355,7 +1395,14 @@ object PrivySparkApp {
         supportedFiles ++= outcome.expandedEntries
         errors ++= outcome.expandedErrors
 
-        if (outcome.expandedEntries.nonEmpty) {
+        if (outcome.skipped) {
+          logDebug(
+            "scan_directory_file_skipped",
+            "file" -> outcome.filePath,
+            "directory" -> outcome.groupingDirectoryPath,
+            "reason" -> "zero_byte"
+          )
+        } else if (outcome.expandedEntries.nonEmpty) {
           logDebug(
             "scan_directory_file_supported",
             "file" -> outcome.filePath,
@@ -1443,15 +1490,17 @@ object PrivySparkApp {
       }
 
       val directoryCount = files
+        .filter(filePath => !preScanOutcomes.exists(outcome => outcome.filePath == filePath && outcome.skipped))
         .map(filePath => Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath))
         .distinct
         .size
+      val totalFiles = preScanOutcomes.count(!_.skipped)
       val plannedGroups = finalizedGroups.toSeq.sortBy(group => (group.directoryPath, group.format, group.schemaSignature))
 
       logDebug(
         "scan_directory_structure_complete",
         "input_path" -> inputPath,
-        "total_files" -> files.size,
+        "total_files" -> totalFiles,
         "supported_files" -> supportedFiles.size,
         "groups" -> plannedGroups.size,
         "errors" -> errors.size,
@@ -1461,7 +1510,7 @@ object PrivySparkApp {
       DirectoryScanPlan(
         groups = plannedGroups,
         errors = errors.toSeq,
-        totalFiles = files.size,
+        totalFiles = totalFiles,
         directoryCount = directoryCount,
         stagingPaths = stagingPaths.toSeq
       )
