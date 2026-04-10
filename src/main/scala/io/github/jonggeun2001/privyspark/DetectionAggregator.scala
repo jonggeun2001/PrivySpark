@@ -5,6 +5,7 @@ import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, trim, udf, whe
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{Column, DataFrame, Row}
 
+import java.time.Instant
 import scala.util.control.NonFatal
 
 object DetectionAggregator {
@@ -48,6 +49,8 @@ object DetectionAggregator {
     debugLoggingEnabledCache = null
   }
 
+  private def currentDebugTimestamp(): String = Instant.now().toString
+
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
     if (!isDebugLoggingEnabled) {
       return
@@ -63,7 +66,7 @@ object DetectionAggregator {
       }.mkString(" ", " ", "")
     }
 
-    System.err.println(s"[PrivySpark][DEBUG] $event$suffix")
+    System.err.println(s"[PrivySpark][DEBUG][${currentDebugTimestamp()}] $event$suffix")
   }
 
   private def logFallback(scope: String, expressionCount: Int, reason: String): Unit = {

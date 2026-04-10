@@ -109,9 +109,9 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
     }
 
-    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_start scope=dataset"))
-    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_metrics_built scope=dataset"))
-    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_complete scope=dataset"))
+    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] detection_aggregation_start scope=dataset.*""")))
+    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] detection_aggregation_metrics_built scope=dataset.*""")))
+    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] detection_aggregation_complete scope=dataset.*""")))
   }
 
   test("filters dataset metrics by column hints before aggregation") {
@@ -273,9 +273,9 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
     }
 
-    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_start scope=file"))
-    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_metrics_built scope=file"))
-    assert(logs.contains("[PrivySpark][DEBUG] detection_aggregation_complete scope=file"))
+    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] detection_aggregation_start scope=file.*""")))
+    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] detection_aggregation_metrics_built scope=file.*""")))
+    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] detection_aggregation_complete scope=file.*""")))
   }
 
   test("reports threshold fallback mode when threshold batch fallback succeeds") {

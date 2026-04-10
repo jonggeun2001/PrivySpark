@@ -193,10 +193,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         }
       }
 
-      assert(logs.contains("[PrivySpark][DEBUG] scan_directory_structure_start"))
-      assert(logs.contains("[PrivySpark][DEBUG] scan_group_schema_sample_start"))
-      assert(logs.contains("[PrivySpark][DEBUG] scan_group_planned"))
-      assert(logs.contains("[PrivySpark][DEBUG] scan_directory_structure_complete"))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_structure_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_group_schema_sample_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_group_planned.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_structure_complete.*""")))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1789,10 +1789,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         }
       }
 
-      assert(logs.contains("[PrivySpark][DEBUG] group_scan_batch_start"))
-      assert(logs.contains("[PrivySpark][DEBUG] read_source_start"))
-      assert(logs.contains("[PrivySpark][DEBUG] group_scan_batch_source_ready"))
-      assert(logs.contains("[PrivySpark][DEBUG] group_scan_batch_complete"))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_batch_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] read_source_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_batch_source_ready.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_batch_complete.*""")))
     } finally {
       deleteRecursively(inputDir)
     }
