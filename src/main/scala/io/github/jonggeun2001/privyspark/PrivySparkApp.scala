@@ -804,7 +804,7 @@ object PrivySparkApp {
     )
   }
 
-  private def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
+  private[privyspark] def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
     if (tasks.isEmpty) {
       Seq.empty
     } else if (parallelism <= 1 || tasks.size <= 1) {
@@ -1523,21 +1523,33 @@ object PrivySparkApp {
       logDebug("scan_directory_initial_groups_ready", "groups" -> groupedByDirectoryAndFormat.size, "supported_files" -> supportedFiles.size)
 
       val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
-      groupedByDirectoryAndFormat.foreach { group =>
-        val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group)
-        schemaAwareGroups ++= splitGroups
-        errors ++= splitErrors
-        logDebug(
-          "scan_directory_group_schema_split",
-          "directory" -> group.directoryPath,
-          "format" -> group.format,
-          "input_files" -> group.filePaths.size,
-          "split_groups" -> splitGroups.size,
-          "split_errors" -> splitErrors.size
-        )
-        if (splitErrors.nonEmpty) {
-          directoriesWithPreScanErrors += group.directoryPath
-        }
+      val schemaSplitParallelism = resolveParallelism(groupedByDirectoryAndFormat.size, resolvedPreScanParallelism)
+      logDebug(
+        "scan_directory_schema_split_parallelism",
+        "groups" -> groupedByDirectoryAndFormat.size,
+        "parallelism" -> schemaSplitParallelism
+      )
+      val schemaSplitOutcomes = executeInParallel(schemaSplitParallelism, groupedByDirectoryAndFormat.map { group =>
+        () =>
+          val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group)
+          (group, splitGroups, splitErrors)
+      })
+
+      schemaSplitOutcomes.foreach {
+        case (group, splitGroups, splitErrors) =>
+          schemaAwareGroups ++= splitGroups
+          errors ++= splitErrors
+          logDebug(
+            "scan_directory_group_schema_split",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "input_files" -> group.filePaths.size,
+            "split_groups" -> splitGroups.size,
+            "split_errors" -> splitErrors.size
+          )
+          if (splitErrors.nonEmpty) {
+            directoriesWithPreScanErrors += group.directoryPath
+          }
       }
 
       val groupsPerDirectory = schemaAwareGroups.groupBy(_.directoryPath).map {
