@@ -83,9 +83,12 @@ spark-submit \
 ```
 
 ## 운영 로그
-- 기본 로그에는 스캔 요약과 fallback 원인이 출력됩니다.
-- `PRIVYSPARK_DEBUG=true` 또는 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG=true`, `-Dprivyspark.debug=true`가 설정되면 debug 이벤트가 추가되고 각 로그 줄에 ISO-8601 UTC 타임스탬프가 포함됩니다.
-- debug 로그에는 플랜 수립, 그룹/파일 스캔 진행, 리포트 저장 단계가 포함됩니다.
+- driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...` 형식으로 출력됩니다.
+- `PRIVYSPARK_DEBUG` 또는 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG`, `-Dprivyspark.debug`는 driver 로그 레벨 설정으로 동작합니다.
+- 지원값은 `error`, `warn`, `info`, `debug`이며 `off`로 driver 로그를 끌 수 있습니다. 기본값은 `warn`입니다.
+- 하위호환으로 `true`는 `debug`, `false`는 `warn`으로 해석합니다.
+- `info` 레벨에는 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 실행 lifecycle 로그가 포함됩니다.
+- `debug` 레벨에는 플랜 수립, 그룹/파일 스캔 진행, 리포트 저장 단계가 포함됩니다.
 - `scanDirectoryStructure` debug 로그에는 파일 발견 duration, pre-scan 실행 시작/진행률/완료, pre-scan 후처리 duration, 초기 `(directory, format)` 그룹화 duration이 포함됩니다.
 
 ## 릴리즈

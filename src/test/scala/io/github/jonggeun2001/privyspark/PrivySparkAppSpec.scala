@@ -2717,9 +2717,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   private def withDebugLoggingEnabled[A](block: => A): A = {
+    withDriverLogLevel("debug")(block)
+  }
+
+  private def withDriverLogLevel[A](level: String)(block: => A): A = {
     val previous = sys.props.get("privyspark.debug")
     PrivySparkApp.resetDebugCache()
-    System.setProperty("privyspark.debug", "true")
+    DriverLogger.resetCache()
+    System.setProperty("privyspark.debug", level)
     try {
       block
     } finally {
@@ -2728,6 +2733,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         case None => System.clearProperty("privyspark.debug")
       }
       PrivySparkApp.resetDebugCache()
+      DriverLogger.resetCache()
     }
   }
 

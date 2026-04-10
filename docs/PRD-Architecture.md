@@ -9,6 +9,7 @@
 - `Cli.scala`: 실행 인자와 기본 실행 옵션
 - `FormatDetector.scala`: 확장자 기반 1차 포맷 식별
 - `RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
+- `DriverLogger.scala`: driver 로그 레벨 해석, 공통 로그 포맷, fatal/error 강제 출력
 - `DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
 - `DriverLicenseNumberValidator.scala`: 운전면허번호 strict validator
 - `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, 리포트 저장

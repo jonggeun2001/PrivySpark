@@ -10,6 +10,7 @@
 - 확장자가 없는 파일과 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 우선 판별하고, 텍스트처럼 보이는 입력은 단일 `value` 컬럼의 내부 `text` 포맷으로 스캔합니다. 바이너리처럼 보이는 입력만 `Unsupported file format`으로 기록합니다.
 - 0바이트 빈 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 skip합니다.
 - 실행 옵션으로 pre-scan, group, file fallback 병렬도를 조정할 수 있으며, pre-scan 병렬도는 파일 확장/포맷 판별과 그룹별 schema split에 적용됩니다.
+- driver 로그 레벨은 `PRIVYSPARK_DEBUG` / `privyspark.debug`로 `error`, `warn`, `info`, `debug`를 설정할 수 있고, 기본값은 `warn`입니다. `true`/`false`는 각각 `debug`/`warn`으로 해석됩니다.
 - 탐지는 ruleset 기반 regex + 일부 타입의 strict validator 조합입니다.
 - 출력은 Parquet + CSV 2종이며 `scan_results`, `scan_errors`를 함께 생성합니다.
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
