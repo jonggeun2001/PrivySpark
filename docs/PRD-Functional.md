@@ -8,6 +8,7 @@
 - 입력은 절대경로 또는 URI만 허용합니다.
 - 지원 포맷은 코드 기준으로 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`입니다.
 - 확장자가 없는 파일과 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 우선 판별하고, 텍스트처럼 보이는 입력은 단일 `value` 컬럼의 내부 `text` 포맷으로 스캔합니다. 바이너리처럼 보이는 입력만 `Unsupported file format`으로 기록합니다.
+- 실행 옵션으로 pre-scan, group, file fallback 병렬도를 조정할 수 있습니다.
 - 탐지는 ruleset 기반 regex + 일부 타입의 strict validator 조합입니다.
 - 출력은 Parquet + CSV 2종이며 `scan_results`, `scan_errors`를 함께 생성합니다.
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
