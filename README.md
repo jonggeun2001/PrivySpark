@@ -38,7 +38,7 @@ bin/privyspark-submit \
   --file-parallelism 4
 ```
 
-`PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 설정하면 debug 로그 각 줄에 ISO-8601 UTC 타임스탬프가 함께 출력됩니다.
+`PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 설정하면 debug 로그 각 줄에 ISO-8601 UTC 타임스탬프가 함께 출력되며, `scanDirectoryStructure`의 파일 발견, pre-scan 실행, pre-scan 후처리, 초기 그룹화 단계에 대한 duration/progress 로그도 함께 남습니다.
 
 ## 문서 맵
 - 기능 요구사항 허브: [docs/PRD-Functional.md](docs/PRD-Functional.md)

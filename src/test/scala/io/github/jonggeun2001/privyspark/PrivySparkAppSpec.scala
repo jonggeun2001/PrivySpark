@@ -242,6 +242,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
 
       assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_structure_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_files_discovered.*duration_ms=\d+.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_execute_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_progress.*completed_files=\d+.*total_files=\d+.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_execute_complete.*duration_ms=\d+.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_collect_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_collect_complete.*duration_ms=\d+.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_group_build_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_initial_groups_ready.*duration_ms=\d+.*""")))
       assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_group_schema_sample_start.*""")))
       assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_group_planned.*""")))
       assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_structure_complete.*""")))
