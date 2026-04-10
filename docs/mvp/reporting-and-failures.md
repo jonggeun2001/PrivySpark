@@ -18,7 +18,7 @@
 ## file_identifier 규칙
 - 기본은 입력 경로 기준 상대경로입니다.
 - 디렉토리 상대경로 승격은 exact split으로 동일 스키마가 확인되고, pre-scan 오류가 없고, 디렉토리 식별자 승격이 허용된 다중 파일 그룹에서만 일어납니다.
-- plain text fallback, archive 내부 파일, Excel 시트, 단일 파일 그룹은 파일 또는 논리 입력 식별자를 유지합니다.
+- archive 내부 파일, Excel 시트, 단일 파일 그룹은 파일 또는 논리 입력 식별자를 유지합니다.
 - 입력 루트 디렉토리 그룹은 `.`를 사용합니다.
 - archive 내부 파일은 `<archive>!<entry>` 형식을 사용합니다.
 - Excel 시트는 `<workbook>#<sheet>` 형식을 사용합니다.
@@ -36,7 +36,7 @@
 ## 오류 처리 원칙
 - 실패 파일은 오류 리포트에 남기고 나머지 처리를 계속합니다.
 - 파일 교체/삭제로 인한 읽기 오류는 내부 재시도 후 실패 시 기록합니다.
-- 손상 JSON, nested archive, unsafe archive path, binary unknown-extension 등은 명시적 오류로 기록합니다.
+- 손상 JSON, nested archive, unsafe archive path, 매직바이트 불일치 무확장자/미지원 확장자 파일 등은 명시적 오류로 기록합니다.
 
 ## 보안 원칙
 - 원문 PII 값은 저장하지 않습니다.
