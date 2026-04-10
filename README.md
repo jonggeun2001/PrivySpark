@@ -50,4 +50,5 @@ bin/privyspark-submit \
 
 ## 릴리즈
 - 태그 `v*` 또는 bare semver(`0.1.3`) 푸시 시 GitHub Actions가 Shadow fat JAR를 빌드해 Release 자산으로 업로드합니다.
-- 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256` 형식입니다.
+- 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml` 형식입니다.
+- `default-rules.yaml`은 배포 예시 ruleset 파일이며, YARN 제출 시 `--files /abs/path/default-rules.yaml#default-rules.yaml` 또는 `PRIVYSPARK_SPARK_FILES=/abs/path/default-rules.yaml#default-rules.yaml`로 함께 전달할 수 있습니다.

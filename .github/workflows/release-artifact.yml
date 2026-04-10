@@ -51,10 +51,13 @@ jobs:
           if [ "${jars[0]}" != "$asset_jar" ]; then
             cp "${jars[0]}" "$asset_jar"
           fi
+          asset_rules="build/libs/default-rules.yaml"
+          cp config/rules/default.yaml "$asset_rules"
           sha256sum "$asset_jar" > "${asset_jar}.sha256"
 
           echo "asset_jar=$asset_jar" >> "$GITHUB_OUTPUT"
           echo "asset_sha=${asset_jar}.sha256" >> "$GITHUB_OUTPUT"
+          echo "asset_rules=$asset_rules" >> "$GITHUB_OUTPUT"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -63,6 +66,7 @@ jobs:
           path: |
             ${{ steps.assets.outputs.asset_jar }}
             ${{ steps.assets.outputs.asset_sha }}
+            ${{ steps.assets.outputs.asset_rules }}
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
@@ -73,4 +77,5 @@ jobs:
           files: |
             ${{ steps.assets.outputs.asset_jar }}
             ${{ steps.assets.outputs.asset_sha }}
+            ${{ steps.assets.outputs.asset_rules }}
           fail_on_unmatched_files: true
