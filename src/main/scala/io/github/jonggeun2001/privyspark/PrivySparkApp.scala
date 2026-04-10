@@ -17,6 +17,7 @@ import java.nio.charset.{CharacterCodingException, CodingErrorAction}
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipInputStream
 import java.nio.file.NoSuchFileException
 import com.univocity.parsers.csv.CsvParser
@@ -71,6 +72,8 @@ object PrivySparkApp {
     expandedEntries: Seq[ScanFileEntry],
     expandedErrors: Seq[ScanError],
     stagingPaths: Seq[String],
+    pathInferredFormat: Option[String] = None,
+    probeRequired: Boolean = false,
     skipped: Boolean = false,
     failure: Option[Throwable] = None
   )
@@ -90,6 +93,7 @@ object PrivySparkApp {
   private val MaxArchiveExpansionDepth = 1
   private[privyspark] val MaxFileReadAttempts = 2
   private[privyspark] val FileReadRetryDelayMillis = 200L
+  private[privyspark] val PreScanProgressLogInterval = 10000
   private val CommonCsvHeaderTokens = Set(
     "id",
     "name",
@@ -201,6 +205,14 @@ object PrivySparkApp {
     }
 
     System.err.println(s"[PrivySpark][DEBUG][${currentDebugTimestamp()}] $event$suffix")
+  }
+
+  private def elapsedMillis(startNanos: Long): Long = {
+    (System.nanoTime() - startNanos) / 1000000L
+  }
+
+  private[privyspark] def resolvePreScanProgressInterval(fileCount: Int): Int = {
+    if (fileCount <= 0) 1 else math.min(fileCount, PreScanProgressLogInterval)
   }
 
   private def stripTrailingSlash(path: String): String = {
@@ -1363,6 +1375,7 @@ object PrivySparkApp {
     val path = new Path(inputPath)
     val fs = path.getFileSystem(conf)
     val stagingPaths = ArrayBuffer.empty[String]
+    val fileDiscoveryStartedAt = System.nanoTime()
 
     try {
       if (!fs.exists(path)) {
@@ -1382,7 +1395,12 @@ object PrivySparkApp {
         }
         discoveredFiles.toSeq.sorted
       }
-      logDebug("scan_directory_files_discovered", "input_path" -> inputPath, "files" -> files.size)
+      logDebug(
+        "scan_directory_files_discovered",
+        "input_path" -> inputPath,
+        "files" -> files.size,
+        "duration_ms" -> elapsedMillis(fileDiscoveryStartedAt)
+      )
 
       val supportedFiles = ArrayBuffer.empty[ScanFileEntry]
       val errors = ArrayBuffer.empty[ScanError]
@@ -1400,34 +1418,76 @@ object PrivySparkApp {
         "parallelism" -> resolvedPreScanParallelism
       )
 
+      val preScanStartedAt = System.nanoTime()
+      val preScanProgressInterval = resolvePreScanProgressInterval(files.size)
+      val completedPreScanFiles = new AtomicInteger(0)
+      logDebug(
+        "scan_directory_pre_scan_execute_start",
+        "input_path" -> inputPath,
+        "files" -> files.size,
+        "parallelism" -> resolvedPreScanParallelism,
+        "progress_interval" -> preScanProgressInterval
+      )
+
       val preScanOutcomes = executeInParallel(resolvedPreScanParallelism, files.map { filePath =>
         () => {
           val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
           val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
-          val preScanErrorScope = FormatDetector.infer(filePath) match {
+          val pathInferredFormat = FormatDetector.infer(filePath)
+          val preScanErrorScope = pathInferredFormat match {
             case Some(format) if ArchiveFormats.contains(format) || format == XlsxFormat => logicalIdentifier
             case _ => parentDirectory
           }
           val localStagingPaths = ArrayBuffer.empty[String]
 
-          try {
-            val zeroByteStatus = try {
-              Right(isZeroBytePhysicalFile(conf, filePath))
-            } catch {
-              case NonFatal(e) => Left(e)
-            }
+          val outcome =
+            try {
+              val zeroByteStatus = try {
+                Right(isZeroBytePhysicalFile(conf, filePath))
+              } catch {
+                case NonFatal(e) => Left(e)
+              }
 
-            zeroByteStatus match {
-              case Left(e) =>
-                PreScanFileOutcome(
-                  filePath = filePath,
-                  groupingDirectoryPath = parentDirectory,
-                  preScanErrorScope = preScanErrorScope,
-                  expandedEntries = Seq.empty,
-                  expandedErrors = Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
-                  stagingPaths = localStagingPaths.toSeq
-                )
-              case Right(true) =>
+              zeroByteStatus match {
+                case Left(e) =>
+                  PreScanFileOutcome(
+                    filePath = filePath,
+                    groupingDirectoryPath = parentDirectory,
+                    preScanErrorScope = preScanErrorScope,
+                    expandedEntries = Seq.empty,
+                    expandedErrors = Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
+                    stagingPaths = localStagingPaths.toSeq,
+                    pathInferredFormat = pathInferredFormat,
+                    probeRequired = pathInferredFormat.isEmpty
+                  )
+                case Right(true) =>
+                  PreScanFileOutcome(
+                    filePath = filePath,
+                    groupingDirectoryPath = parentDirectory,
+                    preScanErrorScope = preScanErrorScope,
+                    expandedEntries = Seq.empty,
+                    expandedErrors = Seq.empty,
+                    stagingPaths = localStagingPaths.toSeq,
+                    pathInferredFormat = pathInferredFormat,
+                    probeRequired = pathInferredFormat.isEmpty,
+                    skipped = true
+                  )
+                case Right(false) =>
+                  val (expandedEntries, expandedErrors) =
+                    expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
+                  PreScanFileOutcome(
+                    filePath = filePath,
+                    groupingDirectoryPath = parentDirectory,
+                    preScanErrorScope = preScanErrorScope,
+                    expandedEntries = expandedEntries,
+                    expandedErrors = expandedErrors,
+                    stagingPaths = localStagingPaths.toSeq,
+                    pathInferredFormat = pathInferredFormat,
+                    probeRequired = pathInferredFormat.isEmpty
+                  )
+              }
+            } catch {
+              case NonFatal(e) =>
                 PreScanFileOutcome(
                   filePath = filePath,
                   groupingDirectoryPath = parentDirectory,
@@ -1435,35 +1495,44 @@ object PrivySparkApp {
                   expandedEntries = Seq.empty,
                   expandedErrors = Seq.empty,
                   stagingPaths = localStagingPaths.toSeq,
-                  skipped = true
-                )
-              case Right(false) =>
-                val (expandedEntries, expandedErrors) =
-                  expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
-                PreScanFileOutcome(
-                  filePath = filePath,
-                  groupingDirectoryPath = parentDirectory,
-                  preScanErrorScope = preScanErrorScope,
-                  expandedEntries = expandedEntries,
-                  expandedErrors = expandedErrors,
-                  stagingPaths = localStagingPaths.toSeq
+                  pathInferredFormat = pathInferredFormat,
+                  probeRequired = pathInferredFormat.isEmpty,
+                  failure = Some(e)
                 )
             }
-          } catch {
-            case NonFatal(e) =>
-              PreScanFileOutcome(
-                filePath = filePath,
-                groupingDirectoryPath = parentDirectory,
-                preScanErrorScope = preScanErrorScope,
-                expandedEntries = Seq.empty,
-                expandedErrors = Seq.empty,
-                stagingPaths = localStagingPaths.toSeq,
-                failure = Some(e)
-              )
+
+          val completedFiles = completedPreScanFiles.incrementAndGet()
+          if (completedFiles == files.size || completedFiles % preScanProgressInterval == 0) {
+            logDebug(
+              "scan_directory_pre_scan_progress",
+              "input_path" -> inputPath,
+              "completed_files" -> completedFiles,
+              "total_files" -> files.size,
+              "elapsed_ms" -> elapsedMillis(preScanStartedAt)
+            )
           }
+          outcome
         }
       })
 
+      logDebug(
+        "scan_directory_pre_scan_execute_complete",
+        "input_path" -> inputPath,
+        "files" -> files.size,
+        "parallelism" -> resolvedPreScanParallelism,
+        "duration_ms" -> elapsedMillis(preScanStartedAt),
+        "completed_files" -> preScanOutcomes.size,
+        "skipped_files" -> preScanOutcomes.count(_.skipped),
+        "expanded_entries" -> preScanOutcomes.map(_.expandedEntries.size.toLong).sum,
+        "error_entries" -> preScanOutcomes.map(_.expandedErrors.size.toLong).sum,
+        "failure_files" -> preScanOutcomes.count(_.failure.isDefined),
+        "probe_candidates" -> preScanOutcomes.count(_.probeRequired),
+        "archive_candidates" -> preScanOutcomes.count(_.pathInferredFormat.exists(ArchiveFormats.contains)),
+        "xlsx_candidates" -> preScanOutcomes.count(_.pathInferredFormat.contains(XlsxFormat))
+      )
+
+      val preScanCollectStartedAt = System.nanoTime()
+      logDebug("scan_directory_pre_scan_collect_start", "input_path" -> inputPath, "outcomes" -> preScanOutcomes.size)
       preScanOutcomes.foreach(outcome => stagingPaths ++= outcome.stagingPaths)
       preScanOutcomes.flatMap(_.failure).headOption.foreach { failure =>
         throw failure
@@ -1500,6 +1569,17 @@ object PrivySparkApp {
         }
       }
 
+      logDebug(
+        "scan_directory_pre_scan_collect_complete",
+        "input_path" -> inputPath,
+        "duration_ms" -> elapsedMillis(preScanCollectStartedAt),
+        "supported_files" -> supportedFiles.size,
+        "errors" -> errors.size,
+        "directories_with_pre_scan_errors" -> directoriesWithPreScanErrors.size
+      )
+
+      val groupBuildStartedAt = System.nanoTime()
+      logDebug("scan_directory_group_build_start", "input_path" -> inputPath, "supported_files" -> supportedFiles.size)
       val groupedByDirectoryAndFormat = supportedFiles
         .groupBy(file => (file.directoryPath, file.format))
         .toSeq
@@ -1520,7 +1600,12 @@ object PrivySparkApp {
               allowDirectoryIdentifier = sortedFiles.forall(_.allowDirectoryIdentifier)
             )
         }
-      logDebug("scan_directory_initial_groups_ready", "groups" -> groupedByDirectoryAndFormat.size, "supported_files" -> supportedFiles.size)
+      logDebug(
+        "scan_directory_initial_groups_ready",
+        "groups" -> groupedByDirectoryAndFormat.size,
+        "supported_files" -> supportedFiles.size,
+        "duration_ms" -> elapsedMillis(groupBuildStartedAt)
+      )
 
       val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
       val schemaSplitParallelism = resolveParallelism(groupedByDirectoryAndFormat.size, resolvedPreScanParallelism)
