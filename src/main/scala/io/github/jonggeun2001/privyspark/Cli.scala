@@ -1,6 +1,9 @@
 package io.github.jonggeun2001.privyspark
 
 import scopt.OParser
+import scopt.{DefaultOParserSetup, OEffectSetup}
+
+import scala.collection.mutable.ArrayBuffer
 
 final case class CliConfig(
   inputPath: String = "",
@@ -12,8 +15,13 @@ final case class CliConfig(
   fileParallelism: Option[Int] = None
 )
 
+private[privyspark] final case class CliParseResult(config: Option[CliConfig], errors: Seq[String])
+
 object Cli {
   private val builder = OParser.builder[CliConfig]
+  private object QuietParserSetup extends DefaultOParserSetup {
+    override def showUsageOnError: Option[Boolean] = Some(false)
+  }
 
   private val parser = {
     import builder._
@@ -68,5 +76,26 @@ object Cli {
     )
   }
 
-  def parse(args: Array[String]): Option[CliConfig] = OParser.parse(parser, args, CliConfig())
+  def parse(args: Array[String]): Option[CliConfig] = parseWithErrors(args).config
+
+  private[privyspark] def parseWithErrors(args: Array[String]): CliParseResult = {
+    val (config, effects) = OParser.runParser(parser, args.toSeq, CliConfig(), QuietParserSetup)
+    val errors = ArrayBuffer.empty[String]
+
+    OParser.runEffects(effects, new OEffectSetup {
+      override def displayToOut(message: String): Unit = ()
+
+      override def displayToErr(message: String): Unit = ()
+
+      override def reportError(message: String): Unit = {
+        errors += message
+      }
+
+      override def reportWarning(message: String): Unit = ()
+
+      override def terminate(exitState: Either[String, Unit]): Unit = ()
+    })
+
+    CliParseResult(config, errors.toSeq.filter(_.trim.nonEmpty).distinct)
+  }
 }

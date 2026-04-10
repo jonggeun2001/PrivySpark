@@ -68,4 +68,14 @@ class CliSpec extends AnyFunSuite {
     assert(zeroGroupParallelism.isEmpty)
     assert(negativeFileParallelism.isEmpty)
   }
+
+  test("captures parser errors without terminating") {
+    val missingPath = Cli.parseWithErrors(Array("--output", "/data/output"))
+    val invalidSampleRatio = Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--sample-ratio", "0.0"))
+
+    assert(missingPath.config.isEmpty)
+    assert(missingPath.errors.exists(_.contains("--path")))
+    assert(invalidSampleRatio.config.isEmpty)
+    assert(invalidSampleRatio.errors.exists(_.contains("sample-ratio must be > 0.0 and <= 1.0")))
+  }
 }

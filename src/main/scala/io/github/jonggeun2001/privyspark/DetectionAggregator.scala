@@ -5,7 +5,6 @@ import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, trim, udf, whe
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{Column, DataFrame, Row}
 
-import java.time.Instant
 import scala.util.control.NonFatal
 
 object DetectionAggregator {
@@ -22,54 +21,24 @@ object DetectionAggregator {
   ) {
     val expressionCount: Int = 1
   }
-  private val DebugPropertyName = "privyspark.debug"
-  private val DebugEnvName = "PRIVYSPARK_DEBUG"
   private val LegacyFallbackBatchSize = 50
   private val DriverLicenseValidatorUdf = udf((value: String) => DriverLicenseNumberValidator.containsValidCandidate(value))
-  @volatile private var debugLoggingEnabledCache: java.lang.Boolean = _
-
-  private def isDebugLoggingEnabled: Boolean = {
-    val cached = debugLoggingEnabledCache
-    if (cached != null) {
-      return cached.booleanValue()
-    }
-
-    val enabled = sys.props.get(DebugPropertyName).orElse(sys.env.get(DebugEnvName)).exists { value =>
-      value.trim.toLowerCase match {
-        case "1" | "true" | "yes" | "on" => true
-        case _ => false
-      }
-    }
-    debugLoggingEnabledCache = java.lang.Boolean.valueOf(enabled)
-    enabled
-  }
 
   private[privyspark] def resetDebugCache(): Unit = {
-    debugLoggingEnabledCache = null
+    DriverLogger.resetCache()
   }
 
-  private def currentDebugTimestamp(): String = Instant.now().toString
-
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
-    if (!isDebugLoggingEnabled) {
-      return
-    }
-
-    val suffix = if (fields.isEmpty) {
-      ""
-    } else {
-      fields.map {
-        case (key, value) =>
-          val renderedValue = if (value == null) "null" else value.toString
-          s"$key=$renderedValue"
-      }.mkString(" ", " ", "")
-    }
-
-    System.err.println(s"[PrivySpark][DEBUG][${currentDebugTimestamp()}] $event$suffix")
+    DriverLogger.debug(event, fields: _*)
   }
 
   private def logFallback(scope: String, expressionCount: Int, reason: String): Unit = {
-    System.err.println(s"[PrivySpark] detection_aggregation_fallback scope=$scope expressions=$expressionCount reason=$reason")
+    DriverLogger.warn(
+      "detection_aggregation_fallback",
+      "scope" -> scope,
+      "expressions" -> expressionCount,
+      "reason" -> reason
+    )
   }
 
   def aggregate(sampledDf: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {

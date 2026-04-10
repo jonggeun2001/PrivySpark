@@ -26,7 +26,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 
 YARN cluster 실행:
 ```bash
-PRIVYSPARK_DEBUG=true \
+PRIVYSPARK_DEBUG=debug \
 bin/privyspark-submit \
   scan \
   --path /abs/input \
@@ -38,7 +38,9 @@ bin/privyspark-submit \
   --file-parallelism 4
 ```
 
-`PRIVYSPARK_DEBUG=true` 또는 `-Dprivyspark.debug=true`를 설정하면 debug 로그 각 줄에 ISO-8601 UTC 타임스탬프가 함께 출력되며, `scanDirectoryStructure`의 파일 발견, pre-scan 실행, pre-scan 후처리, 초기 그룹화 단계에 대한 duration/progress 로그도 함께 남습니다.
+`PRIVYSPARK_DEBUG` / `-Dprivyspark.debug`는 driver 로그 레벨 설정으로 동작합니다. 지원값은 `error`, `warn`, `info`, `debug`이며 `off`로 driver 로그를 끌 수 있습니다. 기본값은 `warn`이고, 하위호환으로 `true`는 `debug`, `false`는 `warn`으로 해석합니다.
+
+driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...` 형식으로 통일됩니다. field 값에 공백, 개행, `=` 같은 문자가 있으면 quote/escape해 구조를 유지합니다. `info` 레벨에서는 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 실행 lifecycle이 남고, `scan_start`의 병렬도 필드는 `configured_*` 이름으로 요청값 또는 `spark_conf_or_default` 상태를 기록합니다. `debug` 레벨에서는 `scanDirectoryStructure`의 파일 발견, pre-scan 실행, pre-scan 후처리, 초기 그룹화 단계에 대한 duration/progress 로그까지 함께 남습니다.
 
 ## 문서 맵
 - 기능 요구사항 허브: [docs/PRD-Functional.md](docs/PRD-Functional.md)
