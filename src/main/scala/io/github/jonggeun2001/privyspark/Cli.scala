@@ -7,6 +7,7 @@ final case class CliConfig(
   outputPath: String = "",
   ruleset: String = "default",
   sampleRatio: Double = 0.2,
+  preScanParallelism: Option[Int] = None,
   groupParallelism: Option[Int] = None,
   fileParallelism: Option[Int] = None
 )
@@ -40,6 +41,14 @@ object Cli {
           else failure("sample-ratio must be > 0.0 and <= 1.0")
         }
         .text("샘플링 비율(0.0, 1.0]"),
+      opt[Int]("pre-scan-parallelism")
+        .optional()
+        .action((value, config) => config.copy(preScanParallelism = Some(value)))
+        .validate { value =>
+          if (value > 0) success
+          else failure("pre-scan-parallelism must be > 0")
+        }
+        .text("파일 pre-scan 확장 병렬도(정수 > 0)"),
       opt[Int]("group-parallelism")
         .optional()
         .action((value, config) => config.copy(groupParallelism = Some(value)))

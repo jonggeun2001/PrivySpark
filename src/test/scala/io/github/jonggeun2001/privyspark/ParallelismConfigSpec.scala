@@ -10,11 +10,12 @@ class ParallelismConfigSpec extends AnyFunSuite {
     val config = CliConfig(
       inputPath = "/data/input",
       outputPath = "/data/output",
+      preScanParallelism = Some(9),
       groupParallelism = Some(7),
       fileParallelism = Some(5)
     )
 
-    assert(PrivySparkApp.resolveCliParallelism(config) == (7, 5))
+    assert(PrivySparkApp.resolveCliParallelism(config) == (9, 7, 5))
   }
 
   test("resolveCliParallelism returns fallback markers when CLI values are absent") {
@@ -23,6 +24,6 @@ class ParallelismConfigSpec extends AnyFunSuite {
       outputPath = "/data/output"
     )
 
-    assert(PrivySparkApp.resolveCliParallelism(config) == (-1, -1))
+    assert(PrivySparkApp.resolveCliParallelism(config) == (-1, -1, -1))
   }
 }

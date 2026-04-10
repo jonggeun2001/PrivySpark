@@ -11,12 +11,14 @@
 - `--output <ABS_PATH_OR_URI>`: 출력 경로
 - `--ruleset <default|path>`: 규칙셋 경로 또는 `default`
 - `--sample-ratio <(0.0, 1.0]>`: 샘플링 비율, 기본 `0.2`
+- `--pre-scan-parallelism <INT>`: 파일 pre-scan 확장 병렬도, `> 0`
 - `--group-parallelism <INT>`: 그룹 스캔 병렬도, `> 0`
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
 
 ## 병렬도
 - CLI에서 병렬도 값을 주면 해당 값이 앱 로직에 직접 전달됩니다.
-- CLI 값을 생략하면 `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 또는 앱 기본값(`4`, `3`)을 사용합니다.
+- CLI 값을 생략하면 `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 또는 앱 기본값(`4`, `4`, `3`)을 사용합니다.
+- pre-scan 병렬도는 파일 단위 입력 확장과 포맷 판별 경로에 적용됩니다.
 - 그룹 병렬도는 `scanGroups` 경로에 적용됩니다.
 - 파일 병렬도는 일반 `scanGroupByFile` fallback 경로에 적용됩니다.
 - batch scan을 지원하지 않아 direct file scan으로 내려가는 `xlsx` 그룹은 현재 CLI `--file-parallelism`이 아니라 Spark conf 또는 기본값 경로를 사용합니다.

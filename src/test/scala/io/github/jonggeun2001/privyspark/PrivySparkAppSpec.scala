@@ -128,6 +128,49 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure keeps the same logical plan when pre-scan file expansion runs in parallel") {
+    val inputDir = Files.createTempDirectory("privyspark-prescan-parallel-plan-")
+
+    try {
+      writeText(inputDir.resolve("users.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      createSpreadsheetFile(inputDir)
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "bob,bob@example.com\n"),
+          "nested/notes.log" ->
+            ("ignore me\n")
+        )
+      )
+
+      val serialPlan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-10T00:00:00Z",
+        preScanParallelism = 1
+      )
+      val parallelPlan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-10T00:00:00Z",
+        preScanParallelism = 4
+      )
+
+      assert(normalizePlanGroups(serialPlan.groups) == normalizePlanGroups(parallelPlan.groups))
+      assert(normalizeErrors(serialPlan.errors) == normalizeErrors(parallelPlan.errors))
+      assert(serialPlan.totalFiles == parallelPlan.totalFiles)
+      assert(serialPlan.directoryCount == parallelPlan.directoryCount)
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure keeps a sampled multi-file directory group on file identifiers until exact split confirms schema") {
     val inputDir = Files.createTempDirectory("privyspark-directory-identifier-plan-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
@@ -2509,6 +2552,26 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     outcomes: Seq[(PrivySparkApp.ScanGroup, Seq[ScanResult], Seq[ScanError])]
   ): Seq[(String, String)] = {
     normalizeErrors(outcomes.flatMap(_._3))
+  }
+
+  private def normalizePlanGroups(
+    groups: Seq[PrivySparkApp.ScanGroup]
+  ): Seq[(String, String, String, Seq[String], Boolean, Boolean, Boolean)] = {
+    groups
+      .map(group =>
+        (
+          group.directoryPath,
+          group.format,
+          group.schemaSignature,
+          group.logicalIdentifiersByKey.values.toSeq.sorted,
+          group.schemaSampled,
+          group.csvHasHeader,
+          group.allowDirectoryIdentifier
+        )
+      )
+      .sortBy { case (directoryPath, format, schemaSignature, logicalIdentifiers, schemaSampled, csvHasHeader, allowDirectoryIdentifier) =>
+        (directoryPath, format, schemaSignature, logicalIdentifiers.mkString("|"), schemaSampled, csvHasHeader, allowDirectoryIdentifier)
+      }
   }
 
   private def resolveResourcePath(resource: String): Path = {
