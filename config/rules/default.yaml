@@ -1,6 +1,6 @@
 rules:
   - pii_type: phone_number
-    regex: '(?:01[016789]|\+82-?1[016789])-?[0-9]{3,4}-?[0-9]{4}'
+    regex: '(?<![0-9])(?:01[016789]|\+82-?1[016789])-?[0-9]{3,4}-?[0-9]{4}(?![0-9])'
   - pii_type: email
     regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}'
   - pii_type: resident_registration_number

@@ -49,14 +49,18 @@ class RulesetLoaderSpec extends AnyFunSuite {
     val phoneRule = RulesetLoader.load("default").find(_.piiType == "phone_number")
     assert(phoneRule.nonEmpty)
 
+    val regex = new Regex(phoneRule.get.regex)
     val fullMatchRegex = new Regex(s"\\A(?:${phoneRule.get.regex})\\z").pattern
 
     assert(fullMatchRegex.matcher("010-1234-5678").matches())
     assert(fullMatchRegex.matcher("01012345678").matches())
     assert(fullMatchRegex.matcher("+821012345678").matches())
     assert(fullMatchRegex.matcher("+82-10-1234-5678").matches())
+    assert(regex.findFirstIn("call me at +821012345678 now").contains("+821012345678"))
     assert(!fullMatchRegex.matcher("+821312345678").matches())
     assert(!fullMatchRegex.matcher("821012345678").matches())
+    assert(!regex.findFirstIn("+8210123456789").nonEmpty)
+    assert(!regex.findFirstIn("010123456789").nonEmpty)
   }
 
   test("loads optional column hints and match type from ruleset file and ignores blank entries") {
