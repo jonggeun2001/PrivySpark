@@ -43,6 +43,7 @@
 - 기본 pre-scan 병렬도는 I/O 중심 작업 특성을 고려해 `4`를 유지합니다.
 - explicit pre-scan 병렬도에서 driver CPU 기반 상한을 제거한 이유는 archive expansion, header probe, workbook metadata listing이 대부분 짧은 blocking I/O여서 운영자가 workload에 맞춰 코어 수보다 높은 동시성을 선택할 수 있게 하기 위함입니다.
 - 동시에 무제한 스레드 생성을 막기 위해 pre-scan 실행 스레드는 고정 safety ceiling `64`로 제한합니다.
+- pre-scan은 0바이트 physical file을 즉시 skip하고, archive 내부 0바이트 entry도 staging이나 오류 리포트 없이 제외합니다.
 - batch scan을 지원하지 않는 `xlsx` direct file scan 경로는 현재 CLI `--file-parallelism` 전달 대상이 아닙니다.
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
