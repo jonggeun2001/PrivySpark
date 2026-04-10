@@ -27,9 +27,7 @@ class ParallelismConfigSpec extends AnyFunSuite {
     assert(PrivySparkApp.resolveCliParallelism(config) == (-1, -1, -1))
   }
 
-  test("defaultPreScanParallelism stays within a simulated low-core upper bound") {
-    assert(PrivySparkApp.defaultPreScanParallelism(1) == 1)
-    assert(PrivySparkApp.defaultPreScanParallelism(2) == 2)
-    assert(PrivySparkApp.defaultPreScanParallelism(8) == 4)
+  test("defaultPreScanParallelism keeps the fixed IO-oriented default") {
+    assert(PrivySparkApp.defaultPreScanParallelism == 4)
   }
 }

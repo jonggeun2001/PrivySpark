@@ -39,6 +39,7 @@
 - CLI 병렬도 값이 있으면 `scanDirectoryStructure`, `scanGroups`, 일반 파일 fallback 경로의 앱 로직 전달값이 우선합니다.
 - `--pre-scan-parallelism`은 파일 단위 입력 확장과 포맷 판별 경로에만 적용하고, 그룹 내부 schema split 병렬화는 현재 범위에 포함하지 않습니다.
 - `--pre-scan-parallelism`과 `spark.privyspark.preScanParallelism`은 driver CPU 수를 넘길 수 없습니다.
+- 기본 pre-scan 병렬도는 I/O 중심 작업 특성을 고려해 `4`를 유지하고, driver CPU 수 기반 상한 검증은 명시적 override 경로에만 적용합니다.
 - batch scan을 지원하지 않는 `xlsx` direct file scan 경로는 현재 CLI `--file-parallelism` 전달 대상이 아닙니다.
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
