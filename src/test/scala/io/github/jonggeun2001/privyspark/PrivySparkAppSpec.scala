@@ -171,9 +171,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("resolveConfiguredPreScanParallelism accepts large explicit values and still normalizes by file count") {
+  test("resolveConfiguredPreScanParallelism caps large explicit values to the fixed safety ceiling") {
     val key = "spark.privyspark.preScanParallelism"
-    assert(PrivySparkApp.resolveConfiguredPreScanParallelism(32, 128, key) == 32)
+    assert(PrivySparkApp.resolveConfiguredPreScanParallelism(128, 128, key) == PrivySparkApp.maxSafePreScanParallelism)
   }
 
   test("scanDirectoryStructure keeps a sampled multi-file directory group on file identifiers until exact split confirms schema") {
