@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.DetectionAggregator.MatchCount
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
-import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
+import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
 import org.apache.poi.ss.usermodel.WorkbookFactory
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.catalyst.csv.CSVOptions
@@ -11,7 +11,9 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, input_file_name}
 
 import java.io.{BufferedReader, InputStreamReader}
+import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.nio.charset.{CharacterCodingException, CodingErrorAction}
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -61,6 +63,16 @@ object PrivySparkApp {
     sampledRowCount: Long,
     matchCounts: Seq[MatchCount]
   )
+  private final case class ProbeSample(bytes: Array[Byte], truncated: Boolean)
+  private final case class PreScanFileOutcome(
+    filePath: String,
+    groupingDirectoryPath: String,
+    preScanErrorScope: String,
+    expandedEntries: Seq[ScanFileEntry],
+    expandedErrors: Seq[ScanError],
+    stagingPaths: Seq[String],
+    failure: Option[Throwable] = None
+  )
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
   private val TextFormat = "text"
@@ -70,7 +82,10 @@ object PrivySparkApp {
   private val JarFormat = "jar"
   private val ArchiveFormats = Set(ZipFormat, JarFormat)
   private val NonDirectoryIdentifierFormats = Set(TextFormat, XlsxFormat)
-  private val TextProbeByteLimit = 4096
+  private val MagicProbeByteLimit = 4
+  private val TextProbeByteLimit = 512
+  private val ParquetMagicBytes = Array[Byte]('P'.toByte, 'A'.toByte, 'R'.toByte, '1'.toByte)
+  private val OrcMagicBytes = Array[Byte]('O'.toByte, 'R'.toByte, 'C'.toByte)
   private val MaxArchiveExpansionDepth = 1
   private[privyspark] val MaxFileReadAttempts = 2
   private[privyspark] val FileReadRetryDelayMillis = 200L
@@ -122,6 +137,8 @@ object PrivySparkApp {
     "product",
     "item"
   )
+  private val PreScanParallelismConfKey = "spark.privyspark.preScanParallelism"
+  private val DefaultPreScanParallelism = 4
   private val GroupParallelismConfKey = "spark.privyspark.groupParallelism"
   private val DefaultGroupParallelism = 4
   private val FileParallelismConfKey = "spark.privyspark.fileParallelism"
@@ -342,39 +359,214 @@ object PrivySparkApp {
     }
   }
 
-  private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int = TextProbeByteLimit): Array[Byte] = {
+  private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int): ProbeSample = {
     val sourcePath = new Path(filePath)
     val fs = sourcePath.getFileSystem(conf)
     val inputStream = fs.open(sourcePath)
     try {
       val buffer = new Array[Byte](limit)
-      val bytesRead = inputStream.read(buffer)
-      if (bytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, bytesRead)
+      var totalBytesRead = 0
+      var continueReading = true
+
+      while (continueReading && totalBytesRead < limit) {
+        val bytesRead = inputStream.read(buffer, totalBytesRead, limit - totalBytesRead)
+        if (bytesRead < 0) {
+          continueReading = false
+        } else if (bytesRead == 0) {
+          val singleByte = inputStream.read()
+          if (singleByte < 0) {
+            continueReading = false
+          } else {
+            buffer(totalBytesRead) = singleByte.toByte
+            totalBytesRead += 1
+          }
+        } else {
+          totalBytesRead += bytesRead
+        }
+      }
+
+      val truncated =
+        totalBytesRead >= limit && inputStream.read() >= 0
+      val bytes =
+        if (totalBytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, totalBytesRead)
+      ProbeSample(bytes, truncated)
     } finally {
       inputStream.close()
     }
   }
 
-  private def stripUtfBom(bytes: Array[Byte]): Array[Byte] = {
-    if (bytes.length >= 3 && bytes(0) == 0xEF.toByte && bytes(1) == 0xBB.toByte && bytes(2) == 0xBF.toByte) {
-      bytes.drop(3)
+  private def inferMagicByteFormat(bytes: Array[Byte]): Option[String] = {
+    if (bytes.length >= ParquetMagicBytes.length && ParquetMagicBytes.indices.forall(index => bytes(index) == ParquetMagicBytes(index))) {
+      Some("parquet")
+    } else if (bytes.length >= OrcMagicBytes.length && OrcMagicBytes.indices.forall(index => bytes(index) == OrcMagicBytes(index))) {
+      Some("orc")
     } else {
-      bytes
+      None
     }
   }
 
-  private def looksLikeText(bytes: Array[Byte]): Boolean = {
-    val content = stripUtfBom(bytes)
-    if (content.isEmpty) {
+  private def inferTextFormat(
+    bytes: Array[Byte],
+    allowIncompleteTrailingSequence: Boolean = false
+  ): Option[String] = {
+    if (looksLikeText(bytes, allowIncompleteTrailingSequence)) Some(TextFormat) else None
+  }
+
+  private def looksLikeText(bytes: Array[Byte], allowIncompleteTrailingSequence: Boolean): Boolean = {
+    if (bytes.isEmpty) {
       true
-    } else if (content.contains(0.toByte)) {
+    } else if (bytes.contains(0.toByte)) {
+      false
+    } else if (!isValidUtf8(bytes, allowIncompleteTrailingSequence)) {
       false
     } else {
-      val suspiciousByteCount = content.count { byte =>
-        val unsigned = byte & 0xFF
-        unsigned < 0x09 || (unsigned > 0x0D && unsigned < 0x20)
+      val suspiciousControlBytes = bytes.count { rawByte =>
+        val byte = rawByte & 0xff
+        byte < 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D
       }
-      suspiciousByteCount.toDouble / content.length.toDouble <= 0.1d
+      suspiciousControlBytes * 10 <= bytes.length
+    }
+  }
+
+  private def isValidUtf8(bytes: Array[Byte], allowIncompleteTrailingSequence: Boolean): Boolean = {
+    val trailingTrimBytes =
+      if (allowIncompleteTrailingSequence) incompleteTrailingUtf8Bytes(bytes) else 0
+    val candidateBytes =
+      if (trailingTrimBytes <= 0) bytes
+      else java.util.Arrays.copyOf(bytes, bytes.length - trailingTrimBytes)
+    val decoder = StandardCharsets.UTF_8
+      .newDecoder()
+      .onMalformedInput(CodingErrorAction.REPORT)
+      .onUnmappableCharacter(CodingErrorAction.REPORT)
+
+    try {
+      decoder.decode(ByteBuffer.wrap(candidateBytes))
+      true
+    } catch {
+      case _: CharacterCodingException => false
+    }
+  }
+
+  private def incompleteTrailingUtf8Bytes(bytes: Array[Byte]): Int = {
+    if (bytes.isEmpty) {
+      0
+    } else {
+      var index = bytes.length - 1
+      var continuationBytes = 0
+
+      while (index >= 0 && isUtf8ContinuationByte(bytes(index))) {
+        continuationBytes += 1
+        index -= 1
+      }
+
+      if (index < 0) {
+        0
+      } else {
+        expectedUtf8SequenceLength(bytes(index) & 0xff) match {
+          case Some(expectedLength) =>
+            val observedLength = continuationBytes + 1
+            if (observedLength < expectedLength && isValidIncompleteUtf8Prefix(bytes, index, observedLength, expectedLength)) {
+              observedLength
+            } else {
+              0
+            }
+          case None =>
+            0
+        }
+      }
+    }
+  }
+
+  private def isUtf8ContinuationByte(rawByte: Byte): Boolean = {
+    ((rawByte & 0xff) & 0xC0) == 0x80
+  }
+
+  private def expectedUtf8SequenceLength(leadByte: Int): Option[Int] = {
+    if (leadByte <= 0x7F) {
+      Some(1)
+    } else if (leadByte >= 0xC2 && leadByte <= 0xDF) {
+      Some(2)
+    } else if (leadByte >= 0xE0 && leadByte <= 0xEF) {
+      Some(3)
+    } else if (leadByte >= 0xF0 && leadByte <= 0xF4) {
+      Some(4)
+    } else {
+      None
+    }
+  }
+
+  private def isValidIncompleteUtf8Prefix(
+    bytes: Array[Byte],
+    leadIndex: Int,
+    observedLength: Int,
+    expectedLength: Int
+  ): Boolean = {
+    val leadByte = bytes(leadIndex) & 0xff
+
+    if (observedLength <= 0 || observedLength >= expectedLength) {
+      false
+    } else if (observedLength == 1) {
+      true
+    } else if (!isValidUtf8FirstContinuation(leadByte, bytes(leadIndex + 1) & 0xff)) {
+      false
+    } else {
+      var offset = 2
+      var valid = true
+
+      while (offset < observedLength && valid) {
+        valid = isUtf8ContinuationByte(bytes(leadIndex + offset))
+        offset += 1
+      }
+
+      valid
+    }
+  }
+
+  private def isValidUtf8FirstContinuation(leadByte: Int, continuationByte: Int): Boolean = {
+    if (leadByte >= 0xC2 && leadByte <= 0xDF) {
+      continuationByte >= 0x80 && continuationByte <= 0xBF
+    } else if (leadByte == 0xE0) {
+      continuationByte >= 0xA0 && continuationByte <= 0xBF
+    } else if ((leadByte >= 0xE1 && leadByte <= 0xEC) || (leadByte >= 0xEE && leadByte <= 0xEF)) {
+      continuationByte >= 0x80 && continuationByte <= 0xBF
+    } else if (leadByte == 0xED) {
+      continuationByte >= 0x80 && continuationByte <= 0x9F
+    } else if (leadByte == 0xF0) {
+      continuationByte >= 0x90 && continuationByte <= 0xBF
+    } else if (leadByte >= 0xF1 && leadByte <= 0xF3) {
+      continuationByte >= 0x80 && continuationByte <= 0xBF
+    } else if (leadByte == 0xF4) {
+      continuationByte >= 0x80 && continuationByte <= 0x8F
+    } else {
+      false
+    }
+  }
+
+  private def detectPhysicalFormat(
+    conf: org.apache.hadoop.conf.Configuration,
+    filePath: String
+  ): Option[String] = {
+    val extensionFormat = FormatDetector.infer(filePath)
+    if (extensionFormat.isDefined) {
+      extensionFormat
+    } else {
+      val probeSample = readProbeBytes(conf, filePath, TextProbeByteLimit)
+      inferMagicByteFormat(probeSample.bytes)
+        .orElse(inferTextFormat(probeSample.bytes, allowIncompleteTrailingSequence = probeSample.truncated))
+    }
+  }
+
+  private def effectiveRulesForFormat(format: String, rules: Seq[PiiRule]): Seq[PiiRule] = {
+    if (format == TextFormat) {
+      rules.map { rule =>
+        if (rule.matchType == PiiRuleMatchType.FullColumn) {
+          rule.copy(matchType = PiiRuleMatchType.Value)
+        } else {
+          rule
+        }
+      }
+    } else {
+      rules
     }
   }
 
@@ -556,6 +748,40 @@ object PrivySparkApp {
     if (itemCount <= 1) 1 else math.max(1, math.min(itemCount, configured))
   }
 
+  private[privyspark] def maxAllowedPreScanParallelism: Int = {
+    math.max(1, Runtime.getRuntime.availableProcessors())
+  }
+
+  private[privyspark] def defaultPreScanParallelism: Int = {
+    DefaultPreScanParallelism
+  }
+
+  private[privyspark] def resolveConfiguredPreScanParallelism(fileCount: Int, configured: Int, source: String): Int = {
+    if (configured <= 0) {
+      throw new IllegalArgumentException(s"$source must be > 0")
+    }
+
+    val maxAllowed = maxAllowedPreScanParallelism
+    if (configured > maxAllowed) {
+      throw new IllegalArgumentException(s"$source must be <= $maxAllowed")
+    }
+
+    resolveParallelism(fileCount, configured)
+  }
+
+  private[privyspark] def resolvePreScanParallelism(spark: SparkSession, fileCount: Int): Int = {
+    spark.sparkContext.getConf.getOption(PreScanParallelismConfKey) match {
+      case Some(_) =>
+        resolveConfiguredPreScanParallelism(
+          fileCount,
+          spark.sparkContext.getConf.getInt(PreScanParallelismConfKey, defaultPreScanParallelism),
+          PreScanParallelismConfKey
+        )
+      case None =>
+        resolveParallelism(fileCount, defaultPreScanParallelism)
+    }
+  }
+
   private[privyspark] def resolveGroupParallelism(spark: SparkSession, groupCount: Int): Int = {
     resolveParallelism(groupCount, spark.sparkContext.getConf.getInt(GroupParallelismConfKey, DefaultGroupParallelism))
   }
@@ -564,8 +790,12 @@ object PrivySparkApp {
     resolveParallelism(fileCount, spark.sparkContext.getConf.getInt(FileParallelismConfKey, DefaultFileParallelism))
   }
 
-  private[privyspark] def resolveCliParallelism(config: CliConfig): (Int, Int) = {
-    (config.groupParallelism.getOrElse(-1), config.fileParallelism.getOrElse(-1))
+  private[privyspark] def resolveCliParallelism(config: CliConfig): (Int, Int, Int) = {
+    (
+      config.preScanParallelism.getOrElse(-1),
+      config.groupParallelism.getOrElse(-1),
+      config.fileParallelism.getOrElse(-1)
+    )
   }
 
   private def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
@@ -623,14 +853,15 @@ object PrivySparkApp {
       "output_path" -> config.outputPath,
       "ruleset" -> config.ruleset,
       "sample_ratio" -> config.sampleRatio,
+      "pre_scan_parallelism" -> config.preScanParallelism.getOrElse("spark_conf_or_default"),
       "group_parallelism" -> config.groupParallelism.getOrElse("spark_conf_or_default"),
       "file_parallelism" -> config.fileParallelism.getOrElse("spark_conf_or_default")
     )
-    val (groupParallelism, fileParallelism) = resolveCliParallelism(config)
+    val (preScanParallelism, groupParallelism, fileParallelism) = resolveCliParallelism(config)
     val rules = RulesetLoader.load(config.ruleset)
     logDebug("ruleset_loaded", "rules" -> rules.size, "ruleset" -> config.ruleset)
     val timestamp = Instant.now().toString
-    val scanPlan = scanDirectoryStructure(spark, config.inputPath, config.inputPath, timestamp)
+    val scanPlan = scanDirectoryStructure(spark, config.inputPath, config.inputPath, timestamp, preScanParallelism)
     try {
       logDebug(
         "scan_plan_ready",
@@ -728,7 +959,16 @@ object PrivySparkApp {
     archiveExpansionDepth: Int = 0,
     forceDisableDirectoryIdentifier: Boolean = false
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
-    val detectedFormat = FormatDetector.infer(physicalPath)
+    val detectedFormat =
+      try {
+        detectPhysicalFormat(conf, physicalPath)
+      } catch {
+        case NonFatal(e) =>
+          return (
+            Seq.empty,
+            Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
+          )
+      }
     detectedFormat match {
       case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth < MaxArchiveExpansionDepth =>
         expandArchiveSource(
@@ -762,34 +1002,10 @@ object PrivySparkApp {
           Seq.empty
         )
       case None =>
-        try {
-          if (looksLikeText(readProbeBytes(conf, physicalPath))) {
-            (
-              Seq(
-                ScanFileEntry(
-                  sourceKey = physicalPath,
-                  physicalPath = physicalPath,
-                  directoryPath = groupingDirectoryPath,
-                  format = TextFormat,
-                  logicalIdentifier = logicalIdentifier,
-                  allowDirectoryIdentifier = false
-                )
-              ),
-              Seq.empty
-            )
-          } else {
-            (
-              Seq.empty,
-              Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Unsupported file format: $logicalIdentifier"))
-            )
-          }
-        } catch {
-          case NonFatal(e) =>
-            (
-              Seq.empty,
-              Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
-            )
-        }
+        (
+          Seq.empty,
+          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Unsupported file format: $logicalIdentifier"))
+        )
     }
   }
 
@@ -921,77 +1137,89 @@ object PrivySparkApp {
                     val probeBuffer = new java.io.ByteArrayOutputStream()
                     val buffer = new Array[Byte](8192)
                     var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
-                    var textDecision: Option[Boolean] = None
+                    var detectedFormat: Option[String] = None
+                    var archiveEntryError: Option[String] = None
+                    var probeRejected = false
                     var bytesRead = zipInputStream.read(buffer)
 
+                    def materializeDetectedEntry(format: String, bytesForProbe: Int, currentChunkSize: Int): Unit = {
+                      ensureArchiveEntryParent(fs, targetPath) match {
+                        case Left(errorMessage) =>
+                          archiveEntryError = Some(errorMessage)
+                        case Right(_) =>
+                          outputStream = fs.create(targetPath, true)
+                          outputStream.write(probeBuffer.toByteArray)
+                          if (currentChunkSize > bytesForProbe) {
+                            outputStream.write(buffer, bytesForProbe, currentChunkSize - bytesForProbe)
+                          }
+                          detectedFormat = Some(format)
+                      }
+                    }
+
                     try {
-                      while (bytesRead >= 0) {
+                      while (bytesRead >= 0 && archiveEntryError.isEmpty) {
                         if (bytesRead > 0) {
-                          textDecision match {
-                            case Some(true) =>
-                              outputStream.write(buffer, 0, bytesRead)
-                            case Some(false) =>
-                              ()
-                            case None =>
-                              val remainingProbeSpace = TextProbeByteLimit - probeBuffer.size()
-                              val bytesForProbe = math.min(bytesRead, math.max(0, remainingProbeSpace))
-                              if (bytesForProbe > 0) {
-                                probeBuffer.write(buffer, 0, bytesForProbe)
-                              }
-                              if (probeBuffer.size() >= TextProbeByteLimit) {
-                                val isText = looksLikeText(probeBuffer.toByteArray)
-                                textDecision = Some(isText)
-                                if (isText) {
-                                  ensureArchiveEntryParent(fs, targetPath) match {
-                                    case Left(errorMessage) =>
-                                      throw new IllegalStateException(errorMessage)
-                                    case Right(_) =>
-                                      outputStream = fs.create(targetPath, true)
-                                      outputStream.write(probeBuffer.toByteArray)
-                                      if (bytesRead > bytesForProbe) {
-                                        outputStream.write(buffer, bytesForProbe, bytesRead - bytesForProbe)
-                                      }
-                                  }
-                                }
-                              }
+                          if (detectedFormat.isDefined) {
+                            outputStream.write(buffer, 0, bytesRead)
+                          } else if (!probeRejected) {
+                            val remainingProbeSpace = TextProbeByteLimit - probeBuffer.size()
+                            val bytesForProbe = math.min(bytesRead, math.max(0, remainingProbeSpace))
+                            if (bytesForProbe > 0) {
+                              probeBuffer.write(buffer, 0, bytesForProbe)
+                            }
+
+                            val probeBytes = probeBuffer.toByteArray
+                            val probeComplete = probeBuffer.size() >= TextProbeByteLimit
+                            val probeTruncated = probeComplete && bytesRead > bytesForProbe
+                            val format = inferMagicByteFormat(probeBytes).orElse {
+                              if (probeTruncated) inferTextFormat(probeBytes, allowIncompleteTrailingSequence = true) else None
+                            }
+
+                            format match {
+                              case Some(value) =>
+                                materializeDetectedEntry(value, bytesForProbe, bytesRead)
+                              case None if probeTruncated =>
+                                probeRejected = true
+                              case None =>
+                                ()
+                            }
                           }
                         }
                         bytesRead = zipInputStream.read(buffer)
                       }
 
-                      val isText = textDecision.getOrElse(looksLikeText(probeBuffer.toByteArray))
-                      if (isText) {
-                        if (outputStream == null) {
-                          ensureArchiveEntryParent(fs, targetPath) match {
-                            case Left(errorMessage) =>
-                              archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
-                            case Right(_) =>
-                              outputStream = fs.create(targetPath, true)
-                              outputStream.write(probeBuffer.toByteArray)
+                      if (archiveEntryError.isEmpty && detectedFormat.isEmpty && !probeRejected) {
+                        inferMagicByteFormat(probeBuffer.toByteArray)
+                          .orElse(inferTextFormat(probeBuffer.toByteArray, allowIncompleteTrailingSequence = false)) match {
+                          case Some(format) =>
+                            materializeDetectedEntry(format, bytesForProbe = probeBuffer.size(), currentChunkSize = probeBuffer.size())
+                          case None =>
+                            probeRejected = true
+                        }
+                      }
+
+                      archiveEntryError match {
+                        case Some(errorMessage) =>
+                          archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                        case None =>
+                          detectedFormat match {
+                            case Some(format) =>
+                              extractedEntries += ScanFileEntry(
+                                sourceKey = targetPath.toString,
+                                physicalPath = targetPath.toString,
+                                directoryPath = logicalIdentifier,
+                                format = format,
+                                logicalIdentifier = childLogicalIdentifier,
+                                allowDirectoryIdentifier = false
+                              )
+                            case None =>
+                              archiveErrors += ScanError(
+                                datasetPath,
+                                timestamp,
+                                childLogicalIdentifier,
+                                s"Unsupported file format: $childLogicalIdentifier"
+                              )
                           }
-                        }
-                        if (outputStream != null) {
-                          val (childEntries, childErrors) = expandPhysicalSource(
-                            conf,
-                            datasetPath,
-                            timestamp,
-                            targetPath.toString,
-                            childLogicalIdentifier,
-                            logicalIdentifier,
-                            stagingPaths,
-                            archiveExpansionDepth = archiveExpansionDepth,
-                            forceDisableDirectoryIdentifier = true
-                          )
-                          extractedEntries ++= childEntries
-                          archiveErrors ++= childErrors
-                        }
-                      } else {
-                        archiveErrors += ScanError(
-                          datasetPath,
-                          timestamp,
-                          childLogicalIdentifier,
-                          s"Unsupported file format: $childLogicalIdentifier"
-                        )
                       }
                     } finally {
                       if (outputStream != null) {
@@ -1040,7 +1268,8 @@ object PrivySparkApp {
     spark: SparkSession,
     inputPath: String,
     datasetPath: String,
-    timestamp: String
+    timestamp: String,
+    preScanParallelism: Int = -1
   ): DirectoryScanPlan = {
     logDebug("scan_directory_structure_start", "input_path" -> inputPath, "dataset_path" -> datasetPath)
     val conf = spark.sparkContext.hadoopConfiguration
@@ -1071,36 +1300,80 @@ object PrivySparkApp {
       val supportedFiles = ArrayBuffer.empty[ScanFileEntry]
       val errors = ArrayBuffer.empty[ScanError]
       val directoriesWithPreScanErrors = scala.collection.mutable.Set.empty[String]
+      val resolvedPreScanParallelism = if (preScanParallelism > 0) {
+        resolveConfiguredPreScanParallelism(files.size, preScanParallelism, "--pre-scan-parallelism")
+      } else {
+        resolvePreScanParallelism(spark, files.size)
+      }
 
-      files.foreach { filePath =>
-        val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
-        val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
-        val preScanErrorScope = FormatDetector.infer(filePath) match {
-          case Some(format) if ArchiveFormats.contains(format) || format == XlsxFormat => logicalIdentifier
-          case _ => parentDirectory
+      logDebug(
+        "scan_directory_pre_scan_parallelism",
+        "input_path" -> inputPath,
+        "files" -> files.size,
+        "parallelism" -> resolvedPreScanParallelism
+      )
+
+      val preScanOutcomes = executeInParallel(resolvedPreScanParallelism, files.map { filePath =>
+        () => {
+          val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
+          val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
+          val preScanErrorScope = FormatDetector.infer(filePath) match {
+            case Some(format) if ArchiveFormats.contains(format) || format == XlsxFormat => logicalIdentifier
+            case _ => parentDirectory
+          }
+          val localStagingPaths = ArrayBuffer.empty[String]
+
+          try {
+            val (expandedEntries, expandedErrors) =
+              expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
+            PreScanFileOutcome(
+              filePath = filePath,
+              groupingDirectoryPath = parentDirectory,
+              preScanErrorScope = preScanErrorScope,
+              expandedEntries = expandedEntries,
+              expandedErrors = expandedErrors,
+              stagingPaths = localStagingPaths.toSeq
+            )
+          } catch {
+            case NonFatal(e) =>
+              PreScanFileOutcome(
+                filePath = filePath,
+                groupingDirectoryPath = parentDirectory,
+                preScanErrorScope = preScanErrorScope,
+                expandedEntries = Seq.empty,
+                expandedErrors = Seq.empty,
+                stagingPaths = localStagingPaths.toSeq,
+                failure = Some(e)
+              )
+          }
         }
-        val (expandedEntries, expandedErrors) =
-          expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, stagingPaths)
+      })
 
-        supportedFiles ++= expandedEntries
-        errors ++= expandedErrors
+      preScanOutcomes.foreach(outcome => stagingPaths ++= outcome.stagingPaths)
+      preScanOutcomes.flatMap(_.failure).headOption.foreach { failure =>
+        throw failure
+      }
 
-        if (expandedEntries.nonEmpty) {
+      preScanOutcomes.foreach { outcome =>
+        supportedFiles ++= outcome.expandedEntries
+        errors ++= outcome.expandedErrors
+
+        if (outcome.expandedEntries.nonEmpty) {
           logDebug(
             "scan_directory_file_supported",
-            "file" -> filePath,
-            "expanded_entries" -> expandedEntries.size,
-            "formats" -> expandedEntries.map(_.format).distinct.sorted.mkString(","),
-            "directory" -> parentDirectory
+            "file" -> outcome.filePath,
+            "expanded_entries" -> outcome.expandedEntries.size,
+            "formats" -> outcome.expandedEntries.map(_.format).distinct.sorted.mkString(","),
+            "directory" -> outcome.groupingDirectoryPath
           )
         }
-        if (expandedErrors.nonEmpty) {
-          directoriesWithPreScanErrors += preScanErrorScope
+        if (outcome.expandedErrors.nonEmpty) {
+          directoriesWithPreScanErrors += outcome.preScanErrorScope
           logDebug(
             "scan_directory_file_unsupported",
-            "file" -> filePath,
-            "directory" -> preScanErrorScope,
-            "errors" -> expandedErrors.size
+            "file" -> outcome.filePath,
+            "directory" -> outcome.preScanErrorScope,
+            "errors" -> outcome.expandedErrors.size
           )
         }
       }
@@ -1891,6 +2164,7 @@ object PrivySparkApp {
     )
     val physicalPaths = group.filePaths.map(sourceKey => resolvePhysicalPath(group, sourceKey))
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
+      val effectiveRules = effectiveRulesForFormat(group.format, rules)
       val baseDf = readSource(spark, group.format, physicalPaths, group.csvHasHeader)
       val fileIdentifierColumn = if (group.useDirectoryIdentifier) {
         None
@@ -1936,7 +2210,7 @@ object PrivySparkApp {
                 timestamp,
                 resolveDirectoryIdentifier(datasetPath, group.directoryPath),
                 sampledRowCount,
-                DetectionAggregator.aggregate(sampledDf, rules)
+                DetectionAggregator.aggregate(sampledDf, effectiveRules)
               )
               logDebug(
                 "group_scan_batch_complete",
@@ -1977,7 +2251,7 @@ object PrivySparkApp {
               )
               Seq.empty
             } else {
-              val results = DetectionAggregator.aggregateByFile(sampledDf, columnName, rules).flatMap { matchCount =>
+              val results = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules).flatMap { matchCount =>
                 sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
                   buildScanResults(
                     datasetPath,
@@ -2022,10 +2296,11 @@ object PrivySparkApp {
 
     try {
       withFileReadRetry(spark, Seq(physicalPath), "file_scan") {
-        val format = formatOverride.orElse(FormatDetector.infer(physicalPath)).getOrElse {
+        val format = formatOverride.orElse(detectPhysicalFormat(spark.sparkContext.hadoopConfiguration, physicalPath)).getOrElse {
           logDebug("scan_file_error", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "reason" -> "Unsupported file format")
           return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $fileIdentifier"))
         }
+        val effectiveRules = effectiveRulesForFormat(format, rules)
 
         val csvHasHeader = if (format == "csv") {
           csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, physicalPath))
@@ -2049,7 +2324,7 @@ object PrivySparkApp {
             logDebug("scan_file_complete", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "matches" -> 0)
             Right(FileScanMetrics(fileIdentifier, sampledRowCount, Seq.empty))
           } else {
-            val matchCounts = DetectionAggregator.aggregate(sampledDf, rules)
+            val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
             logDebug(
               "scan_file_complete",
               "file" -> physicalPath,

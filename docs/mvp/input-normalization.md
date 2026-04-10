@@ -2,8 +2,9 @@
 
 ## 지원 입력
 - 확장자 기반 우선 지원: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`
-- 미지원 확장자는 text probe를 먼저 수행합니다.
-- text로 판단되면 plain text로 읽고, binary로 판단되면 오류 리포트에 기록합니다.
+- 확장자가 없는 파일과 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 먼저 판별합니다.
+- 매직바이트가 일치하지 않더라도 UTF-8 기반 텍스트처럼 보이는 입력은 내부 `text` 포맷으로 정규화해 Spark `text` reader의 단일 `value` 컬럼으로 스캔합니다.
+- 바이너리처럼 보이는 입력만 `Unsupported file format`으로 오류 리포트에 기록합니다.
 
 ## archive 처리
 - `zip`, `jar`는 내부 엔트리를 선스캔한 뒤 지원 포맷 파일만 staging 후 스캔합니다.

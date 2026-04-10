@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
-import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
+import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
@@ -10,12 +10,15 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
 import java.io.{ByteArrayOutputStream, PrintStream}
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.Comparator
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
+import scala.collection.concurrent.TrieMap
 
 @RunWith(classOf[JUnitRunner])
 class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
@@ -123,6 +126,59 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     } finally {
       deleteRecursively(inputDir)
     }
+  }
+
+  test("scanDirectoryStructure keeps the same logical plan when pre-scan file expansion runs in parallel") {
+    val inputDir = Files.createTempDirectory("privyspark-prescan-parallel-plan-")
+
+    try {
+      writeText(inputDir.resolve("users.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      createSpreadsheetFile(inputDir)
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "bob,bob@example.com\n"),
+          "nested/notes.log" ->
+            ("ignore me\n")
+        )
+      )
+
+      val serialPlan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-10T00:00:00Z",
+        preScanParallelism = 1
+      )
+      val parallelPlan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-10T00:00:00Z",
+        preScanParallelism = 4
+      )
+
+      assert(normalizePlanGroups(serialPlan.groups) == normalizePlanGroups(parallelPlan.groups))
+      assert(normalizeErrors(serialPlan.errors) == normalizeErrors(parallelPlan.errors))
+      assert(serialPlan.totalFiles == parallelPlan.totalFiles)
+      assert(serialPlan.directoryCount == parallelPlan.directoryCount)
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("resolveConfiguredPreScanParallelism rejects spark conf fallback values above the safe upper bound") {
+    val key = "spark.privyspark.preScanParallelism"
+    val error = intercept[IllegalArgumentException] {
+      PrivySparkApp.resolveConfiguredPreScanParallelism(32, PrivySparkApp.maxAllowedPreScanParallelism + 1, key)
+    }
+
+    assert(error.getMessage.contains(key))
+    assert(error.getMessage.contains(PrivySparkApp.maxAllowedPreScanParallelism.toString))
   }
 
   test("scanDirectoryStructure keeps a sampled multi-file directory group on file identifiers until exact split confirms schema") {
@@ -489,7 +545,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanDirectoryStructure treats text-like unknown extensions as text groups") {
+  test("scanDirectoryStructure treats unsupported extension text files as text inputs") {
     val inputDir = Files.createTempDirectory("privyspark-text-fallback-plan-")
 
     try {
@@ -508,9 +564,86 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(plan.errors.isEmpty)
       assert(plan.groups.size == 1)
       assert(plan.groups.head.format == "text")
+      assert(!plan.groups.head.useDirectoryIdentifier)
       assert(plan.groups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("notes.log"))
     } finally {
       deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure treats extensionless text files as text inputs when magic bytes do not match") {
+    val inputDir = Files.createTempDirectory("privyspark-extensionless-unsupported-")
+
+    try {
+      writeText(inputDir.resolve("notes"),
+        "alice@example.com\n" +
+          "bob@example.com\n")
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-09T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "text")
+      assert(!plan.groups.head.useDirectoryIdentifier)
+      assert(plan.groups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("notes"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure records extensionless probe read failures as file errors") {
+    val inputDir = Files.createTempDirectory("privyspark-extensionless-probe-failure-")
+    val unreadableFile = inputDir.resolve("locked")
+
+    try {
+      writeBytes(unreadableFile, Array[Byte](0x50.toByte, 0x41.toByte, 0x52.toByte, 0x31.toByte))
+      Files.setPosixFilePermissions(unreadableFile, PosixFilePermissions.fromString("---------"))
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-09T00:00:00Z"
+      )
+
+      assert(plan.groups.isEmpty)
+      assert(plan.errors.map(_.file_identifier) == Seq("locked"))
+      assert(plan.errors.head.error_message.nonEmpty)
+    } finally {
+      if (Files.exists(unreadableFile)) {
+        Files.setPosixFilePermissions(unreadableFile, PosixFilePermissions.fromString("rw-------"))
+      }
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure detects extensionless parquet files when probe reads are short") {
+    val outputDir = Files.createTempDirectory("privyspark-partial-read-parquet-")
+    val partialPath = "partial:///fixture"
+
+    try {
+      val parquetBytes = Files.readAllBytes(Paths.get(createColumnarDataFile(outputDir, "parquet")))
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(partialPath, parquetBytes)
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        partialPath,
+        partialPath,
+        "2026-04-09T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.map(_.format) == Seq("parquet"))
+      assert(plan.groups.map(_.filePaths.map(path => new org.apache.hadoop.fs.Path(path).toUri.getPath)) == Seq(Seq("/fixture")))
+    } finally {
+      PartialReadFileSystem.clear()
+      deleteRecursively(outputDir)
     }
   }
 
@@ -1725,6 +1858,47 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules detects extensionless parquet and orc files via magic bytes") {
+    val outputDir = Files.createTempDirectory("privyspark-columnar-magic-fixture-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    try {
+      val parquetFilePath = Paths.get(createColumnarDataFile(outputDir, "parquet"))
+      val orcFilePath = Paths.get(createColumnarDataFile(outputDir, "orc"))
+      val parquetWithoutExtension = Files.move(parquetFilePath, outputDir.resolve("parquet-fixture"))
+      val orcWithoutExtension = Files.move(orcFilePath, outputDir.resolve("orc-fixture"))
+
+      val (parquetResults, parquetErrors) = scanWithRules(
+        parquetWithoutExtension.toString,
+        parquetWithoutExtension.toString,
+        rules,
+        timestamp
+      )
+      val (orcResults, orcErrors) = scanWithRules(
+        orcWithoutExtension.toString,
+        orcWithoutExtension.toString,
+        rules,
+        timestamp
+      )
+
+      assert(parquetErrors.isEmpty)
+      assert(orcErrors.isEmpty)
+      assert(parquetResults.map(result => (result.column_name, result.pii_type)).toSet == Set(("email", "email"), ("phone", "phone")))
+      assert(orcResults.map(result => (result.column_name, result.pii_type)).toSet == Set(("email", "email"), ("phone", "phone")))
+      assert(parquetResults.forall(_.match_count == 2L))
+      assert(orcResults.forall(_.match_count == 2L))
+      assert(parquetResults.forall(_.file_identifier == "parquet-fixture"))
+      assert(orcResults.forall(_.file_identifier == "orc-fixture"))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("scanWithRules detects expected pii counts from avro files") {
     val outputDir = Files.createTempDirectory("privyspark-avro-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
@@ -1793,6 +1967,61 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         Set(("bundle.zip!nested/customers.csv", "email", 2L)))
       assert(results.forall(_.dataset_path == inputDir.toString))
       assert(archivePath.endsWith(".zip"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules expands archive entries without extensions when parquet magic bytes match") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-parquet-magic-fixture-")
+    val payloadDir = Files.createTempDirectory("privyspark-zip-parquet-payload-")
+    val timestamp = "2026-04-09T00:00:00Z"
+
+    try {
+      val parquetPayload = Files.readAllBytes(Paths.get(createColumnarDataFile(payloadDir, "parquet")))
+      createArchiveFileWithBytes(
+        inputDir.resolve("bundle.zip"),
+        Seq("customers" -> parquetPayload)
+      )
+
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+      )
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(
+          ("bundle.zip!customers", "email", 2L),
+          ("bundle.zip!customers", "phone", 2L)
+        ))
+    } finally {
+      deleteRecursively(payloadDir)
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules scans archive entries with unsupported extensions as text when content is text-like") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-unsupported-extension-fixture-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "notes.log" ->
+            ("alice@example.com\n" +
+              "bob@example.com\n")
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.zip!notes.log", "value", 2L)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2031,7 +2260,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanWithRules scans text-like unknown extensions through the value column") {
+  test("scanWithRules scans unsupported extension text files through the text fallback") {
     val inputDir = Files.createTempDirectory("privyspark-text-fixture-")
     val timestamp = "2026-04-09T00:00:00Z"
 
@@ -2047,6 +2276,123 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errors.isEmpty)
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
         Set(("notes.log", "value", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules ignores full_column semantics for text fallback inputs") {
+    val inputDir = Files.createTempDirectory("privyspark-text-full-column-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("notes.log"),
+        "Contact alice@example.com now\n" +
+          "skip\n")
+
+      val rules = Seq(
+        PiiRule(
+          "email",
+          "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
+          matchType = PiiRuleMatchType.FullColumn
+        )
+      )
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("notes.log", "value", 1L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules treats unsupported extension unicode text as text when the probe ends mid-character") {
+    val inputDir = Files.createTempDirectory("privyspark-text-unicode-probe-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      val probeBoundaryPrefix = "a" * 511
+      writeText(inputDir.resolve("notes.log"),
+        probeBoundaryPrefix + "가\n" +
+          "alice@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("notes.log", "value", 1L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules keeps malformed utf-8 fallback inputs unsupported") {
+    val inputDir = Files.createTempDirectory("privyspark-text-malformed-utf8-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      val malformedBytes = "alice@example.com".getBytes(StandardCharsets.UTF_8) ++ Array(0xff.toByte)
+      writeBytes(inputDir.resolve("notes.log"), malformedBytes)
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("notes.log"))
+      assert(errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules keeps invalid utf-8 prefixes unsupported when probe ends mid-sequence") {
+    val inputDir = Files.createTempDirectory("privyspark-text-invalid-utf8-prefix-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      val invalidSuffixes = Seq(
+        Array(0xe0.toByte, 0x80.toByte),
+        Array(0xf4.toByte, 0x90.toByte)
+      )
+
+      invalidSuffixes.zipWithIndex.foreach { case (suffix, index) =>
+        writeBytes(
+          inputDir.resolve(s"notes-$index.log"),
+          "alice@example.com".getBytes(StandardCharsets.UTF_8) ++ suffix
+        )
+      }
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier).toSet == Set("notes-0.log", "notes-1.log"))
+      assert(errors.forall(_.error_message.contains("Unsupported file format")))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules keeps archive text fallbacks with invalid utf-8 prefixes unsupported") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-invalid-utf8-prefix-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      createArchiveFileWithBytes(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "notes.log" -> ("alice@example.com".getBytes(StandardCharsets.UTF_8) ++ Array(0xe0.toByte, 0x80.toByte))
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("bundle.zip!notes.log"))
+      assert(errors.head.error_message.contains("Unsupported file format"))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2339,6 +2685,26 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     normalizeErrors(outcomes.flatMap(_._3))
   }
 
+  private def normalizePlanGroups(
+    groups: Seq[PrivySparkApp.ScanGroup]
+  ): Seq[(String, String, String, Seq[String], Boolean, Boolean, Boolean)] = {
+    groups
+      .map(group =>
+        (
+          group.directoryPath,
+          group.format,
+          group.schemaSignature,
+          group.logicalIdentifiersByKey.values.toSeq.sorted,
+          group.schemaSampled,
+          group.csvHasHeader,
+          group.allowDirectoryIdentifier
+        )
+      )
+      .sortBy { case (directoryPath, format, schemaSignature, logicalIdentifiers, schemaSampled, csvHasHeader, allowDirectoryIdentifier) =>
+        (directoryPath, format, schemaSignature, logicalIdentifiers.mkString("|"), schemaSampled, csvHasHeader, allowDirectoryIdentifier)
+      }
+  }
+
   private def resolveResourcePath(resource: String): Path = {
     val resourceUrl = Option(getClass.getClassLoader.getResource(resource))
       .getOrElse(fail(s"Missing test resource: $resource"))
@@ -2354,5 +2720,115 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         stream.close()
       }
     }
+  }
+}
+
+object PartialReadFileSystem {
+  private val fileContents = TrieMap.empty[String, Array[Byte]]
+  private def key(path: String): String = new org.apache.hadoop.fs.Path(path).toUri.getPath
+  private def key(path: org.apache.hadoop.fs.Path): String = path.toUri.getPath
+
+  def register(path: String, bytes: Array[Byte]): Unit = {
+    fileContents.put(key(path), bytes.clone())
+  }
+
+  def clear(): Unit = {
+    fileContents.clear()
+  }
+
+  private[privyspark] def contents(path: org.apache.hadoop.fs.Path): Array[Byte] = {
+    fileContents.getOrElse(key(path), throw new java.io.FileNotFoundException(path.toString))
+  }
+}
+
+class PartialReadFileSystem extends org.apache.hadoop.fs.FileSystem {
+  private val fsUri = URI.create("partial:///")
+  private var workingDirectory: org.apache.hadoop.fs.Path = new org.apache.hadoop.fs.Path("/")
+
+  override def getUri: URI = fsUri
+
+  override def open(path: org.apache.hadoop.fs.Path, bufferSize: Int): org.apache.hadoop.fs.FSDataInputStream = {
+    val bytes = PartialReadFileSystem.contents(path)
+    new org.apache.hadoop.fs.FSDataInputStream(new org.apache.hadoop.fs.FSInputStream {
+      private var position = 0
+
+      override def read(): Int = {
+        if (position >= bytes.length) -1
+        else {
+          val value = bytes(position) & 0xFF
+          position += 1
+          value
+        }
+      }
+
+      override def read(buffer: Array[Byte], offset: Int, length: Int): Int = {
+        if (position >= bytes.length) {
+          -1
+        } else {
+          val chunkSize = math.min(2, math.min(length, bytes.length - position))
+          System.arraycopy(bytes, position, buffer, offset, chunkSize)
+          position += chunkSize
+          chunkSize
+        }
+      }
+
+      override def seek(targetPos: Long): Unit = {
+        position = targetPos.toInt
+      }
+
+      override def getPos: Long = position.toLong
+
+      override def seekToNewSource(targetPos: Long): Boolean = false
+    })
+  }
+
+  override def create(
+    path: org.apache.hadoop.fs.Path,
+    permission: org.apache.hadoop.fs.permission.FsPermission,
+    overwrite: Boolean,
+    bufferSize: Int,
+    replication: Short,
+    blockSize: Long,
+    progress: org.apache.hadoop.util.Progressable
+  ): org.apache.hadoop.fs.FSDataOutputStream = {
+    throw new UnsupportedOperationException("create is not supported")
+  }
+
+  override def append(
+    path: org.apache.hadoop.fs.Path,
+    bufferSize: Int,
+    progress: org.apache.hadoop.util.Progressable
+  ): org.apache.hadoop.fs.FSDataOutputStream = {
+    throw new UnsupportedOperationException("append is not supported")
+  }
+
+  override def rename(src: org.apache.hadoop.fs.Path, dst: org.apache.hadoop.fs.Path): Boolean = false
+
+  override def delete(path: org.apache.hadoop.fs.Path, recursive: Boolean): Boolean = false
+
+  override def listStatus(path: org.apache.hadoop.fs.Path): Array[org.apache.hadoop.fs.FileStatus] =
+    Array(getFileStatus(path))
+
+  override def setWorkingDirectory(path: org.apache.hadoop.fs.Path): Unit = {
+    workingDirectory = path
+  }
+
+  override def getWorkingDirectory: org.apache.hadoop.fs.Path = workingDirectory
+
+  override def mkdirs(
+    path: org.apache.hadoop.fs.Path,
+    permission: org.apache.hadoop.fs.permission.FsPermission
+  ): Boolean = false
+
+  override def getFileStatus(path: org.apache.hadoop.fs.Path): org.apache.hadoop.fs.FileStatus = {
+    val bytes = PartialReadFileSystem.contents(path)
+    new org.apache.hadoop.fs.FileStatus(
+      bytes.length.toLong,
+      false,
+      1,
+      4096L,
+      0L,
+      path.makeQualified(fsUri, workingDirectory)
+    )
   }
 }

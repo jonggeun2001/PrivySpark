@@ -5,7 +5,8 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 ## MVP 요약
 - 일회성 배치 실행
 - 입력/출력 경로는 절대경로 또는 URI만 허용
-- 지원 입력: `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`, plain text fallback
+- 지원 입력: `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`
+- 무확장자 파일과 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 우선 판별하고, 바이너리처럼 보이지 않는 텍스트 입력은 단일 `value` 컬럼의 내부 `text` 포맷으로 스캔합니다. 바이너리로 보이는 입력만 `Unsupported file format`으로 기록합니다.
 - 탐지 방식: ruleset 기반 regex + 일부 타입의 내장 strict validator
 - 출력: Parquet + CSV (`scan_results`, `scan_errors`)
 - 샘플링과 앱 레벨 병렬도 조정 지원
@@ -30,6 +31,7 @@ bin/privyspark-submit \
   --output /abs/output \
   --ruleset default \
   --sample-ratio 0.2 \
+  --pre-scan-parallelism 6 \
   --group-parallelism 8 \
   --file-parallelism 4
 ```
@@ -50,4 +52,5 @@ bin/privyspark-submit \
 
 ## 릴리즈
 - 태그 `v*` 또는 bare semver(`0.1.3`) 푸시 시 GitHub Actions가 Shadow fat JAR를 빌드해 Release 자산으로 업로드합니다.
-- 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256` 형식입니다.
+- 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml` 형식입니다.
+- `default-rules.yaml`은 배포 예시 ruleset 파일이며, YARN 제출 시 `--files /abs/path/default-rules.yaml#default-rules.yaml` 또는 `PRIVYSPARK_SPARK_FILES=/abs/path/default-rules.yaml#default-rules.yaml`로 함께 전달할 수 있습니다.
