@@ -2275,6 +2275,25 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules keeps malformed utf-8 fallback inputs unsupported") {
+    val inputDir = Files.createTempDirectory("privyspark-text-malformed-utf8-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      val malformedBytes = "alice@example.com".getBytes(StandardCharsets.UTF_8) ++ Array(0xff.toByte)
+      writeBytes(inputDir.resolve("notes.log"), malformedBytes)
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("notes.log"))
+      assert(errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("writeReports stores scan results and errors in csv output paths") {
     val outputDir = Files.createTempDirectory("privyspark-write-reports-")
 

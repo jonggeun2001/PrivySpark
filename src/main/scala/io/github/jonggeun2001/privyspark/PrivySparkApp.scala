@@ -410,32 +410,65 @@ object PrivySparkApp {
   }
 
   private def isValidUtf8(bytes: Array[Byte]): Boolean = {
+    val trailingTrimBytes = incompleteTrailingUtf8Bytes(bytes)
+    val candidateBytes =
+      if (trailingTrimBytes <= 0) bytes
+      else java.util.Arrays.copyOf(bytes, bytes.length - trailingTrimBytes)
     val decoder = StandardCharsets.UTF_8
       .newDecoder()
       .onMalformedInput(CodingErrorAction.REPORT)
       .onUnmappableCharacter(CodingErrorAction.REPORT)
-    val maxTrailingTrimBytes = math.min(4, bytes.length)
 
-    @tailrec
-    def decodeWithTrim(trimmedBytes: Int): Boolean = {
-      val candidateLength = bytes.length - trimmedBytes
-      if (candidateLength < 0) {
-        false
+    try {
+      decoder.decode(ByteBuffer.wrap(candidateBytes))
+      true
+    } catch {
+      case _: CharacterCodingException => false
+    }
+  }
+
+  private def incompleteTrailingUtf8Bytes(bytes: Array[Byte]): Int = {
+    if (bytes.isEmpty) {
+      0
+    } else {
+      var index = bytes.length - 1
+      var continuationBytes = 0
+
+      while (index >= 0 && isUtf8ContinuationByte(bytes(index))) {
+        continuationBytes += 1
+        index -= 1
+      }
+
+      if (index < 0) {
+        0
       } else {
-        try {
-          decoder.reset()
-          decoder.decode(ByteBuffer.wrap(bytes, 0, candidateLength))
-          true
-        } catch {
-          case _: CharacterCodingException if trimmedBytes < maxTrailingTrimBytes =>
-            decodeWithTrim(trimmedBytes + 1)
-          case _: CharacterCodingException =>
-            false
+        expectedUtf8SequenceLength(bytes(index) & 0xff) match {
+          case Some(expectedLength) =>
+            val observedLength = continuationBytes + 1
+            if (observedLength < expectedLength) observedLength else 0
+          case None =>
+            0
         }
       }
     }
+  }
 
-    decodeWithTrim(trimmedBytes = 0)
+  private def isUtf8ContinuationByte(rawByte: Byte): Boolean = {
+    ((rawByte & 0xff) & 0xC0) == 0x80
+  }
+
+  private def expectedUtf8SequenceLength(leadByte: Int): Option[Int] = {
+    if (leadByte <= 0x7F) {
+      Some(1)
+    } else if (leadByte >= 0xC2 && leadByte <= 0xDF) {
+      Some(2)
+    } else if (leadByte >= 0xE0 && leadByte <= 0xEF) {
+      Some(3)
+    } else if (leadByte >= 0xF0 && leadByte <= 0xF4) {
+      Some(4)
+    } else {
+      None
+    }
   }
 
   private def detectPhysicalFormat(
