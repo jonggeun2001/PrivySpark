@@ -31,6 +31,7 @@ bin/privyspark-submit \
   --output /abs/output \
   --ruleset default \
   --sample-ratio 0.2 \
+  --pre-scan-parallelism 6 \
   --group-parallelism 8 \
   --file-parallelism 4
 ```

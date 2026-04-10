@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 scan --path <ABS_PATH> --output <ABS_PATH> [--ruleset default|/abs/path/to/rules.yaml] [--sample-ratio 0.2] [--group-parallelism N] [--file-parallelism N]"
+  echo "Usage: $0 scan --path <ABS_PATH> --output <ABS_PATH> [--ruleset default|/abs/path/to/rules.yaml] [--sample-ratio 0.2] [--pre-scan-parallelism N] [--group-parallelism N] [--file-parallelism N]"
   exit 1
 fi
 

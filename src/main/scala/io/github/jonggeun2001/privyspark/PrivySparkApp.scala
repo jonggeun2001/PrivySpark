@@ -61,6 +61,15 @@ object PrivySparkApp {
     sampledRowCount: Long,
     matchCounts: Seq[MatchCount]
   )
+  private final case class PreScanFileOutcome(
+    filePath: String,
+    groupingDirectoryPath: String,
+    preScanErrorScope: String,
+    expandedEntries: Seq[ScanFileEntry],
+    expandedErrors: Seq[ScanError],
+    stagingPaths: Seq[String],
+    failure: Option[Throwable] = None
+  )
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
   private val TextFormat = "text"
@@ -124,6 +133,8 @@ object PrivySparkApp {
     "product",
     "item"
   )
+  private val PreScanParallelismConfKey = "spark.privyspark.preScanParallelism"
+  private val DefaultPreScanParallelism = 4
   private val GroupParallelismConfKey = "spark.privyspark.groupParallelism"
   private val DefaultGroupParallelism = 4
   private val FileParallelismConfKey = "spark.privyspark.fileParallelism"
@@ -576,6 +587,40 @@ object PrivySparkApp {
     if (itemCount <= 1) 1 else math.max(1, math.min(itemCount, configured))
   }
 
+  private[privyspark] def maxAllowedPreScanParallelism: Int = {
+    math.max(1, Runtime.getRuntime.availableProcessors())
+  }
+
+  private[privyspark] def defaultPreScanParallelism: Int = {
+    DefaultPreScanParallelism
+  }
+
+  private[privyspark] def resolveConfiguredPreScanParallelism(fileCount: Int, configured: Int, source: String): Int = {
+    if (configured <= 0) {
+      throw new IllegalArgumentException(s"$source must be > 0")
+    }
+
+    val maxAllowed = maxAllowedPreScanParallelism
+    if (configured > maxAllowed) {
+      throw new IllegalArgumentException(s"$source must be <= $maxAllowed")
+    }
+
+    resolveParallelism(fileCount, configured)
+  }
+
+  private[privyspark] def resolvePreScanParallelism(spark: SparkSession, fileCount: Int): Int = {
+    spark.sparkContext.getConf.getOption(PreScanParallelismConfKey) match {
+      case Some(_) =>
+        resolveConfiguredPreScanParallelism(
+          fileCount,
+          spark.sparkContext.getConf.getInt(PreScanParallelismConfKey, defaultPreScanParallelism),
+          PreScanParallelismConfKey
+        )
+      case None =>
+        resolveParallelism(fileCount, defaultPreScanParallelism)
+    }
+  }
+
   private[privyspark] def resolveGroupParallelism(spark: SparkSession, groupCount: Int): Int = {
     resolveParallelism(groupCount, spark.sparkContext.getConf.getInt(GroupParallelismConfKey, DefaultGroupParallelism))
   }
@@ -584,8 +629,12 @@ object PrivySparkApp {
     resolveParallelism(fileCount, spark.sparkContext.getConf.getInt(FileParallelismConfKey, DefaultFileParallelism))
   }
 
-  private[privyspark] def resolveCliParallelism(config: CliConfig): (Int, Int) = {
-    (config.groupParallelism.getOrElse(-1), config.fileParallelism.getOrElse(-1))
+  private[privyspark] def resolveCliParallelism(config: CliConfig): (Int, Int, Int) = {
+    (
+      config.preScanParallelism.getOrElse(-1),
+      config.groupParallelism.getOrElse(-1),
+      config.fileParallelism.getOrElse(-1)
+    )
   }
 
   private def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
@@ -643,14 +692,15 @@ object PrivySparkApp {
       "output_path" -> config.outputPath,
       "ruleset" -> config.ruleset,
       "sample_ratio" -> config.sampleRatio,
+      "pre_scan_parallelism" -> config.preScanParallelism.getOrElse("spark_conf_or_default"),
       "group_parallelism" -> config.groupParallelism.getOrElse("spark_conf_or_default"),
       "file_parallelism" -> config.fileParallelism.getOrElse("spark_conf_or_default")
     )
-    val (groupParallelism, fileParallelism) = resolveCliParallelism(config)
+    val (preScanParallelism, groupParallelism, fileParallelism) = resolveCliParallelism(config)
     val rules = RulesetLoader.load(config.ruleset)
     logDebug("ruleset_loaded", "rules" -> rules.size, "ruleset" -> config.ruleset)
     val timestamp = Instant.now().toString
-    val scanPlan = scanDirectoryStructure(spark, config.inputPath, config.inputPath, timestamp)
+    val scanPlan = scanDirectoryStructure(spark, config.inputPath, config.inputPath, timestamp, preScanParallelism)
     try {
       logDebug(
         "scan_plan_ready",
@@ -1027,7 +1077,8 @@ object PrivySparkApp {
     spark: SparkSession,
     inputPath: String,
     datasetPath: String,
-    timestamp: String
+    timestamp: String,
+    preScanParallelism: Int = -1
   ): DirectoryScanPlan = {
     logDebug("scan_directory_structure_start", "input_path" -> inputPath, "dataset_path" -> datasetPath)
     val conf = spark.sparkContext.hadoopConfiguration
@@ -1058,36 +1109,80 @@ object PrivySparkApp {
       val supportedFiles = ArrayBuffer.empty[ScanFileEntry]
       val errors = ArrayBuffer.empty[ScanError]
       val directoriesWithPreScanErrors = scala.collection.mutable.Set.empty[String]
+      val resolvedPreScanParallelism = if (preScanParallelism > 0) {
+        resolveConfiguredPreScanParallelism(files.size, preScanParallelism, "--pre-scan-parallelism")
+      } else {
+        resolvePreScanParallelism(spark, files.size)
+      }
 
-      files.foreach { filePath =>
-        val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
-        val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
-        val preScanErrorScope = FormatDetector.infer(filePath) match {
-          case Some(format) if ArchiveFormats.contains(format) || format == XlsxFormat => logicalIdentifier
-          case _ => parentDirectory
+      logDebug(
+        "scan_directory_pre_scan_parallelism",
+        "input_path" -> inputPath,
+        "files" -> files.size,
+        "parallelism" -> resolvedPreScanParallelism
+      )
+
+      val preScanOutcomes = executeInParallel(resolvedPreScanParallelism, files.map { filePath =>
+        () => {
+          val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
+          val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
+          val preScanErrorScope = FormatDetector.infer(filePath) match {
+            case Some(format) if ArchiveFormats.contains(format) || format == XlsxFormat => logicalIdentifier
+            case _ => parentDirectory
+          }
+          val localStagingPaths = ArrayBuffer.empty[String]
+
+          try {
+            val (expandedEntries, expandedErrors) =
+              expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
+            PreScanFileOutcome(
+              filePath = filePath,
+              groupingDirectoryPath = parentDirectory,
+              preScanErrorScope = preScanErrorScope,
+              expandedEntries = expandedEntries,
+              expandedErrors = expandedErrors,
+              stagingPaths = localStagingPaths.toSeq
+            )
+          } catch {
+            case NonFatal(e) =>
+              PreScanFileOutcome(
+                filePath = filePath,
+                groupingDirectoryPath = parentDirectory,
+                preScanErrorScope = preScanErrorScope,
+                expandedEntries = Seq.empty,
+                expandedErrors = Seq.empty,
+                stagingPaths = localStagingPaths.toSeq,
+                failure = Some(e)
+              )
+          }
         }
-        val (expandedEntries, expandedErrors) =
-          expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, stagingPaths)
+      })
 
-        supportedFiles ++= expandedEntries
-        errors ++= expandedErrors
+      preScanOutcomes.foreach(outcome => stagingPaths ++= outcome.stagingPaths)
+      preScanOutcomes.flatMap(_.failure).headOption.foreach { failure =>
+        throw failure
+      }
 
-        if (expandedEntries.nonEmpty) {
+      preScanOutcomes.foreach { outcome =>
+        supportedFiles ++= outcome.expandedEntries
+        errors ++= outcome.expandedErrors
+
+        if (outcome.expandedEntries.nonEmpty) {
           logDebug(
             "scan_directory_file_supported",
-            "file" -> filePath,
-            "expanded_entries" -> expandedEntries.size,
-            "formats" -> expandedEntries.map(_.format).distinct.sorted.mkString(","),
-            "directory" -> parentDirectory
+            "file" -> outcome.filePath,
+            "expanded_entries" -> outcome.expandedEntries.size,
+            "formats" -> outcome.expandedEntries.map(_.format).distinct.sorted.mkString(","),
+            "directory" -> outcome.groupingDirectoryPath
           )
         }
-        if (expandedErrors.nonEmpty) {
-          directoriesWithPreScanErrors += preScanErrorScope
+        if (outcome.expandedErrors.nonEmpty) {
+          directoriesWithPreScanErrors += outcome.preScanErrorScope
           logDebug(
             "scan_directory_file_unsupported",
-            "file" -> filePath,
-            "directory" -> preScanErrorScope,
-            "errors" -> expandedErrors.size
+            "file" -> outcome.filePath,
+            "directory" -> outcome.preScanErrorScope,
+            "errors" -> outcome.expandedErrors.size
           )
         }
       }
