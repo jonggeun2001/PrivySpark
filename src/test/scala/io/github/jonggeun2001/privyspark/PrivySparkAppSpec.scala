@@ -82,6 +82,11 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(maxRunning > 1)
   }
 
+  test("renderConfiguredParallelism labels unset values as spark_conf_or_default") {
+    assert(PrivySparkApp.renderConfiguredParallelism(None) == "spark_conf_or_default")
+    assert(PrivySparkApp.renderConfiguredParallelism(Some(6)) == "6")
+  }
+
   test("splitGroupBySchema exact mode splits same directory files by schema signature") {
     val inputDir = Files.createTempDirectory("privyspark-schema-plan-")
 

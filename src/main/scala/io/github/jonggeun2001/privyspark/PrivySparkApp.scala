@@ -784,6 +784,10 @@ object PrivySparkApp {
     )
   }
 
+  private[privyspark] def renderConfiguredParallelism(configured: Option[Int]): String = {
+    configured.map(_.toString).getOrElse("spark_conf_or_default")
+  }
+
   private[privyspark] def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
     if (tasks.isEmpty) {
       Seq.empty
@@ -878,9 +882,9 @@ object PrivySparkApp {
       "output_path" -> config.outputPath,
       "ruleset" -> config.ruleset,
       "sample_ratio" -> config.sampleRatio,
-      "pre_scan_parallelism" -> preScanParallelism,
-      "group_parallelism" -> groupParallelism,
-      "file_parallelism" -> fileParallelism,
+      "pre_scan_parallelism" -> renderConfiguredParallelism(config.preScanParallelism),
+      "group_parallelism" -> renderConfiguredParallelism(config.groupParallelism),
+      "file_parallelism" -> renderConfiguredParallelism(config.fileParallelism),
       "driver_log_level" -> DriverLogger.currentLogLevel.label.toLowerCase
     )
     val rules = RulesetLoader.load(config.ruleset)
