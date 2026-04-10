@@ -5,11 +5,13 @@
 - 확장자가 없는 파일과 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 먼저 판별합니다.
 - 매직바이트가 일치하지 않더라도 UTF-8 기반 텍스트처럼 보이는 입력은 내부 `text` 포맷으로 정규화해 Spark `text` reader의 단일 `value` 컬럼으로 스캔합니다.
 - 바이너리처럼 보이는 입력만 `Unsupported file format`으로 오류 리포트에 기록합니다.
+- 0바이트 physical file은 pre-scan에서 즉시 skip하고, 그룹화/오류 리포트/스캔 대상에 포함하지 않습니다.
 
 ## archive 처리
 - `zip`, `jar`는 내부 엔트리를 선스캔한 뒤 지원 포맷 파일만 staging 후 스캔합니다.
 - archive 확장은 1단계까지만 허용합니다.
 - nested `zip`/`jar` 엔트리는 재귀 처리하지 않고 오류로 남깁니다.
+- 0바이트 archive entry는 포맷 판별 없이 skip하고 staging이나 오류 리포트에 남기지 않습니다.
 - archive 내부 식별자는 `<archive>!<entry>` 형식을 사용합니다.
 
 ## Excel 처리
@@ -26,6 +28,7 @@
 
 ## 스키마 샘플링
 - 다중 파일 그룹은 대표 파일 1개로 스키마를 먼저 샘플링할 수 있습니다.
+- 그룹별 schema split은 pre-scan 병렬도 설정을 재사용해 driver 측에서 병렬 수행합니다.
 - sampled group은 batch scan 전에 exact split으로 다시 검증합니다.
 - CSV는 exact split 단계에서 헤더 유무 드리프트도 다시 확인합니다.
 

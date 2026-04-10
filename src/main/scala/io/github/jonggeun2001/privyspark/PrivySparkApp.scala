@@ -71,6 +71,7 @@ object PrivySparkApp {
     expandedEntries: Seq[ScanFileEntry],
     expandedErrors: Seq[ScanError],
     stagingPaths: Seq[String],
+    skipped: Boolean = false,
     failure: Option[Throwable] = None
   )
 
@@ -139,6 +140,8 @@ object PrivySparkApp {
   )
   private val PreScanParallelismConfKey = "spark.privyspark.preScanParallelism"
   private val DefaultPreScanParallelism = 4
+  // Allow higher-than-core I/O fan-out without letting a single scan create an unbounded number of driver threads.
+  private val MaxSafePreScanParallelism = 64
   private val GroupParallelismConfKey = "spark.privyspark.groupParallelism"
   private val DefaultGroupParallelism = 4
   private val FileParallelismConfKey = "spark.privyspark.fileParallelism"
@@ -180,6 +183,8 @@ object PrivySparkApp {
     debugLoggingEnabledCache = null
   }
 
+  private def currentDebugTimestamp(): String = Instant.now().toString
+
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
     if (!isDebugLoggingEnabled) {
       return
@@ -195,7 +200,7 @@ object PrivySparkApp {
       }.mkString(" ", " ", "")
     }
 
-    System.err.println(s"[PrivySpark][DEBUG] $event$suffix")
+    System.err.println(s"[PrivySpark][DEBUG][${currentDebugTimestamp()}] $event$suffix")
   }
 
   private def stripTrailingSlash(path: String): String = {
@@ -556,6 +561,12 @@ object PrivySparkApp {
     }
   }
 
+  private def isZeroBytePhysicalFile(conf: org.apache.hadoop.conf.Configuration, filePath: String): Boolean = {
+    val sourcePath = new Path(filePath)
+    val fs = sourcePath.getFileSystem(conf)
+    fs.getFileStatus(sourcePath).getLen == 0L
+  }
+
   private def effectiveRulesForFormat(format: String, rules: Seq[PiiRule]): Seq[PiiRule] = {
     if (format == TextFormat) {
       rules.map { rule =>
@@ -748,12 +759,12 @@ object PrivySparkApp {
     if (itemCount <= 1) 1 else math.max(1, math.min(itemCount, configured))
   }
 
-  private[privyspark] def maxAllowedPreScanParallelism: Int = {
-    math.max(1, Runtime.getRuntime.availableProcessors())
-  }
-
   private[privyspark] def defaultPreScanParallelism: Int = {
     DefaultPreScanParallelism
+  }
+
+  private[privyspark] def maxSafePreScanParallelism: Int = {
+    MaxSafePreScanParallelism
   }
 
   private[privyspark] def resolveConfiguredPreScanParallelism(fileCount: Int, configured: Int, source: String): Int = {
@@ -761,12 +772,7 @@ object PrivySparkApp {
       throw new IllegalArgumentException(s"$source must be > 0")
     }
 
-    val maxAllowed = maxAllowedPreScanParallelism
-    if (configured > maxAllowed) {
-      throw new IllegalArgumentException(s"$source must be <= $maxAllowed")
-    }
-
-    resolveParallelism(fileCount, configured)
+    resolveParallelism(fileCount, math.min(configured, maxSafePreScanParallelism))
   }
 
   private[privyspark] def resolvePreScanParallelism(spark: SparkSession, fileCount: Int): Int = {
@@ -798,7 +804,7 @@ object PrivySparkApp {
     )
   }
 
-  private def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
+  private[privyspark] def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
     if (tasks.isEmpty) {
       Seq.empty
     } else if (parallelism <= 1 || tasks.size <= 1) {
@@ -959,6 +965,18 @@ object PrivySparkApp {
     archiveExpansionDepth: Int = 0,
     forceDisableDirectoryIdentifier: Boolean = false
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
+    try {
+      if (isZeroBytePhysicalFile(conf, physicalPath)) {
+        return (Seq.empty, Seq.empty)
+      }
+    } catch {
+      case NonFatal(e) =>
+        return (
+          Seq.empty,
+          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
+        )
+    }
+
     val detectedFormat =
       try {
         detectPhysicalFormat(conf, physicalPath)
@@ -1054,195 +1072,264 @@ object PrivySparkApp {
     val extractedEntries = ArrayBuffer.empty[ScanFileEntry]
     val archiveErrors = ArrayBuffer.empty[ScanError]
     val stagingBase = new Path(fs.getHomeDirectory, ".privyspark-staging")
-    if (!fs.exists(stagingBase) && !fs.mkdirs(stagingBase)) {
-      return (
-        Seq.empty,
-        Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Archive staging base creation failed: ${stagingBase.toString}"))
-      )
-    }
     val stagingRoot = new Path(
       stagingBase,
       s"archive-${System.currentTimeMillis()}-${math.abs(scala.util.Random.nextLong())}"
     )
-    if (!fs.mkdirs(stagingRoot) && !fs.exists(stagingRoot)) {
-      return (
-        Seq.empty,
-        Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Archive staging directory creation failed: ${stagingRoot.toString}"))
-      )
-    }
-    stagingPaths += stagingRoot.toString
     val archiveInputStream = fs.open(sourcePath)
     val zipInputStream = new ZipInputStream(archiveInputStream)
     val stagedTargetPaths = scala.collection.mutable.Set.empty[String]
+    var stagingPrepared = false
+
+    def ensureArchiveStagingReady(): Either[String, Unit] = {
+      if (stagingPrepared) {
+        Right(())
+      } else if (!fs.exists(stagingBase) && !fs.mkdirs(stagingBase)) {
+        Left(s"Archive staging base creation failed: ${stagingBase.toString}")
+      } else if (!fs.mkdirs(stagingRoot) && !fs.exists(stagingRoot)) {
+        Left(s"Archive staging directory creation failed: ${stagingRoot.toString}")
+      } else {
+        stagingPaths += stagingRoot.toString
+        stagingPrepared = true
+        Right(())
+      }
+    }
+
+    def reserveStagedTargetPath(normalizedEntryName: String, targetPath: Path): Either[String, Unit] = {
+      val targetComparablePath = canonicalizePath(targetPath.toString)
+      if (stagedTargetPaths.add(targetComparablePath)) Right(()) else Left(s"Conflicting archive entry path: $normalizedEntryName")
+    }
 
     try {
       var entry = zipInputStream.getNextEntry
       while (entry != null) {
         if (!entry.isDirectory) {
-          val normalizedEntryName = normalizeArchiveEntryName(entry.getName)
-          val childLogicalIdentifier = s"$logicalIdentifier!$normalizedEntryName"
-          safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
-            case Some(targetPath) =>
-              try {
-                val targetComparablePath = canonicalizePath(targetPath.toString)
-                if (!stagedTargetPaths.add(targetComparablePath)) {
-                  archiveErrors += ScanError(
-                    datasetPath,
-                    timestamp,
-                    childLogicalIdentifier,
-                    s"Conflicting archive entry path: $normalizedEntryName"
-                  )
-                } else FormatDetector.infer(normalizedEntryName) match {
-                  case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth >= MaxArchiveExpansionDepth =>
+          if (entry.getSize == 0L) {
+            logDebug(
+              "archive_entry_skipped",
+              "archive" -> logicalIdentifier,
+              "entry" -> normalizeArchiveEntryName(entry.getName),
+              "reason" -> "zero_byte"
+            )
+          } else {
+            val normalizedEntryName = normalizeArchiveEntryName(entry.getName)
+            val childLogicalIdentifier = s"$logicalIdentifier!$normalizedEntryName"
+            safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
+              case Some(targetPath) =>
+                try {
+                  FormatDetector.infer(normalizedEntryName) match {
+                    case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth >= MaxArchiveExpansionDepth =>
+                      if (zipInputStream.read() >= 0) {
+                        archiveErrors += ScanError(
+                          datasetPath,
+                          timestamp,
+                          childLogicalIdentifier,
+                          s"Nested archive expansion is not supported: $childLogicalIdentifier"
+                        )
+                      } else {
+                        logDebug(
+                          "archive_entry_skipped",
+                          "archive" -> logicalIdentifier,
+                          "entry" -> childLogicalIdentifier,
+                          "reason" -> "zero_byte"
+                        )
+                      }
+                    case Some(_) =>
+                      val buffer = new Array[Byte](8192)
+                      var bytesRead = zipInputStream.read(buffer)
+                      if (bytesRead < 0) {
+                        logDebug(
+                          "archive_entry_skipped",
+                          "archive" -> logicalIdentifier,
+                          "entry" -> childLogicalIdentifier,
+                          "reason" -> "zero_byte"
+                        )
+                      } else {
+                        ensureArchiveStagingReady() match {
+                          case Left(errorMessage) =>
+                            archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                          case Right(_) =>
+                            reserveStagedTargetPath(normalizedEntryName, targetPath) match {
+                              case Left(errorMessage) =>
+                                archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                              case Right(_) =>
+                                ensureArchiveEntryParent(fs, targetPath) match {
+                                  case Left(errorMessage) =>
+                                    archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                                  case Right(_) =>
+                                    val outputStream = fs.create(targetPath, true)
+                                    try {
+                                      while (bytesRead >= 0) {
+                                        if (bytesRead > 0) {
+                                          outputStream.write(buffer, 0, bytesRead)
+                                        }
+                                        bytesRead = zipInputStream.read(buffer)
+                                      }
+                                    } finally {
+                                      outputStream.close()
+                                    }
+
+                                    val (childEntries, childErrors) = expandPhysicalSource(
+                                      conf,
+                                      datasetPath,
+                                      timestamp,
+                                      targetPath.toString,
+                                      childLogicalIdentifier,
+                                      logicalIdentifier,
+                                      stagingPaths,
+                                      archiveExpansionDepth = archiveExpansionDepth,
+                                      forceDisableDirectoryIdentifier = true
+                                    )
+                                    extractedEntries ++= childEntries
+                                    archiveErrors ++= childErrors
+                                }
+                            }
+                        }
+                      }
+                    case None =>
+                      val probeBuffer = new java.io.ByteArrayOutputStream()
+                      val buffer = new Array[Byte](8192)
+                      var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
+                      var detectedFormat: Option[String] = None
+                      var archiveEntryError: Option[String] = None
+                      var probeRejected = false
+                      var archiveEntryHasContent = false
+                      var archiveEntrySkipped = false
+                      var targetPathReserved = false
+                      var bytesRead = zipInputStream.read(buffer)
+
+                      def materializeDetectedEntry(format: String, bytesForProbe: Int, currentChunkSize: Int): Unit = {
+                        ensureArchiveStagingReady() match {
+                          case Left(errorMessage) =>
+                            archiveEntryError = Some(errorMessage)
+                          case Right(_) =>
+                            if (!targetPathReserved) {
+                              reserveStagedTargetPath(normalizedEntryName, targetPath) match {
+                                case Left(errorMessage) =>
+                                  archiveEntryError = Some(errorMessage)
+                                case Right(_) =>
+                                  targetPathReserved = true
+                              }
+                            }
+                            if (archiveEntryError.isEmpty) {
+                              ensureArchiveEntryParent(fs, targetPath) match {
+                                case Left(errorMessage) =>
+                                  archiveEntryError = Some(errorMessage)
+                                case Right(_) =>
+                                  outputStream = fs.create(targetPath, true)
+                                  outputStream.write(probeBuffer.toByteArray)
+                                  if (currentChunkSize > bytesForProbe) {
+                                    outputStream.write(buffer, bytesForProbe, currentChunkSize - bytesForProbe)
+                                  }
+                                  detectedFormat = Some(format)
+                              }
+                            }
+                        }
+                      }
+
+                      try {
+                        while (bytesRead >= 0 && archiveEntryError.isEmpty) {
+                          if (bytesRead > 0) {
+                            archiveEntryHasContent = true
+                            if (detectedFormat.isDefined) {
+                              outputStream.write(buffer, 0, bytesRead)
+                            } else if (!probeRejected) {
+                              val remainingProbeSpace = TextProbeByteLimit - probeBuffer.size()
+                              val bytesForProbe = math.min(bytesRead, math.max(0, remainingProbeSpace))
+                              if (bytesForProbe > 0) {
+                                probeBuffer.write(buffer, 0, bytesForProbe)
+                              }
+
+                              val probeBytes = probeBuffer.toByteArray
+                              val probeComplete = probeBuffer.size() >= TextProbeByteLimit
+                              val probeTruncated = probeComplete && bytesRead > bytesForProbe
+                              val format = inferMagicByteFormat(probeBytes).orElse {
+                                if (probeTruncated) inferTextFormat(probeBytes, allowIncompleteTrailingSequence = true) else None
+                              }
+
+                              format match {
+                                case Some(value) =>
+                                  materializeDetectedEntry(value, bytesForProbe, bytesRead)
+                                case None if probeTruncated =>
+                                  probeRejected = true
+                                case None =>
+                                  ()
+                              }
+                            }
+                          }
+                          bytesRead = zipInputStream.read(buffer)
+                        }
+
+                        if (archiveEntryError.isEmpty && detectedFormat.isEmpty && !probeRejected) {
+                          if (archiveEntryHasContent || probeBuffer.size() > 0) {
+                            inferMagicByteFormat(probeBuffer.toByteArray)
+                              .orElse(inferTextFormat(probeBuffer.toByteArray, allowIncompleteTrailingSequence = false)) match {
+                              case Some(format) =>
+                                materializeDetectedEntry(format, bytesForProbe = probeBuffer.size(), currentChunkSize = probeBuffer.size())
+                              case None =>
+                                probeRejected = true
+                            }
+                          } else {
+                            archiveEntrySkipped = true
+                          }
+                        }
+                        archiveEntryError match {
+                          case Some(errorMessage) =>
+                            archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                          case None =>
+                            if (archiveEntrySkipped) {
+                              ()
+                            } else detectedFormat match {
+                              case Some(format) =>
+                                extractedEntries += ScanFileEntry(
+                                  sourceKey = targetPath.toString,
+                                  physicalPath = targetPath.toString,
+                                  directoryPath = logicalIdentifier,
+                                  format = format,
+                                  logicalIdentifier = childLogicalIdentifier,
+                                  allowDirectoryIdentifier = false
+                                )
+                              case None =>
+                                archiveErrors += ScanError(
+                                  datasetPath,
+                                  timestamp,
+                                  childLogicalIdentifier,
+                                  s"Unsupported file format: $childLogicalIdentifier"
+                                )
+                            }
+                        }
+                      } finally {
+                        if (outputStream != null) {
+                          outputStream.close()
+                        }
+                      }
+                  }
+                } catch {
+                  case NonFatal(e) =>
                     archiveErrors += ScanError(
                       datasetPath,
                       timestamp,
                       childLogicalIdentifier,
-                      s"Nested archive expansion is not supported: $childLogicalIdentifier"
+                      s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
                     )
-                  case Some(_) =>
-                    ensureArchiveEntryParent(fs, targetPath) match {
-                      case Left(errorMessage) =>
-                        archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
-                      case Right(_) =>
-                        val outputStream = fs.create(targetPath, true)
-                        try {
-                          val buffer = new Array[Byte](8192)
-                          var bytesRead = zipInputStream.read(buffer)
-                          while (bytesRead >= 0) {
-                            if (bytesRead > 0) {
-                              outputStream.write(buffer, 0, bytesRead)
-                            }
-                            bytesRead = zipInputStream.read(buffer)
-                          }
-                        } finally {
-                          outputStream.close()
-                        }
-
-                        val (childEntries, childErrors) = expandPhysicalSource(
-                          conf,
-                          datasetPath,
-                          timestamp,
-                          targetPath.toString,
-                          childLogicalIdentifier,
-                          logicalIdentifier,
-                          stagingPaths,
-                          archiveExpansionDepth = archiveExpansionDepth,
-                          forceDisableDirectoryIdentifier = true
-                        )
-                        extractedEntries ++= childEntries
-                        archiveErrors ++= childErrors
-                    }
-                  case None =>
-                    val probeBuffer = new java.io.ByteArrayOutputStream()
-                    val buffer = new Array[Byte](8192)
-                    var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
-                    var detectedFormat: Option[String] = None
-                    var archiveEntryError: Option[String] = None
-                    var probeRejected = false
-                    var bytesRead = zipInputStream.read(buffer)
-
-                    def materializeDetectedEntry(format: String, bytesForProbe: Int, currentChunkSize: Int): Unit = {
-                      ensureArchiveEntryParent(fs, targetPath) match {
-                        case Left(errorMessage) =>
-                          archiveEntryError = Some(errorMessage)
-                        case Right(_) =>
-                          outputStream = fs.create(targetPath, true)
-                          outputStream.write(probeBuffer.toByteArray)
-                          if (currentChunkSize > bytesForProbe) {
-                            outputStream.write(buffer, bytesForProbe, currentChunkSize - bytesForProbe)
-                          }
-                          detectedFormat = Some(format)
-                      }
-                    }
-
-                    try {
-                      while (bytesRead >= 0 && archiveEntryError.isEmpty) {
-                        if (bytesRead > 0) {
-                          if (detectedFormat.isDefined) {
-                            outputStream.write(buffer, 0, bytesRead)
-                          } else if (!probeRejected) {
-                            val remainingProbeSpace = TextProbeByteLimit - probeBuffer.size()
-                            val bytesForProbe = math.min(bytesRead, math.max(0, remainingProbeSpace))
-                            if (bytesForProbe > 0) {
-                              probeBuffer.write(buffer, 0, bytesForProbe)
-                            }
-
-                            val probeBytes = probeBuffer.toByteArray
-                            val probeComplete = probeBuffer.size() >= TextProbeByteLimit
-                            val probeTruncated = probeComplete && bytesRead > bytesForProbe
-                            val format = inferMagicByteFormat(probeBytes).orElse {
-                              if (probeTruncated) inferTextFormat(probeBytes, allowIncompleteTrailingSequence = true) else None
-                            }
-
-                            format match {
-                              case Some(value) =>
-                                materializeDetectedEntry(value, bytesForProbe, bytesRead)
-                              case None if probeTruncated =>
-                                probeRejected = true
-                              case None =>
-                                ()
-                            }
-                          }
-                        }
-                        bytesRead = zipInputStream.read(buffer)
-                      }
-
-                      if (archiveEntryError.isEmpty && detectedFormat.isEmpty && !probeRejected) {
-                        inferMagicByteFormat(probeBuffer.toByteArray)
-                          .orElse(inferTextFormat(probeBuffer.toByteArray, allowIncompleteTrailingSequence = false)) match {
-                          case Some(format) =>
-                            materializeDetectedEntry(format, bytesForProbe = probeBuffer.size(), currentChunkSize = probeBuffer.size())
-                          case None =>
-                            probeRejected = true
-                        }
-                      }
-
-                      archiveEntryError match {
-                        case Some(errorMessage) =>
-                          archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
-                        case None =>
-                          detectedFormat match {
-                            case Some(format) =>
-                              extractedEntries += ScanFileEntry(
-                                sourceKey = targetPath.toString,
-                                physicalPath = targetPath.toString,
-                                directoryPath = logicalIdentifier,
-                                format = format,
-                                logicalIdentifier = childLogicalIdentifier,
-                                allowDirectoryIdentifier = false
-                              )
-                            case None =>
-                              archiveErrors += ScanError(
-                                datasetPath,
-                                timestamp,
-                                childLogicalIdentifier,
-                                s"Unsupported file format: $childLogicalIdentifier"
-                              )
-                          }
-                      }
-                    } finally {
-                      if (outputStream != null) {
-                        outputStream.close()
-                      }
-                    }
                 }
-              } catch {
-                case NonFatal(e) =>
+              case None =>
+                if (zipInputStream.read() >= 0) {
                   archiveErrors += ScanError(
                     datasetPath,
                     timestamp,
                     childLogicalIdentifier,
-                    s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+                    s"Unsafe archive entry path: $normalizedEntryName"
                   )
-              }
-            case None =>
-              archiveErrors += ScanError(
-                datasetPath,
-                timestamp,
-                childLogicalIdentifier,
-                s"Unsafe archive entry path: $normalizedEntryName"
-              )
+                } else {
+                  logDebug(
+                    "archive_entry_skipped",
+                    "archive" -> logicalIdentifier,
+                    "entry" -> childLogicalIdentifier,
+                    "reason" -> "zero_byte"
+                  )
+                }
+            }
           }
         }
         zipInputStream.closeEntry()
@@ -1324,16 +1411,44 @@ object PrivySparkApp {
           val localStagingPaths = ArrayBuffer.empty[String]
 
           try {
-            val (expandedEntries, expandedErrors) =
-              expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
-            PreScanFileOutcome(
-              filePath = filePath,
-              groupingDirectoryPath = parentDirectory,
-              preScanErrorScope = preScanErrorScope,
-              expandedEntries = expandedEntries,
-              expandedErrors = expandedErrors,
-              stagingPaths = localStagingPaths.toSeq
-            )
+            val zeroByteStatus = try {
+              Right(isZeroBytePhysicalFile(conf, filePath))
+            } catch {
+              case NonFatal(e) => Left(e)
+            }
+
+            zeroByteStatus match {
+              case Left(e) =>
+                PreScanFileOutcome(
+                  filePath = filePath,
+                  groupingDirectoryPath = parentDirectory,
+                  preScanErrorScope = preScanErrorScope,
+                  expandedEntries = Seq.empty,
+                  expandedErrors = Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
+                  stagingPaths = localStagingPaths.toSeq
+                )
+              case Right(true) =>
+                PreScanFileOutcome(
+                  filePath = filePath,
+                  groupingDirectoryPath = parentDirectory,
+                  preScanErrorScope = preScanErrorScope,
+                  expandedEntries = Seq.empty,
+                  expandedErrors = Seq.empty,
+                  stagingPaths = localStagingPaths.toSeq,
+                  skipped = true
+                )
+              case Right(false) =>
+                val (expandedEntries, expandedErrors) =
+                  expandPhysicalSource(conf, datasetPath, timestamp, filePath, logicalIdentifier, parentDirectory, localStagingPaths)
+                PreScanFileOutcome(
+                  filePath = filePath,
+                  groupingDirectoryPath = parentDirectory,
+                  preScanErrorScope = preScanErrorScope,
+                  expandedEntries = expandedEntries,
+                  expandedErrors = expandedErrors,
+                  stagingPaths = localStagingPaths.toSeq
+                )
+            }
           } catch {
             case NonFatal(e) =>
               PreScanFileOutcome(
@@ -1358,7 +1473,14 @@ object PrivySparkApp {
         supportedFiles ++= outcome.expandedEntries
         errors ++= outcome.expandedErrors
 
-        if (outcome.expandedEntries.nonEmpty) {
+        if (outcome.skipped) {
+          logDebug(
+            "scan_directory_file_skipped",
+            "file" -> outcome.filePath,
+            "directory" -> outcome.groupingDirectoryPath,
+            "reason" -> "zero_byte"
+          )
+        } else if (outcome.expandedEntries.nonEmpty) {
           logDebug(
             "scan_directory_file_supported",
             "file" -> outcome.filePath,
@@ -1401,21 +1523,33 @@ object PrivySparkApp {
       logDebug("scan_directory_initial_groups_ready", "groups" -> groupedByDirectoryAndFormat.size, "supported_files" -> supportedFiles.size)
 
       val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
-      groupedByDirectoryAndFormat.foreach { group =>
-        val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group)
-        schemaAwareGroups ++= splitGroups
-        errors ++= splitErrors
-        logDebug(
-          "scan_directory_group_schema_split",
-          "directory" -> group.directoryPath,
-          "format" -> group.format,
-          "input_files" -> group.filePaths.size,
-          "split_groups" -> splitGroups.size,
-          "split_errors" -> splitErrors.size
-        )
-        if (splitErrors.nonEmpty) {
-          directoriesWithPreScanErrors += group.directoryPath
-        }
+      val schemaSplitParallelism = resolveParallelism(groupedByDirectoryAndFormat.size, resolvedPreScanParallelism)
+      logDebug(
+        "scan_directory_schema_split_parallelism",
+        "groups" -> groupedByDirectoryAndFormat.size,
+        "parallelism" -> schemaSplitParallelism
+      )
+      val schemaSplitOutcomes = executeInParallel(schemaSplitParallelism, groupedByDirectoryAndFormat.map { group =>
+        () =>
+          val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group)
+          (group, splitGroups, splitErrors)
+      })
+
+      schemaSplitOutcomes.foreach {
+        case (group, splitGroups, splitErrors) =>
+          schemaAwareGroups ++= splitGroups
+          errors ++= splitErrors
+          logDebug(
+            "scan_directory_group_schema_split",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "input_files" -> group.filePaths.size,
+            "split_groups" -> splitGroups.size,
+            "split_errors" -> splitErrors.size
+          )
+          if (splitErrors.nonEmpty) {
+            directoriesWithPreScanErrors += group.directoryPath
+          }
       }
 
       val groupsPerDirectory = schemaAwareGroups.groupBy(_.directoryPath).map {
@@ -1445,16 +1579,18 @@ object PrivySparkApp {
         finalizedGroup
       }
 
-      val directoryCount = files
-        .map(filePath => Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath))
+      val nonSkippedPreScanOutcomes = preScanOutcomes.filterNot(_.skipped)
+      val directoryCount = nonSkippedPreScanOutcomes
+        .map(outcome => Option(new Path(outcome.filePath).getParent).map(_.toString).getOrElse(outcome.filePath))
         .distinct
         .size
+      val totalFiles = nonSkippedPreScanOutcomes.size
       val plannedGroups = finalizedGroups.toSeq.sortBy(group => (group.directoryPath, group.format, group.schemaSignature))
 
       logDebug(
         "scan_directory_structure_complete",
         "input_path" -> inputPath,
-        "total_files" -> files.size,
+        "total_files" -> totalFiles,
         "supported_files" -> supportedFiles.size,
         "groups" -> plannedGroups.size,
         "errors" -> errors.size,
@@ -1464,7 +1600,7 @@ object PrivySparkApp {
       DirectoryScanPlan(
         groups = plannedGroups,
         errors = errors.toSeq,
-        totalFiles = files.size,
+        totalFiles = totalFiles,
         directoryCount = directoryCount,
         stagingPaths = stagingPaths.toSeq
       )
