@@ -139,6 +139,8 @@ object PrivySparkApp {
   )
   private val PreScanParallelismConfKey = "spark.privyspark.preScanParallelism"
   private val DefaultPreScanParallelism = 4
+  // Allow higher-than-core I/O fan-out without letting a single scan create an unbounded number of driver threads.
+  private val MaxSafePreScanParallelism = 64
   private val GroupParallelismConfKey = "spark.privyspark.groupParallelism"
   private val DefaultGroupParallelism = 4
   private val FileParallelismConfKey = "spark.privyspark.fileParallelism"
@@ -748,12 +750,12 @@ object PrivySparkApp {
     if (itemCount <= 1) 1 else math.max(1, math.min(itemCount, configured))
   }
 
-  private[privyspark] def maxAllowedPreScanParallelism: Int = {
-    math.max(1, Runtime.getRuntime.availableProcessors())
-  }
-
   private[privyspark] def defaultPreScanParallelism: Int = {
     DefaultPreScanParallelism
+  }
+
+  private[privyspark] def maxSafePreScanParallelism: Int = {
+    MaxSafePreScanParallelism
   }
 
   private[privyspark] def resolveConfiguredPreScanParallelism(fileCount: Int, configured: Int, source: String): Int = {
@@ -761,12 +763,7 @@ object PrivySparkApp {
       throw new IllegalArgumentException(s"$source must be > 0")
     }
 
-    val maxAllowed = maxAllowedPreScanParallelism
-    if (configured > maxAllowed) {
-      throw new IllegalArgumentException(s"$source must be <= $maxAllowed")
-    }
-
-    resolveParallelism(fileCount, configured)
+    resolveParallelism(fileCount, math.min(configured, maxSafePreScanParallelism))
   }
 
   private[privyspark] def resolvePreScanParallelism(spark: SparkSession, fileCount: Int): Int = {

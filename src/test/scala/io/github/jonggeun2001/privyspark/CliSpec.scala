@@ -48,13 +48,13 @@ class CliSpec extends AnyFunSuite {
   }
 
   test("rejects invalid sample-ratio and parallelism values") {
-    val overMaxPreScanParallelismValue = (PrivySparkApp.maxAllowedPreScanParallelism + 1).toString
+    val largePreScanParallelismValue = "128"
     val zeroRatio = Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--sample-ratio", "0.0"))
     val overOneRatio = Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--sample-ratio", "1.1"))
     val zeroPreScanParallelism =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--pre-scan-parallelism", "0"))
-    val overMaxPreScanParallelism =
-      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--pre-scan-parallelism", overMaxPreScanParallelismValue))
+    val largePreScanParallelism =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--pre-scan-parallelism", largePreScanParallelismValue))
     val zeroGroupParallelism =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--group-parallelism", "0"))
     val negativeFileParallelism =
@@ -63,7 +63,8 @@ class CliSpec extends AnyFunSuite {
     assert(zeroRatio.isEmpty)
     assert(overOneRatio.isEmpty)
     assert(zeroPreScanParallelism.isEmpty)
-    assert(overMaxPreScanParallelism.isEmpty)
+    assert(largePreScanParallelism.nonEmpty)
+    assert(largePreScanParallelism.get.preScanParallelism.contains(128))
     assert(zeroGroupParallelism.isEmpty)
     assert(negativeFileParallelism.isEmpty)
   }
