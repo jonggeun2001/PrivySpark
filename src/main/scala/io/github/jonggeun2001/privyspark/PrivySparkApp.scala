@@ -25,6 +25,7 @@ import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.util.control.ControlThrowable
 import scala.util.control.NonFatal
 
 object PrivySparkApp {
@@ -800,6 +801,14 @@ object PrivySparkApp {
   }
 
   def main(args: Array[String]): Unit = {
+    runMain(args)
+  }
+
+  private[privyspark] def runMain(
+    args: Array[String],
+    createSparkSession: () => SparkSession = () => SparkSession.builder().appName("PrivySpark").getOrCreate(),
+    exitWith: Int => Unit = code => System.exit(code)
+  ): Unit = {
     val normalizedArgs = if (args.headOption.contains("scan")) args.drop(1) else args
 
     val parseResult = Cli.parseWithErrors(normalizedArgs)
@@ -810,8 +819,8 @@ object PrivySparkApp {
         "errors" -> parseResult.errors.mkString(" | "),
         "args" -> normalizedArgs.mkString(" ")
       )
-      System.exit(2)
-      throw new IllegalStateException("unreachable")
+      exitWith(2)
+      return
     }
 
     if (!PathValidator.isAbsolute(config.inputPath)) {
@@ -822,7 +831,8 @@ object PrivySparkApp {
         "reason" -> "must_be_absolute_path_or_uri",
         "value" -> config.inputPath
       )
-      System.exit(2)
+      exitWith(2)
+      return
     }
 
     if (!PathValidator.isAbsolute(config.outputPath)) {
@@ -833,15 +843,20 @@ object PrivySparkApp {
         "reason" -> "must_be_absolute_path_or_uri",
         "value" -> config.outputPath
       )
-      System.exit(2)
+      exitWith(2)
+      return
     }
 
-    val spark = SparkSession.builder().appName("PrivySpark").getOrCreate()
-    spark.sparkContext.setLogLevel("WARN")
+    var spark: Option[SparkSession] = None
 
     try {
-      runScan(spark, config)
+      val session = createSparkSession()
+      spark = Some(session)
+      session.sparkContext.setLogLevel("WARN")
+      runScan(session, config)
     } catch {
+      case control: ControlThrowable =>
+        throw control
       case NonFatal(e) =>
         DriverLogger.emitAlways(
           DriverLogLevel.Error,
@@ -849,9 +864,9 @@ object PrivySparkApp {
           "exception" -> e.getClass.getSimpleName,
           "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
         )
-        System.exit(1)
+        exitWith(1)
     } finally {
-      spark.stop()
+      spark.foreach(_.stop())
     }
   }
 

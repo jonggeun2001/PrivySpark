@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.concurrent.TrieMap
+import scala.util.control.ControlThrowable
 
 @RunWith(classOf[JUnitRunner])
 class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
@@ -1854,6 +1855,24 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("runMain emits structured scan_failed logs when Spark bootstrap fails") {
+    val logs = captureStderr {
+      val exit = intercept[ExitCalled] {
+        withDriverLogLevel("off") {
+          PrivySparkApp.runMain(
+            Array("--path", "/data/input", "--output", "/data/output"),
+            createSparkSession = () => throw new RuntimeException("spark bootstrap failed"),
+            exitWith = code => throw ExitCalled(code)
+          )
+        }
+      }
+
+      assert(exit.code == 1)
+    }
+
+    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[ERROR\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_failed.*reason="spark bootstrap failed".*""")))
+  }
+
   test("scanGroups parallel should match sequential results") {
     val inputDir = Files.createTempDirectory("privyspark-group-parallel-scan-")
     val customersDir = Files.createDirectories(inputDir.resolve("customers"))
@@ -2768,6 +2787,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     (results.toSeq, errors.toSeq)
   }
+
+  private case class ExitCalled(code: Int) extends ControlThrowable
 
   private def createColumnarDataFile(outputDir: Path, format: String): String = {
     import spark.implicits._

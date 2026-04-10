@@ -36,13 +36,17 @@ private[privyspark] object DriverLogger {
     if (cached != null) {
       cached
     } else {
-      val resolved = sys.props.get(PropertyName)
-        .orElse(sys.env.get(EnvName))
-        .flatMap(DriverLogLevel.parse)
-        .getOrElse(DriverLogLevel.Default)
+      val resolved = resolveLogLevel(sys.props.get(PropertyName), sys.env.get(EnvName))
       currentLogLevelCache = resolved
       resolved
     }
+  }
+
+  private[privyspark] def resolveLogLevel(propertyValue: Option[String], envValue: Option[String]): DriverLogLevel = {
+    propertyValue
+      .flatMap(DriverLogLevel.parse)
+      .orElse(envValue.flatMap(DriverLogLevel.parse))
+      .getOrElse(DriverLogLevel.Default)
   }
 
   def resetCache(): Unit = {

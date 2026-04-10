@@ -19,6 +19,12 @@ class DriverLoggerSpec extends AnyFunSuite {
     assert(withDriverLogLevel("off") { DriverLogger.currentLogLevel } == DriverLogLevel.Off)
   }
 
+  test("falls back to environment log level when property value is invalid") {
+    assert(DriverLogger.resolveLogLevel(Some("bogus"), Some("info")) == DriverLogLevel.Info)
+    assert(DriverLogger.resolveLogLevel(Some("debug"), Some("warn")) == DriverLogLevel.Debug)
+    assert(DriverLogger.resolveLogLevel(Some(""), Some("error")) == DriverLogLevel.Error)
+  }
+
   test("filters structured driver logs by configured level") {
     val warnLogs = captureStderr {
       withDriverLogLevel("warn") {
