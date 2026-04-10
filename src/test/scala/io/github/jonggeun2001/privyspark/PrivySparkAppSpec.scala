@@ -15,7 +15,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.Comparator
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.concurrent.TrieMap
@@ -31,6 +31,54 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   override def afterAll(): Unit = {
     spark.stop()
     super.afterAll()
+  }
+
+  test("executeInParallel preserves task order while allowing concurrent execution") {
+    val currentRunning = new AtomicInteger(0)
+    val maxLock = new AnyRef
+    var maxRunning = 0
+
+    def trackRunning(value: Int): Unit = maxLock.synchronized {
+      if (value > maxRunning) {
+        maxRunning = value
+      }
+    }
+
+    val results = PrivySparkApp.executeInParallel(2, Seq(
+      () => {
+        val running = currentRunning.incrementAndGet()
+        trackRunning(running)
+        try {
+          Thread.sleep(150L)
+          "first"
+        } finally {
+          currentRunning.decrementAndGet()
+        }
+      },
+      () => {
+        val running = currentRunning.incrementAndGet()
+        trackRunning(running)
+        try {
+          Thread.sleep(150L)
+          "second"
+        } finally {
+          currentRunning.decrementAndGet()
+        }
+      },
+      () => {
+        val running = currentRunning.incrementAndGet()
+        trackRunning(running)
+        try {
+          Thread.sleep(50L)
+          "third"
+        } finally {
+          currentRunning.decrementAndGet()
+        }
+      }
+    ))
+
+    assert(results == Seq("first", "second", "third"))
+    assert(maxRunning > 1)
   }
 
   test("splitGroupBySchema exact mode splits same directory files by schema signature") {

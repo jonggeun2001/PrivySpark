@@ -28,6 +28,7 @@
 
 ## 스키마 샘플링
 - 다중 파일 그룹은 대표 파일 1개로 스키마를 먼저 샘플링할 수 있습니다.
+- 그룹별 schema split은 pre-scan 병렬도 설정을 재사용해 driver 측에서 병렬 수행합니다.
 - sampled group은 batch scan 전에 exact split으로 다시 검증합니다.
 - CSV는 exact split 단계에서 헤더 유무 드리프트도 다시 확인합니다.
 
