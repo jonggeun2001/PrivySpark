@@ -89,6 +89,7 @@ spark-submit \
 - 지원값은 `error`, `warn`, `info`, `debug`이며 `off`로 driver 로그를 끌 수 있습니다. 기본값은 `warn`입니다.
 - 하위호환으로 `true`는 `debug`, `false`는 `warn`으로 해석합니다.
 - `info` 레벨에는 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 실행 lifecycle 로그가 포함됩니다.
+- `scan_start`의 병렬도 필드는 `configured_*` 이름으로 기록되며, 요청값 또는 `spark_conf_or_default` 상태를 나타냅니다.
 - `debug` 레벨에는 플랜 수립, 그룹/파일 스캔 진행, 리포트 저장 단계가 포함됩니다.
 - `scanDirectoryStructure` debug 로그에는 파일 발견 duration, pre-scan 실행 시작/진행률/완료, pre-scan 후처리 duration, 초기 `(directory, format)` 그룹화 duration이 포함됩니다.
 

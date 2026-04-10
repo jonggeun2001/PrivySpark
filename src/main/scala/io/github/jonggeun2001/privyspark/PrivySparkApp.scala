@@ -882,9 +882,9 @@ object PrivySparkApp {
       "output_path" -> config.outputPath,
       "ruleset" -> config.ruleset,
       "sample_ratio" -> config.sampleRatio,
-      "pre_scan_parallelism" -> renderConfiguredParallelism(config.preScanParallelism),
-      "group_parallelism" -> renderConfiguredParallelism(config.groupParallelism),
-      "file_parallelism" -> renderConfiguredParallelism(config.fileParallelism),
+      "configured_pre_scan_parallelism" -> renderConfiguredParallelism(config.preScanParallelism),
+      "configured_group_parallelism" -> renderConfiguredParallelism(config.groupParallelism),
+      "configured_file_parallelism" -> renderConfiguredParallelism(config.fileParallelism),
       "driver_log_level" -> DriverLogger.currentLogLevel.label.toLowerCase
     )
     val rules = RulesetLoader.load(config.ruleset)
