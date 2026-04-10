@@ -70,7 +70,6 @@ object PrivySparkApp {
   private val JarFormat = "jar"
   private val ArchiveFormats = Set(ZipFormat, JarFormat)
   private val NonDirectoryIdentifierFormats = Set(TextFormat, XlsxFormat)
-  private val TextProbeByteLimit = 4096
   private val MagicProbeByteLimit = 4
   private val ParquetMagicBytes = Array[Byte]('P'.toByte, 'A'.toByte, 'R'.toByte, '1'.toByte)
   private val OrcMagicBytes = Array[Byte]('O'.toByte, 'R'.toByte, 'C'.toByte)
@@ -345,7 +344,7 @@ object PrivySparkApp {
     }
   }
 
-  private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int = TextProbeByteLimit): Array[Byte] = {
+  private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int): Array[Byte] = {
     val sourcePath = new Path(filePath)
     val fs = sourcePath.getFileSystem(conf)
     val inputStream = fs.open(sourcePath)
@@ -377,12 +376,6 @@ object PrivySparkApp {
     }
   }
 
-  private def hasExplicitFileExtension(pathLike: String): Boolean = {
-    val fileName = Option(pathLike).filter(_.nonEmpty).map(path => new Path(path).getName).getOrElse("")
-    val lastDot = fileName.lastIndexOf('.')
-    lastDot > 0 && lastDot < fileName.length - 1
-  }
-
   private def inferMagicByteFormat(bytes: Array[Byte]): Option[String] = {
     if (bytes.length >= ParquetMagicBytes.length && ParquetMagicBytes.indices.forall(index => bytes(index) == ParquetMagicBytes(index))) {
       Some("parquet")
@@ -398,33 +391,10 @@ object PrivySparkApp {
     filePath: String
   ): Option[String] = {
     val extensionFormat = FormatDetector.infer(filePath)
-    if (extensionFormat.isDefined || hasExplicitFileExtension(filePath)) {
+    if (extensionFormat.isDefined) {
       extensionFormat
     } else {
       inferMagicByteFormat(readProbeBytes(conf, filePath, MagicProbeByteLimit))
-    }
-  }
-
-  private def stripUtfBom(bytes: Array[Byte]): Array[Byte] = {
-    if (bytes.length >= 3 && bytes(0) == 0xEF.toByte && bytes(1) == 0xBB.toByte && bytes(2) == 0xBF.toByte) {
-      bytes.drop(3)
-    } else {
-      bytes
-    }
-  }
-
-  private def looksLikeText(bytes: Array[Byte]): Boolean = {
-    val content = stripUtfBom(bytes)
-    if (content.isEmpty) {
-      true
-    } else if (content.contains(0.toByte)) {
-      false
-    } else {
-      val suspiciousByteCount = content.count { byte =>
-        val unsigned = byte & 0xFF
-        unsigned < 0x09 || (unsigned > 0x0D && unsigned < 0x20)
-      }
-      suspiciousByteCount.toDouble / content.length.toDouble <= 0.1d
     }
   }
 
@@ -778,7 +748,6 @@ object PrivySparkApp {
     archiveExpansionDepth: Int = 0,
     forceDisableDirectoryIdentifier: Boolean = false
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
-    val hasExplicitExtension = hasExplicitFileExtension(physicalPath)
     val detectedFormat =
       try {
         detectPhysicalFormat(conf, physicalPath)
@@ -822,34 +791,10 @@ object PrivySparkApp {
           Seq.empty
         )
       case None =>
-        try {
-          if (hasExplicitExtension && looksLikeText(readProbeBytes(conf, physicalPath))) {
-            (
-              Seq(
-                ScanFileEntry(
-                  sourceKey = physicalPath,
-                  physicalPath = physicalPath,
-                  directoryPath = groupingDirectoryPath,
-                  format = TextFormat,
-                  logicalIdentifier = logicalIdentifier,
-                  allowDirectoryIdentifier = false
-                )
-              ),
-              Seq.empty
-            )
-          } else {
-            (
-              Seq.empty,
-              Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Unsupported file format: $logicalIdentifier"))
-            )
-          }
-        } catch {
-          case NonFatal(e) =>
-            (
-              Seq.empty,
-              Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
-            )
-        }
+        (
+          Seq.empty,
+          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Unsupported file format: $logicalIdentifier"))
+        )
     }
   }
 
@@ -929,7 +874,6 @@ object PrivySparkApp {
             case Some(targetPath) =>
               try {
                 val targetComparablePath = canonicalizePath(targetPath.toString)
-                val entryHasExplicitExtension = hasExplicitFileExtension(normalizedEntryName)
                 if (!stagedTargetPaths.add(targetComparablePath)) {
                   archiveErrors += ScanError(
                     datasetPath,
@@ -978,7 +922,7 @@ object PrivySparkApp {
                         extractedEntries ++= childEntries
                         archiveErrors ++= childErrors
                     }
-                  case None if !entryHasExplicitExtension =>
+                  case None =>
                     val probeBuffer = new java.io.ByteArrayOutputStream()
                     val buffer = new Array[Byte](8192)
                     var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
@@ -1035,87 +979,6 @@ object PrivySparkApp {
                             childLogicalIdentifier,
                             s"Unsupported file format: $childLogicalIdentifier"
                           )
-                      }
-                    } finally {
-                      if (outputStream != null) {
-                        outputStream.close()
-                      }
-                    }
-                  case None =>
-                    val probeBuffer = new java.io.ByteArrayOutputStream()
-                    val buffer = new Array[Byte](8192)
-                    var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
-                    var textDecision: Option[Boolean] = None
-                    var bytesRead = zipInputStream.read(buffer)
-
-                    try {
-                      while (bytesRead >= 0) {
-                        if (bytesRead > 0) {
-                          textDecision match {
-                            case Some(true) =>
-                              outputStream.write(buffer, 0, bytesRead)
-                            case Some(false) =>
-                              ()
-                            case None =>
-                              val remainingProbeSpace = TextProbeByteLimit - probeBuffer.size()
-                              val bytesForProbe = math.min(bytesRead, math.max(0, remainingProbeSpace))
-                              if (bytesForProbe > 0) {
-                                probeBuffer.write(buffer, 0, bytesForProbe)
-                              }
-                              if (probeBuffer.size() >= TextProbeByteLimit) {
-                                val isText = looksLikeText(probeBuffer.toByteArray)
-                                textDecision = Some(isText)
-                                if (isText) {
-                                  ensureArchiveEntryParent(fs, targetPath) match {
-                                    case Left(errorMessage) =>
-                                      throw new IllegalStateException(errorMessage)
-                                    case Right(_) =>
-                                      outputStream = fs.create(targetPath, true)
-                                      outputStream.write(probeBuffer.toByteArray)
-                                      if (bytesRead > bytesForProbe) {
-                                        outputStream.write(buffer, bytesForProbe, bytesRead - bytesForProbe)
-                                      }
-                                  }
-                                }
-                              }
-                          }
-                        }
-                        bytesRead = zipInputStream.read(buffer)
-                      }
-
-                      val isText = textDecision.getOrElse(looksLikeText(probeBuffer.toByteArray))
-                      if (isText) {
-                        if (outputStream == null) {
-                          ensureArchiveEntryParent(fs, targetPath) match {
-                            case Left(errorMessage) =>
-                              archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
-                            case Right(_) =>
-                              outputStream = fs.create(targetPath, true)
-                              outputStream.write(probeBuffer.toByteArray)
-                          }
-                        }
-                        if (outputStream != null) {
-                          val (childEntries, childErrors) = expandPhysicalSource(
-                            conf,
-                            datasetPath,
-                            timestamp,
-                            targetPath.toString,
-                            childLogicalIdentifier,
-                            logicalIdentifier,
-                            stagingPaths,
-                            archiveExpansionDepth = archiveExpansionDepth,
-                            forceDisableDirectoryIdentifier = true
-                          )
-                          extractedEntries ++= childEntries
-                          archiveErrors ++= childErrors
-                        }
-                      } else {
-                        archiveErrors += ScanError(
-                          datasetPath,
-                          timestamp,
-                          childLogicalIdentifier,
-                          s"Unsupported file format: $childLogicalIdentifier"
-                        )
                       }
                     } finally {
                       if (outputStream != null) {
