@@ -2294,6 +2294,57 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules keeps invalid utf-8 prefixes unsupported when probe ends mid-sequence") {
+    val inputDir = Files.createTempDirectory("privyspark-text-invalid-utf8-prefix-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      val invalidSuffixes = Seq(
+        Array(0xe0.toByte, 0x80.toByte),
+        Array(0xf4.toByte, 0x90.toByte)
+      )
+
+      invalidSuffixes.zipWithIndex.foreach { case (suffix, index) =>
+        writeBytes(
+          inputDir.resolve(s"notes-$index.log"),
+          "alice@example.com".getBytes(StandardCharsets.UTF_8) ++ suffix
+        )
+      }
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier).toSet == Set("notes-0.log", "notes-1.log"))
+      assert(errors.forall(_.error_message.contains("Unsupported file format")))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules keeps archive text fallbacks with invalid utf-8 prefixes unsupported") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-invalid-utf8-prefix-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      createArchiveFileWithBytes(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "notes.log" -> ("alice@example.com".getBytes(StandardCharsets.UTF_8) ++ Array(0xe0.toByte, 0x80.toByte))
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("bundle.zip!notes.log"))
+      assert(errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("writeReports stores scan results and errors in csv output paths") {
     val outputDir = Files.createTempDirectory("privyspark-write-reports-")
 

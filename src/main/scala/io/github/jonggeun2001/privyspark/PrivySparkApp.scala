@@ -63,6 +63,7 @@ object PrivySparkApp {
     sampledRowCount: Long,
     matchCounts: Seq[MatchCount]
   )
+  private final case class ProbeSample(bytes: Array[Byte], truncated: Boolean)
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
   private val TextFormat = "text"
@@ -347,7 +348,7 @@ object PrivySparkApp {
     }
   }
 
-  private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int): Array[Byte] = {
+  private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int): ProbeSample = {
     val sourcePath = new Path(filePath)
     val fs = sourcePath.getFileSystem(conf)
     val inputStream = fs.open(sourcePath)
@@ -373,7 +374,11 @@ object PrivySparkApp {
         }
       }
 
-      if (totalBytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, totalBytesRead)
+      val truncated =
+        totalBytesRead >= limit && inputStream.read() >= 0
+      val bytes =
+        if (totalBytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, totalBytesRead)
+      ProbeSample(bytes, truncated)
     } finally {
       inputStream.close()
     }
@@ -389,16 +394,19 @@ object PrivySparkApp {
     }
   }
 
-  private def inferTextFormat(bytes: Array[Byte]): Option[String] = {
-    if (looksLikeText(bytes)) Some(TextFormat) else None
+  private def inferTextFormat(
+    bytes: Array[Byte],
+    allowIncompleteTrailingSequence: Boolean = false
+  ): Option[String] = {
+    if (looksLikeText(bytes, allowIncompleteTrailingSequence)) Some(TextFormat) else None
   }
 
-  private def looksLikeText(bytes: Array[Byte]): Boolean = {
+  private def looksLikeText(bytes: Array[Byte], allowIncompleteTrailingSequence: Boolean): Boolean = {
     if (bytes.isEmpty) {
       true
     } else if (bytes.contains(0.toByte)) {
       false
-    } else if (!isValidUtf8(bytes)) {
+    } else if (!isValidUtf8(bytes, allowIncompleteTrailingSequence)) {
       false
     } else {
       val suspiciousControlBytes = bytes.count { rawByte =>
@@ -409,8 +417,9 @@ object PrivySparkApp {
     }
   }
 
-  private def isValidUtf8(bytes: Array[Byte]): Boolean = {
-    val trailingTrimBytes = incompleteTrailingUtf8Bytes(bytes)
+  private def isValidUtf8(bytes: Array[Byte], allowIncompleteTrailingSequence: Boolean): Boolean = {
+    val trailingTrimBytes =
+      if (allowIncompleteTrailingSequence) incompleteTrailingUtf8Bytes(bytes) else 0
     val candidateBytes =
       if (trailingTrimBytes <= 0) bytes
       else java.util.Arrays.copyOf(bytes, bytes.length - trailingTrimBytes)
@@ -445,7 +454,11 @@ object PrivySparkApp {
         expectedUtf8SequenceLength(bytes(index) & 0xff) match {
           case Some(expectedLength) =>
             val observedLength = continuationBytes + 1
-            if (observedLength < expectedLength) observedLength else 0
+            if (observedLength < expectedLength && isValidIncompleteUtf8Prefix(bytes, index, observedLength, expectedLength)) {
+              observedLength
+            } else {
+              0
+            }
           case None =>
             0
         }
@@ -471,6 +484,53 @@ object PrivySparkApp {
     }
   }
 
+  private def isValidIncompleteUtf8Prefix(
+    bytes: Array[Byte],
+    leadIndex: Int,
+    observedLength: Int,
+    expectedLength: Int
+  ): Boolean = {
+    val leadByte = bytes(leadIndex) & 0xff
+
+    if (observedLength <= 0 || observedLength >= expectedLength) {
+      false
+    } else if (observedLength == 1) {
+      true
+    } else if (!isValidUtf8FirstContinuation(leadByte, bytes(leadIndex + 1) & 0xff)) {
+      false
+    } else {
+      var offset = 2
+      var valid = true
+
+      while (offset < observedLength && valid) {
+        valid = isUtf8ContinuationByte(bytes(leadIndex + offset))
+        offset += 1
+      }
+
+      valid
+    }
+  }
+
+  private def isValidUtf8FirstContinuation(leadByte: Int, continuationByte: Int): Boolean = {
+    if (leadByte >= 0xC2 && leadByte <= 0xDF) {
+      continuationByte >= 0x80 && continuationByte <= 0xBF
+    } else if (leadByte == 0xE0) {
+      continuationByte >= 0xA0 && continuationByte <= 0xBF
+    } else if ((leadByte >= 0xE1 && leadByte <= 0xEC) || (leadByte >= 0xEE && leadByte <= 0xEF)) {
+      continuationByte >= 0x80 && continuationByte <= 0xBF
+    } else if (leadByte == 0xED) {
+      continuationByte >= 0x80 && continuationByte <= 0x9F
+    } else if (leadByte == 0xF0) {
+      continuationByte >= 0x90 && continuationByte <= 0xBF
+    } else if (leadByte >= 0xF1 && leadByte <= 0xF3) {
+      continuationByte >= 0x80 && continuationByte <= 0xBF
+    } else if (leadByte == 0xF4) {
+      continuationByte >= 0x80 && continuationByte <= 0x8F
+    } else {
+      false
+    }
+  }
+
   private def detectPhysicalFormat(
     conf: org.apache.hadoop.conf.Configuration,
     filePath: String
@@ -479,8 +539,9 @@ object PrivySparkApp {
     if (extensionFormat.isDefined) {
       extensionFormat
     } else {
-      val probeBytes = readProbeBytes(conf, filePath, TextProbeByteLimit)
-      inferMagicByteFormat(probeBytes).orElse(inferTextFormat(probeBytes))
+      val probeSample = readProbeBytes(conf, filePath, TextProbeByteLimit)
+      inferMagicByteFormat(probeSample.bytes)
+        .orElse(inferTextFormat(probeSample.bytes, allowIncompleteTrailingSequence = probeSample.truncated))
     }
   }
 
@@ -1059,14 +1120,15 @@ object PrivySparkApp {
 
                             val probeBytes = probeBuffer.toByteArray
                             val probeComplete = probeBuffer.size() >= TextProbeByteLimit
+                            val probeTruncated = probeComplete && bytesRead > bytesForProbe
                             val format = inferMagicByteFormat(probeBytes).orElse {
-                              if (probeComplete) inferTextFormat(probeBytes) else None
+                              if (probeTruncated) inferTextFormat(probeBytes, allowIncompleteTrailingSequence = true) else None
                             }
 
                             format match {
                               case Some(value) =>
                                 materializeDetectedEntry(value, bytesForProbe, bytesRead)
-                              case None if probeComplete =>
+                              case None if probeTruncated =>
                                 probeRejected = true
                               case None =>
                                 ()
@@ -1077,7 +1139,8 @@ object PrivySparkApp {
                       }
 
                       if (archiveEntryError.isEmpty && detectedFormat.isEmpty && !probeRejected) {
-                        inferMagicByteFormat(probeBuffer.toByteArray).orElse(inferTextFormat(probeBuffer.toByteArray)) match {
+                        inferMagicByteFormat(probeBuffer.toByteArray)
+                          .orElse(inferTextFormat(probeBuffer.toByteArray, allowIncompleteTrailingSequence = false)) match {
                           case Some(format) =>
                             materializeDetectedEntry(format, bytesForProbe = probeBuffer.size(), currentChunkSize = probeBuffer.size())
                           case None =>
