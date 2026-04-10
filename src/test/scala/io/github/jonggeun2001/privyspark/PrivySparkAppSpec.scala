@@ -2254,6 +2254,27 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules treats unsupported extension unicode text as text when the probe ends mid-character") {
+    val inputDir = Files.createTempDirectory("privyspark-text-unicode-probe-fallback-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      val probeBoundaryPrefix = "a" * 511
+      writeText(inputDir.resolve("notes.log"),
+        probeBoundaryPrefix + "가\n" +
+          "alice@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("notes.log", "value", 1L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("writeReports stores scan results and errors in csv output paths") {
     val outputDir = Files.createTempDirectory("privyspark-write-reports-")
 

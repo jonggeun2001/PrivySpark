@@ -414,13 +414,28 @@ object PrivySparkApp {
       .newDecoder()
       .onMalformedInput(CodingErrorAction.REPORT)
       .onUnmappableCharacter(CodingErrorAction.REPORT)
+    val maxTrailingTrimBytes = math.min(4, bytes.length)
 
-    try {
-      decoder.decode(ByteBuffer.wrap(bytes))
-      true
-    } catch {
-      case _: CharacterCodingException => false
+    @tailrec
+    def decodeWithTrim(trimmedBytes: Int): Boolean = {
+      val candidateLength = bytes.length - trimmedBytes
+      if (candidateLength < 0) {
+        false
+      } else {
+        try {
+          decoder.reset()
+          decoder.decode(ByteBuffer.wrap(bytes, 0, candidateLength))
+          true
+        } catch {
+          case _: CharacterCodingException if trimmedBytes < maxTrailingTrimBytes =>
+            decodeWithTrim(trimmedBytes + 1)
+          case _: CharacterCodingException =>
+            false
+        }
+      }
     }
+
+    decodeWithTrim(trimmedBytes = 0)
   }
 
   private def detectPhysicalFormat(
@@ -975,37 +990,95 @@ object PrivySparkApp {
                         archiveErrors ++= childErrors
                     }
                   case None =>
-                    ensureArchiveEntryParent(fs, targetPath) match {
-                      case Left(errorMessage) =>
-                        archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
-                      case Right(_) =>
-                        val outputStream = fs.create(targetPath, true)
-                        try {
-                          val buffer = new Array[Byte](8192)
-                          var bytesRead = zipInputStream.read(buffer)
-                          while (bytesRead >= 0) {
-                            if (bytesRead > 0) {
-                              outputStream.write(buffer, 0, bytesRead)
-                            }
-                            bytesRead = zipInputStream.read(buffer)
-                          }
-                        } finally {
-                          outputStream.close()
-                        }
+                    val probeBuffer = new java.io.ByteArrayOutputStream()
+                    val buffer = new Array[Byte](8192)
+                    var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
+                    var detectedFormat: Option[String] = None
+                    var archiveEntryError: Option[String] = None
+                    var probeRejected = false
+                    var bytesRead = zipInputStream.read(buffer)
 
-                        val (childEntries, childErrors) = expandPhysicalSource(
-                          conf,
-                          datasetPath,
-                          timestamp,
-                          targetPath.toString,
-                          childLogicalIdentifier,
-                          logicalIdentifier,
-                          stagingPaths,
-                          archiveExpansionDepth = archiveExpansionDepth,
-                          forceDisableDirectoryIdentifier = true
-                        )
-                        extractedEntries ++= childEntries
-                        archiveErrors ++= childErrors
+                    def materializeDetectedEntry(format: String, bytesForProbe: Int, currentChunkSize: Int): Unit = {
+                      ensureArchiveEntryParent(fs, targetPath) match {
+                        case Left(errorMessage) =>
+                          archiveEntryError = Some(errorMessage)
+                        case Right(_) =>
+                          outputStream = fs.create(targetPath, true)
+                          outputStream.write(probeBuffer.toByteArray)
+                          if (currentChunkSize > bytesForProbe) {
+                            outputStream.write(buffer, bytesForProbe, currentChunkSize - bytesForProbe)
+                          }
+                          detectedFormat = Some(format)
+                      }
+                    }
+
+                    try {
+                      while (bytesRead >= 0 && archiveEntryError.isEmpty) {
+                        if (bytesRead > 0) {
+                          if (detectedFormat.isDefined) {
+                            outputStream.write(buffer, 0, bytesRead)
+                          } else if (!probeRejected) {
+                            val remainingProbeSpace = TextProbeByteLimit - probeBuffer.size()
+                            val bytesForProbe = math.min(bytesRead, math.max(0, remainingProbeSpace))
+                            if (bytesForProbe > 0) {
+                              probeBuffer.write(buffer, 0, bytesForProbe)
+                            }
+
+                            val probeBytes = probeBuffer.toByteArray
+                            val probeComplete = probeBuffer.size() >= TextProbeByteLimit
+                            val format = inferMagicByteFormat(probeBytes).orElse {
+                              if (probeComplete) inferTextFormat(probeBytes) else None
+                            }
+
+                            format match {
+                              case Some(value) =>
+                                materializeDetectedEntry(value, bytesForProbe, bytesRead)
+                              case None if probeComplete =>
+                                probeRejected = true
+                              case None =>
+                                ()
+                            }
+                          }
+                        }
+                        bytesRead = zipInputStream.read(buffer)
+                      }
+
+                      if (archiveEntryError.isEmpty && detectedFormat.isEmpty && !probeRejected) {
+                        inferMagicByteFormat(probeBuffer.toByteArray).orElse(inferTextFormat(probeBuffer.toByteArray)) match {
+                          case Some(format) =>
+                            materializeDetectedEntry(format, bytesForProbe = probeBuffer.size(), currentChunkSize = probeBuffer.size())
+                          case None =>
+                            probeRejected = true
+                        }
+                      }
+
+                      archiveEntryError match {
+                        case Some(errorMessage) =>
+                          archiveErrors += ScanError(datasetPath, timestamp, childLogicalIdentifier, errorMessage)
+                        case None =>
+                          detectedFormat match {
+                            case Some(format) =>
+                              extractedEntries += ScanFileEntry(
+                                sourceKey = targetPath.toString,
+                                physicalPath = targetPath.toString,
+                                directoryPath = logicalIdentifier,
+                                format = format,
+                                logicalIdentifier = childLogicalIdentifier,
+                                allowDirectoryIdentifier = false
+                              )
+                            case None =>
+                              archiveErrors += ScanError(
+                                datasetPath,
+                                timestamp,
+                                childLogicalIdentifier,
+                                s"Unsupported file format: $childLogicalIdentifier"
+                              )
+                          }
+                      }
+                    } finally {
+                      if (outputStream != null) {
+                        outputStream.close()
+                      }
                     }
                 }
               } catch {
