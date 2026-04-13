@@ -3173,28 +3173,26 @@ object PrivySparkApp {
     results: Seq[ScanResult],
     errors: Seq[ScanError]
   ): Unit = {
-    writeProgressLines(
-      conf,
-      progressRun.completionsPath,
-      scope,
-      Seq(progressCompletionToJson(scope, identifier, results.size, errors.size))
-    )
     if (results.nonEmpty) {
       writeProgressLines(conf, progressRun.resultsPath, scope, results.map(scanResultToJson))
     }
     if (errors.nonEmpty) {
       writeProgressLines(conf, progressRun.errorsPath, scope, errors.map(scanErrorToJson))
     }
-    if (results.nonEmpty || errors.nonEmpty) {
-      logDebug(
-        "progress_write_complete",
-        "run_id" -> progressRun.runId,
-        "scope" -> scope,
-        "identifier" -> identifier,
-        "results" -> results.size,
-        "errors" -> errors.size
-      )
-    }
+    writeProgressLines(
+      conf,
+      progressRun.completionsPath,
+      scope,
+      Seq(progressCompletionToJson(scope, identifier, results.size, errors.size))
+    )
+    logDebug(
+      "progress_write_complete",
+      "run_id" -> progressRun.runId,
+      "scope" -> scope,
+      "identifier" -> identifier,
+      "results" -> results.size,
+      "errors" -> errors.size
+    )
   }
 
   private def readProgressRecords(
