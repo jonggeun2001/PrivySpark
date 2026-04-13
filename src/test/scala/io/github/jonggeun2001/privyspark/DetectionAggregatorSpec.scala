@@ -114,6 +114,31 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] detection_aggregation_complete scope=dataset.*""")))
   }
 
+  test("suppresses dataset fallback logs when driver log level is off") {
+    val df = Seq(
+      ("alpha@example.com", "010-1234-5678"),
+      ("beta@example.com", "010-9876-5432")
+    ).toDF("c1", "c2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val logs = captureStderr {
+      withDriverLogLevel("off") {
+        DetectionAggregator.aggregate(
+          df,
+          rules,
+          AggregationConfig(maxExpressionsPerAgg = 2, legacyFallbackThreshold = 1)
+        )
+      }
+    }
+
+    assert(!logs.contains("detection_aggregation_fallback"))
+    assert(!logs.contains("[PrivySpark][DEBUG]"))
+  }
+
   test("filters dataset metrics by column hints before aggregation") {
     val df = Seq(
       ("alpha@example.com", "010-1234-5678", "alpha@example.com"),
@@ -404,9 +429,14 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   private def withDebugLoggingEnabled[A](block: => A): A = {
+    withDriverLogLevel("debug")(block)
+  }
+
+  private def withDriverLogLevel[A](level: String)(block: => A): A = {
     val previous = sys.props.get("privyspark.debug")
     DetectionAggregator.resetDebugCache()
-    System.setProperty("privyspark.debug", "true")
+    DriverLogger.resetCache()
+    System.setProperty("privyspark.debug", level)
     try {
       block
     } finally {
@@ -415,6 +445,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
         case None => System.clearProperty("privyspark.debug")
       }
       DetectionAggregator.resetDebugCache()
+      DriverLogger.resetCache()
     }
   }
 

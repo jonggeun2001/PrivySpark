@@ -25,6 +25,7 @@ import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.util.control.ControlThrowable
 import scala.util.control.NonFatal
 
 object PrivySparkApp {
@@ -150,8 +151,6 @@ object PrivySparkApp {
   private val DefaultGroupParallelism = 4
   private val FileParallelismConfKey = "spark.privyspark.fileParallelism"
   private val DefaultFileParallelism = 3
-  private val DebugPropertyName = "privyspark.debug"
-  private val DebugEnvName = "PRIVYSPARK_DEBUG"
   private val RetriableFileReadErrorSnippets = Seq(
     "path does not exist",
     "file does not exist",
@@ -160,51 +159,21 @@ object PrivySparkApp {
     "failed_read_file",
     "encountered error while reading file"
   )
-  @volatile private var debugLoggingEnabledCache: java.lang.Boolean = _
 
-  private def logDriver(message: String): Unit = {
-    System.err.println(s"[PrivySpark] $message")
+  private def logInfo(event: String, fields: (String, Any)*): Unit = {
+    DriverLogger.info(event, fields: _*)
   }
 
-  private def isDebugLoggingEnabled: Boolean = {
-    val cached = debugLoggingEnabledCache
-    if (cached != null) {
-      cached.booleanValue()
-    } else {
-      val rawValue = sys.props.get(DebugPropertyName).orElse(sys.env.get(DebugEnvName))
-      val enabled = rawValue.exists { value =>
-        value.trim.toLowerCase match {
-          case "1" | "true" | "yes" | "on" => true
-          case _ => false
-        }
-      }
-      debugLoggingEnabledCache = java.lang.Boolean.valueOf(enabled)
-      enabled
-    }
+  private def logWarn(event: String, fields: (String, Any)*): Unit = {
+    DriverLogger.warn(event, fields: _*)
   }
 
   private[privyspark] def resetDebugCache(): Unit = {
-    debugLoggingEnabledCache = null
+    DriverLogger.resetCache()
   }
 
-  private def currentDebugTimestamp(): String = Instant.now().toString
-
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
-    if (!isDebugLoggingEnabled) {
-      return
-    }
-
-    val suffix = if (fields.isEmpty) {
-      ""
-    } else {
-      fields.map {
-        case (key, value) =>
-          val renderedValue = if (value == null) "null" else value.toString
-          s"$key=$renderedValue"
-      }.mkString(" ", " ", "")
-    }
-
-    System.err.println(s"[PrivySpark][DEBUG][${currentDebugTimestamp()}] $event$suffix")
+    DriverLogger.debug(event, fields: _*)
   }
 
   private def elapsedMillis(startNanos: Long): Long = {
@@ -339,11 +308,15 @@ object PrivySparkApp {
       val stagingPath = new Path(path)
       val fs = stagingPath.getFileSystem(conf)
       if (fs.exists(stagingPath) && !fs.delete(stagingPath, true)) {
-        logDriver(s"staging_cleanup_failed path=$path reason=delete returned false")
+        logWarn("staging_cleanup_failed", "path" -> path, "reason" -> "delete returned false")
       }
     } catch {
       case NonFatal(e) =>
-        logDriver(s"staging_cleanup_failed path=$path reason=${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}")
+        logWarn(
+          "staging_cleanup_failed",
+          "path" -> path,
+          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+        )
     }
   }
 
@@ -737,8 +710,13 @@ object PrivySparkApp {
         case NonFatal(error) if attemptNumber < maxAttempts && isRetriableFileReadFailure(error) =>
           val nextAttempt = attemptNumber + 1
           val reason = formatThrowableSummary(error)
-          logDriver(
-            s"file_read_retry operation=$operationName attempt=$nextAttempt/$maxAttempts files=${filePaths.size} reason=$reason"
+          logWarn(
+            "file_read_retry",
+            "operation" -> operationName,
+            "attempt" -> nextAttempt,
+            "max_attempts" -> maxAttempts,
+            "files" -> filePaths.size,
+            "reason" -> reason
           )
           logDebug(
             "file_read_retry",
@@ -806,6 +784,10 @@ object PrivySparkApp {
     )
   }
 
+  private[privyspark] def renderConfiguredParallelism(configured: Option[Int]): String = {
+    configured.map(_.toString).getOrElse("spark_conf_or_default")
+  }
+
   private[privyspark] def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
     if (tasks.isEmpty) {
       Seq.empty
@@ -823,55 +805,94 @@ object PrivySparkApp {
   }
 
   def main(args: Array[String]): Unit = {
+    runMain(args)
+  }
+
+  private[privyspark] def runMain(
+    args: Array[String],
+    createSparkSession: () => SparkSession = () => SparkSession.builder().appName("PrivySpark").getOrCreate(),
+    exitWith: Int => Unit = code => System.exit(code)
+  ): Unit = {
     val normalizedArgs = if (args.headOption.contains("scan")) args.drop(1) else args
 
-    val config = Cli.parse(normalizedArgs).getOrElse {
-      System.exit(2)
-      throw new IllegalStateException("unreachable")
+    val parseResult = Cli.parseWithErrors(normalizedArgs)
+    val config = parseResult.config.getOrElse {
+      DriverLogger.emitAlways(
+        DriverLogLevel.Error,
+        "cli_argument_invalid",
+        "errors" -> parseResult.errors.mkString(" | "),
+        "args" -> normalizedArgs.mkString(" ")
+      )
+      exitWith(2)
+      return
     }
 
     if (!PathValidator.isAbsolute(config.inputPath)) {
-      System.err.println(s"--path must be an absolute path or URI: ${config.inputPath}")
-      System.exit(2)
+      DriverLogger.emitAlways(
+        DriverLogLevel.Error,
+        "cli_argument_invalid",
+        "argument" -> "--path",
+        "reason" -> "must_be_absolute_path_or_uri",
+        "value" -> config.inputPath
+      )
+      exitWith(2)
+      return
     }
 
     if (!PathValidator.isAbsolute(config.outputPath)) {
-      System.err.println(s"--output must be an absolute path or URI: ${config.outputPath}")
-      System.exit(2)
+      DriverLogger.emitAlways(
+        DriverLogLevel.Error,
+        "cli_argument_invalid",
+        "argument" -> "--output",
+        "reason" -> "must_be_absolute_path_or_uri",
+        "value" -> config.outputPath
+      )
+      exitWith(2)
+      return
     }
 
-    val spark = SparkSession.builder().appName("PrivySpark").getOrCreate()
-    spark.sparkContext.setLogLevel("WARN")
+    var spark: Option[SparkSession] = None
 
     try {
-      runScan(spark, config)
+      val session = createSparkSession()
+      spark = Some(session)
+      session.sparkContext.setLogLevel("WARN")
+      runScan(session, config)
     } catch {
+      case control: ControlThrowable =>
+        throw control
       case NonFatal(e) =>
-        System.err.println(s"[PrivySpark] failed: ${e.getMessage}")
-        System.exit(1)
+        DriverLogger.emitAlways(
+          DriverLogLevel.Error,
+          "scan_failed",
+          "exception" -> e.getClass.getSimpleName,
+          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+        )
+        exitWith(1)
     } finally {
-      spark.stop()
+      spark.foreach(_.stop())
     }
   }
 
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
-    logDebug(
-      "scan_run_start",
+    val (preScanParallelism, groupParallelism, fileParallelism) = resolveCliParallelism(config)
+    logInfo(
+      "scan_start",
       "input_path" -> config.inputPath,
       "output_path" -> config.outputPath,
       "ruleset" -> config.ruleset,
       "sample_ratio" -> config.sampleRatio,
-      "pre_scan_parallelism" -> config.preScanParallelism.getOrElse("spark_conf_or_default"),
-      "group_parallelism" -> config.groupParallelism.getOrElse("spark_conf_or_default"),
-      "file_parallelism" -> config.fileParallelism.getOrElse("spark_conf_or_default")
+      "configured_pre_scan_parallelism" -> renderConfiguredParallelism(config.preScanParallelism),
+      "configured_group_parallelism" -> renderConfiguredParallelism(config.groupParallelism),
+      "configured_file_parallelism" -> renderConfiguredParallelism(config.fileParallelism),
+      "driver_log_level" -> DriverLogger.currentLogLevel.label.toLowerCase
     )
-    val (preScanParallelism, groupParallelism, fileParallelism) = resolveCliParallelism(config)
     val rules = RulesetLoader.load(config.ruleset)
     logDebug("ruleset_loaded", "rules" -> rules.size, "ruleset" -> config.ruleset)
     val timestamp = Instant.now().toString
     val scanPlan = scanDirectoryStructure(spark, config.inputPath, config.inputPath, timestamp, preScanParallelism)
     try {
-      logDebug(
+      logInfo(
         "scan_plan_ready",
         "groups" -> scanPlan.groups.size,
         "plan_errors" -> scanPlan.errors.size,
@@ -900,6 +921,15 @@ object PrivySparkApp {
       logDebug("report_write_start", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
       writeReports(spark, config.outputPath, results.toSeq, errors.toSeq)
       logDebug("report_write_complete", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
+      logInfo(
+        "scan_complete",
+        "scanned_files" -> scanPlan.totalFiles,
+        "grouped_dirs" -> scanPlan.directoryCount,
+        "groups" -> scanPlan.groups.size,
+        "detections" -> results.size,
+        "errors" -> errors.size,
+        "output_root" -> config.outputPath
+      )
 
       println(
         s"[PrivySpark] scanned_files=${scanPlan.totalFiles}, grouped_dirs=${scanPlan.directoryCount}, groups=${scanPlan.groups.size}, detections=${results.size}, errors=${errors.size}"
@@ -2174,8 +2204,13 @@ object PrivySparkApp {
       (results, Seq.empty)
     } catch {
       case NonFatal(e) =>
-        logDriver(
-          s"group_scan_fallback directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} reason=${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+        logWarn(
+          "group_scan_fallback",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "files" -> group.filePaths.size,
+          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
         )
         val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
         logDebug(
@@ -2187,8 +2222,13 @@ object PrivySparkApp {
           "reason" -> errorMessage
         )
         if (group.schemaSampled) {
-          logDriver(
-            s"group_scan_fallback_execute directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} mode=schema_resplit"
+          logWarn(
+            "group_scan_fallback_execute",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "schema" -> group.schemaSignature,
+            "files" -> group.filePaths.size,
+            "mode" -> "schema_resplit"
           )
           val exactSplitResult = rescanSampledGroupWithExactSplit(
             spark,
@@ -2236,8 +2276,13 @@ object PrivySparkApp {
     timestamp: String,
     fileParallelism: Int = -1
   ): (Seq[ScanResult], Seq[ScanError]) = {
-    logDriver(
-      s"group_scan_fallback_execute directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} files=${group.filePaths.size} mode=file_scan"
+    logWarn(
+      "group_scan_fallback_execute",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "schema" -> group.schemaSignature,
+      "files" -> group.filePaths.size,
+      "mode" -> "file_scan"
     )
     val parallelism = if (fileParallelism > 0) {
       resolveParallelism(group.filePaths.size, fileParallelism)
@@ -2322,8 +2367,13 @@ object PrivySparkApp {
       )
     } else {
       if (group.useDirectoryIdentifier && fallbackErrors.nonEmpty) {
-        logDriver(
-          s"group_scan_partial_results directory=${group.directoryPath} format=${group.format} schema=${group.schemaSignature} failed_files=${fallbackErrors.size} mode=file_identifier_preserved"
+        logWarn(
+          "group_scan_partial_results",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "failed_files" -> fallbackErrors.size,
+          "mode" -> "file_identifier_preserved"
         )
         logDebug(
           "group_scan_partial_results",
