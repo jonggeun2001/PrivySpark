@@ -55,7 +55,7 @@ driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...
 ## 샘플 데이터셋
 - 재현 가능한 입력 케이스 번들은 [samples/input-cases/README.md](samples/input-cases/README.md)에 있습니다.
 - `./gradlew generateSampleDatasets`로 `csv/json/jsonl/ndjson/parquet/orc/avro/xlsx/zip/jar`, extensionless magic-byte, text fallback, zero-byte skip, unsupported/error archive 케이스를 다시 생성할 수 있습니다.
-- `./gradlew packageSampleDatasets`는 동일한 번들을 `build/` 아래 staging 경로에서 생성해 `build/distributions/privyspark-sample-datasets.zip`으로 묶고, GitHub Release에서는 `privyspark-<tag>-sample-datasets.zip` 자산으로 함께 배포합니다.
+- `./gradlew packageSampleDatasets`는 체크인된 `samples/input-cases` 번들을 그대로 `build/distributions/privyspark-sample-datasets.zip`으로 묶고, GitHub Release에서는 `privyspark-<tag>-sample-datasets.zip` 자산으로 함께 배포합니다.
 - 케이스별 기대 결과/오류는 `samples/input-cases/scenario-manifest.tsv`에 정리됩니다.
 
 ## 문서 맵

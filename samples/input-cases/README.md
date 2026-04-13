@@ -9,7 +9,7 @@
   - `sample-rules.yaml`: 샘플 검증용 최소 ruleset
   - `scenario-manifest.tsv`: 케이스별 기대 결과/오류 manifest
   - `files/`: 실제 스캔 대상 파일/디렉토리
-  - `build/distributions/privyspark-sample-datasets.zip`: `build/` 아래 staging 결과를 묶은 release 배포용 zip
+  - `build/distributions/privyspark-sample-datasets.zip`: 현재 `samples/input-cases` 트리를 그대로 묶은 release 배포용 zip
 
 `files/` 아래 binary 파일은 생성기로 다시 만들어지는 산출물이므로 수동 편집하지 않습니다.
 
