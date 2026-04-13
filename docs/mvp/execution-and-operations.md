@@ -42,6 +42,7 @@
 - batch-capable group scan은 그룹 완료 시점에 `_progress/<run_id>/results/*.jsonl` 또는 `errors/*.jsonl`을 씁니다.
 - file fallback/direct file scan은 최종 결과가 file identifier 기준일 때 파일 완료 시점마다 즉시 기록합니다.
 - directory identifier로 다시 합쳐야 하는 file fallback은 중간에 file-level 결과를 노출하지 않고, 그룹 집계가 끝난 뒤 기록합니다. 이유는 임시 결과와 최종 결과의 `file_identifier` 의미를 일치시키기 위해서입니다.
+- 탐지/오류가 없는 clean completion도 `meta/completions/*.jsonl` marker를 남깁니다. 결과 shard가 비어도 처리 완료 여부를 관측할 수 있어야 하기 때문입니다.
 - `_progress`는 최종 소비 경로가 아닙니다. 운영자가 장시간 스캔의 중간 상태를 확인하는 관측용 경로입니다.
 - 정상 종료 시 `_progress/<run_id>`를 읽어 최종 Parquet/CSV 리포트를 생성하고 곧바로 삭제합니다.
 - 비정상 종료 시 `_progress`가 남을 수 있으며, 다음 실행 시작 시 전체 `_progress`를 정리합니다.

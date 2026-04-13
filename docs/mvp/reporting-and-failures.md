@@ -35,6 +35,7 @@
 - CSV: `<output>/csv/scan_errors`
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
 - 실행 중 임시 progress는 `<output>/_progress/<run_id>/errors/*.jsonl`에 기록될 수 있지만, 정상 종료 시 최종 리포트로 merge된 뒤 삭제됩니다.
+- 탐지/오류가 없는 clean completion은 `<output>/_progress/<run_id>/meta/completions/*.jsonl` marker로만 남고, 최종 리포트에는 별도 row를 만들지 않습니다.
 
 ## 오류 처리 원칙
 - 실패 파일은 오류 리포트에 남기고 나머지 처리를 계속합니다.

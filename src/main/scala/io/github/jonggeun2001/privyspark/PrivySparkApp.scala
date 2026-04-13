@@ -86,7 +86,8 @@ object PrivySparkApp {
     runPath: String,
     resultsPath: String,
     errorsPath: String,
-    metaPath: String
+    metaPath: String,
+    completionsPath: String
   )
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
@@ -922,6 +923,7 @@ object PrivySparkApp {
           spark.sparkContext.hadoopConfiguration,
           progressRun,
           "plan",
+          config.inputPath,
           Seq.empty,
           scanPlan.errors
         )
@@ -2221,14 +2223,15 @@ object PrivySparkApp {
 
     try {
       val results = scanGroupBatch(spark, datasetPath, group, rules, sampleRatio, timestamp, fileSampleRatio)
-      progressRun.foreach { run =>
-        persistProgressRecords(
-          spark.sparkContext.hadoopConfiguration,
-          run,
-          "group",
-          results,
-          Seq.empty
-        )
+          progressRun.foreach { run =>
+            persistProgressRecords(
+              spark.sparkContext.hadoopConfiguration,
+              run,
+              "group",
+              group.directoryPath,
+              results,
+              Seq.empty
+            )
       }
       logDebug(
         "group_scan_complete",
@@ -2375,13 +2378,14 @@ object PrivySparkApp {
             error => {
               if (!group.useDirectoryIdentifier) {
                 progressRun.foreach { run =>
-                  persistProgressRecords(
-                    spark.sparkContext.hadoopConfiguration,
-                    run,
-                    "file",
-                    Seq.empty,
-                    Seq(error)
-                  )
+        persistProgressRecords(
+          spark.sparkContext.hadoopConfiguration,
+          run,
+          "file",
+          error.file_identifier,
+          Seq.empty,
+          Seq(error)
+        )
                 }
               }
               Left(error)
@@ -2400,6 +2404,7 @@ object PrivySparkApp {
                     spark.sparkContext.hadoopConfiguration,
                     run,
                     "file",
+                    fileMetrics.fileIdentifier,
                     fileResults,
                     Seq.empty
                   )
@@ -2486,6 +2491,7 @@ object PrivySparkApp {
           spark.sparkContext.hadoopConfiguration,
           run,
           "group",
+          group.directoryPath,
           fallbackResults,
           fallbackErrors.toSeq
         )
@@ -3001,6 +3007,7 @@ object PrivySparkApp {
           spark.sparkContext.hadoopConfiguration,
           run,
           "schema-split",
+          group.directoryPath,
           Seq.empty,
           splitErrors
         )
@@ -3113,7 +3120,8 @@ object PrivySparkApp {
     val resultsPath = s"$runPath/results"
     val errorsPath = s"$runPath/errors"
     val metaPath = s"$runPath/meta"
-    Seq(runPath, resultsPath, errorsPath, metaPath).foreach(path => fs.mkdirs(new Path(path)))
+    val completionsPath = s"$metaPath/completions"
+    Seq(runPath, resultsPath, errorsPath, metaPath, completionsPath).foreach(path => fs.mkdirs(new Path(path)))
 
     writeJsonFile(
       conf,
@@ -3121,7 +3129,7 @@ object PrivySparkApp {
       s"""{"run_id":${jsonString(runId)},"dataset_path":${jsonString(datasetPath)},"output_root":${jsonString(outputRoot)},"scan_timestamp":${jsonString(timestamp)},"state":"RUNNING"}"""
     )
 
-    val progressRun = ProgressRun(runId, rootPath, runPath, resultsPath, errorsPath, metaPath)
+    val progressRun = ProgressRun(runId, rootPath, runPath, resultsPath, errorsPath, metaPath, completionsPath)
     logDebug(
       "progress_run_prepared",
       "run_id" -> progressRun.runId,
@@ -3161,9 +3169,16 @@ object PrivySparkApp {
     conf: org.apache.hadoop.conf.Configuration,
     progressRun: ProgressRun,
     scope: String,
+    identifier: String,
     results: Seq[ScanResult],
     errors: Seq[ScanError]
   ): Unit = {
+    writeProgressLines(
+      conf,
+      progressRun.completionsPath,
+      scope,
+      Seq(progressCompletionToJson(scope, identifier, results.size, errors.size))
+    )
     if (results.nonEmpty) {
       writeProgressLines(conf, progressRun.resultsPath, scope, results.map(scanResultToJson))
     }
@@ -3175,6 +3190,7 @@ object PrivySparkApp {
         "progress_write_complete",
         "run_id" -> progressRun.runId,
         "scope" -> scope,
+        "identifier" -> identifier,
         "results" -> results.size,
         "errors" -> errors.size
       )
@@ -3255,6 +3271,9 @@ object PrivySparkApp {
 
   private def scanErrorToJson(error: ScanError): String =
     s"""{"dataset_path":${jsonString(error.dataset_path)},"scan_timestamp":${jsonString(error.scan_timestamp)},"file_identifier":${jsonString(error.file_identifier)},"error_message":${jsonString(error.error_message)}}"""
+
+  private def progressCompletionToJson(scope: String, identifier: String, resultCount: Int, errorCount: Int): String =
+    s"""{"scope":${jsonString(scope)},"identifier":${jsonString(identifier)},"result_count":$resultCount,"error_count":$errorCount,"state":"completed"}"""
 
   private def jsonString(value: String): String = "\"" + escapeJson(Option(value).getOrElse("")) + "\""
 

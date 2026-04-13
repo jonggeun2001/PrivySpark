@@ -2803,6 +2803,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(!Files.exists(staleProgressDir.resolve("stale.jsonl")))
       assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/meta/run.json")))
+      assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/meta/completions")))
       assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/results")))
       assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/errors")))
     } finally {
@@ -2969,6 +2970,52 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val (results, errors) = Await.result(scanFuture, scala.concurrent.duration.Duration("60s"))
       assert(results.nonEmpty)
       assert(errors.nonEmpty)
+    } finally {
+      deleteRecursively(inputDir)
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("scanGroup writes completion marker even when there are no detections or errors") {
+    val inputDir = Files.createTempDirectory("privyspark-progress-clean-group-input-")
+    val outputDir = Files.createTempDirectory("privyspark-progress-clean-group-output-")
+
+    try {
+      val file = inputDir.resolve("part-0001.csv")
+      writeText(file,
+        "name,city\n" +
+          "alice,seoul\n")
+
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        inputDir.toString,
+        "2026-04-13T00:00:00Z"
+      )
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|city",
+        filePaths = Seq(file.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-04-13T00:00:00Z",
+        progressRun = Some(progressRun)
+      )
+
+      assert(results.isEmpty)
+      assert(errors.isEmpty)
+      assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 0L)
+      assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/errors"), ".jsonl") == 0L)
+      assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/meta/completions"), ".jsonl") == 1L)
     } finally {
       deleteRecursively(inputDir)
       deleteRecursively(outputDir)
