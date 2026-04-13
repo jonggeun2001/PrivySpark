@@ -43,6 +43,7 @@ bin/privyspark-submit \
   --output /abs/output \
   --ruleset default \
   --sample-ratio 0.2 \
+  --file-sample-ratio 0.1 \
   --pre-scan-parallelism 6 \
   --group-parallelism 8 \
   --file-parallelism 4
@@ -50,7 +51,9 @@ bin/privyspark-submit \
 
 `PRIVYSPARK_DEBUG` / `-Dprivyspark.debug`는 driver 로그 레벨 설정으로 동작합니다. 지원값은 `error`, `warn`, `info`, `debug`이며 `off`로 driver 로그를 끌 수 있습니다. 기본값은 `warn`이고, 하위호환으로 `true`는 `debug`, `false`는 `warn`으로 해석합니다.
 
-driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...` 형식으로 통일됩니다. field 값에 공백, 개행, `=` 같은 문자가 있으면 quote/escape해 구조를 유지합니다. `info` 레벨에서는 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 실행 lifecycle이 남고, `scan_start`의 병렬도 필드는 `configured_*` 이름으로 요청값 또는 `spark_conf_or_default` 상태를 기록합니다. `debug` 레벨에서는 `scanDirectoryStructure`의 파일 발견, pre-scan 실행, pre-scan 후처리, 초기 그룹화 단계에 대한 duration/progress 로그까지 함께 남습니다.
+driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...` 형식으로 통일됩니다. field 값에 공백, 개행, `=` 같은 문자가 있으면 quote/escape해 구조를 유지합니다. `info` 레벨에서는 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 실행 lifecycle이 남고, `scan_start`의 병렬도 필드는 `configured_*` 이름으로 요청값 또는 `spark_conf_or_default` 상태를 기록합니다. `debug` 레벨에서는 `scanDirectoryStructure`의 파일 발견, pre-scan 실행, pre-scan 후처리, 초기 그룹화 단계에 대한 duration/progress 로그까지 함께 남습니다. `--file-sample-ratio`가 적용된 group batch scan에서 `--sample-ratio < 1.0`이 함께 들어오면 row sampling은 무시되고 `group_scan_row_sampling_ignored` 경고가 driver 로그에 남습니다.
+
+`--file-sample-ratio`는 group batch scan에서 파일을 균등 무작위로 추출합니다. 이 옵션을 추가한 이유는 작은 파일이 많은 입력에서 task/I/O를 직접 줄이기 위해서이기도 하지만, 더 중요한 배경은 특정 데이터가 한 파일에 몰릴 수 있다는 운영 우려입니다. 파일 크기 가중치 기반 샘플링은 큰 파일을 더 자주 선택하므로, 데이터 집중이 특정 파일에 몰린 경우 그 분포를 그대로 강화할 수 있습니다. 반대로 균등 무작위 파일 추출은 각 파일을 같은 확률로 보므로 파일 단위 concentration risk를 과도하게 편향시키지 않습니다.
 
 ## 샘플 데이터셋
 - 재현 가능한 입력 케이스 번들은 [samples/input-cases/README.md](samples/input-cases/README.md)에 있습니다.
