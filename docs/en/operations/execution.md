@@ -1,0 +1,59 @@
+# Execution and Operations
+
+## Execution Model
+- `privyspark scan` is the single public entrypoint.
+- Input and output paths must be absolute paths or URIs.
+- The default target runtime is Spark on YARN cluster mode.
+- The build artifact is a Shadow fat JAR (`*-all.jar`).
+
+## CLI Arguments
+- `--path <ABS_PATH_OR_URI>`: input path
+- `--output <ABS_PATH_OR_URI>`: output path
+- `--ruleset <default|path>`: built-in ruleset or external path
+- `--sample-ratio <(0.0, 1.0]>`: row sampling ratio, default `0.2`
+- `--file-sample-ratio <(0.0, 1.0]>`: batch group file sampling ratio, unset by default
+- `--pre-scan-parallelism <INT>`: parallelism for file pre-scan expansion and schema split, `> 0`
+- `--group-parallelism <INT>`: group scan parallelism, `> 0`
+- `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
+
+## Parallelism
+- CLI values are passed directly into application logic.
+- When omitted, PrivySpark uses `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`, or the application defaults (`4`, `4`, `3`).
+- Pre-scan parallelism covers input expansion, format probing, and group schema split.
+- Effective pre-scan parallelism is bounded by discovered file count and the safety ceiling `64`.
+- Group and file parallelism control how many scan tasks the driver submits concurrently.
+
+These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
+
+## Sampling
+- `--sample-ratio` is non-deterministic row sampling.
+- When `sampleRatio >= 1.0`, no row sampling is applied.
+- `--file-sample-ratio` uniformly samples files inside a batch-capable group.
+- The sampled file count is `ceil(fileCount * fileSampleRatio)` with a minimum of one file.
+- When `--file-sample-ratio` is active and `--sample-ratio < 1.0` is also provided, row sampling is ignored for that group and `group_scan_row_sampling_ignored` is logged.
+
+Uniform random file sampling was chosen because the operational concern was file-level concentration risk. Size-weighted sampling would bias toward large files and could amplify concentration instead of reflecting it.
+
+## Driver Logging
+- Driver log level can be configured through `PRIVYSPARK_DEBUG`, `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG`, or `-Dprivyspark.debug`.
+- Supported values are `error`, `warn`, `info`, `debug`, and `off`.
+- The default is `warn`.
+- For backward compatibility, `true` maps to `debug` and `false` maps to `warn`.
+- Log format: `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...`
+
+`info` exposes high-level lifecycle events such as `scan_start`, `scan_plan_ready`, and `scan_complete`. `debug` adds detailed events for file discovery, pre-scan execution, grouping, and `_progress` lifecycle.
+
+## `_progress` Handling
+- In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
+- Before setup, PrivySpark acquires `<output>/_progress-preparing.json`.
+- Once setup is ready, it switches to `_progress/active-run.json` with heartbeat updates.
+- On the next run, only stale heartbeats, `FAILED` markers, or stale preparing locks are cleaned up.
+- A recent `RUNNING` heartbeat or fresh preparing lock causes a conflict failure instead of cleanup.
+- If `active-run.json` becomes unreadable, the owner run can self-heal it from `meta/run.json`.
+
+This design keeps long-running progress observable without mixing partial output into the final consumer-facing result paths.
+
+## Releases
+- GitHub Release is triggered by pushing a `v*` tag or bare semver tag.
+- The release workflow runs `./gradlew clean shadowJar packageSampleDatasets`.
+- Release assets are `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, and `privyspark-<tag>-sample-datasets.zip`.

@@ -1,0 +1,51 @@
+# 아키텍처 개요
+
+## 목표
+- Spark 기반 배치 처리로 대용량 데이터셋을 안정적으로 스캔합니다.
+- 입력 확장과 그룹화로 처리 효율을 확보하되 결과 식별자 의미를 유지합니다.
+- 일부 파일 또는 그룹 실패가 있어도 가능한 범위를 계속 처리합니다.
+
+## 구현 컴포넌트
+- `Cli.scala`: 실행 인자와 기본 실행 옵션
+- `FormatDetector.scala`: 확장자 기반 1차 포맷 식별
+- `RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
+- `DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
+- `DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
+- `SampleDatasetGenerator.scala`: 입력 처리 케이스 재현용 샘플 데이터셋 생성
+- `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, progress/최종 리포트 저장
+- `Models.scala`: 결과/오류/규칙 모델
+
+## 처리 플로우
+1. 입력 경로 검증
+2. ruleset 로드와 regex 사전 검증
+3. 물리 파일 수집
+4. archive 엔트리 확장, workbook 시트 확장, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화
+5. `(directory, format)` 기준 1차 그룹화
+6. 대표 파일 기준 스키마 샘플링
+7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
+8. sampled multi-file group이면 exact split 재검증 후 재분류된 그룹 스캔
+9. `<output>/_progress-preparing.json` lock 획득 후 `<output>/_progress/<run_id>` 준비 및 stale progress 정리
+10. non-sampled group 중 batch-capable group이면 필요 시 file sampling 후 그룹 batch scan
+11. non-sampled `xlsx` group은 direct file scan
+12. 일반 group batch 실패 시 파일 단위 fallback
+13. group/file 완료 단위 progress JSONL 기록
+14. progress JSONL을 최종 `scan_results`/`scan_errors`로 merge 후 `_progress/<run_id>` 삭제
+
+## 운영 불변 조건
+- 원문 PII는 저장하지 않습니다.
+- `--pre-scan-parallelism`은 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용합니다.
+- pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
+- batch scan을 지원하지 않는 `xlsx` direct file scan 경로는 현재 CLI `--file-parallelism` 전달 대상이 아닙니다.
+- `--file-sample-ratio`는 batch-capable group scan에만 적용하고, `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.
+- `--file-sample-ratio`가 설정된 batch-capable group scan에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.
+- sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
+- archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
+- 최종 출력 계약은 `parquet/scan_results`, `parquet/scan_errors`, `csv/scan_results`, `csv/scan_errors`입니다.
+- clean completion도 `meta/completions` marker를 남깁니다.
+- `_progress`는 다음 실행 시작 시 stale 여부를 판정해 정리합니다. shutdown hook은 사용하지 않습니다.
+
+## 왜 이렇게 설계했는가
+- progress 경로를 최종 출력과 분리한 이유는 부분 결과 관측성과 최종 리포트 일관성을 동시에 확보하기 위해서입니다.
+- 종료 훅 대신 다음 실행 cleanup을 택한 이유는 YARN 강제 종료나 `kill -9` 상황에서 훅 신뢰도가 낮기 때문입니다.
+- `_progress-preparing.json`을 active marker보다 먼저 두는 이유는 startup race에서 서로의 fresh root를 지우지 않게 하기 위해서입니다.
+- unreadable `active-run.json`을 owner run이 `meta/run.json`으로 self-heal하는 이유는 marker 손상이 live run을 불필요하게 실패시키지 않게 하기 위해서입니다.
