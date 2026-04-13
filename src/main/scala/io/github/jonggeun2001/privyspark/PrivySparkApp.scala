@@ -2371,6 +2371,43 @@ object PrivySparkApp {
           physicalPathOverride = Some(physicalPath),
           readOptions = readOptions
         )
+          .fold(
+            error => {
+              if (!group.useDirectoryIdentifier) {
+                progressRun.foreach { run =>
+                  persistProgressRecords(
+                    spark.sparkContext.hadoopConfiguration,
+                    run,
+                    "file",
+                    Seq.empty,
+                    Seq(error)
+                  )
+                }
+              }
+              Left(error)
+            },
+            fileMetrics => {
+              if (!group.useDirectoryIdentifier) {
+                val fileResults = buildScanResults(
+                  datasetPath,
+                  timestamp,
+                  fileMetrics.fileIdentifier,
+                  fileMetrics.sampledRowCount,
+                  fileMetrics.matchCounts
+                )
+                progressRun.foreach { run =>
+                  persistProgressRecords(
+                    spark.sparkContext.hadoopConfiguration,
+                    run,
+                    "file",
+                    fileResults,
+                    Seq.empty
+                  )
+                }
+              }
+              Right(fileMetrics)
+            }
+          )
       }
     }).foreach {
       case (sourceKey, fileResult) =>
@@ -2378,24 +2415,6 @@ object PrivySparkApp {
         fileResult match {
         case Right(fileMetrics) =>
           successfulFileMetrics += fileMetrics
-          if (!group.useDirectoryIdentifier) {
-            val fileResults = buildScanResults(
-              datasetPath,
-              timestamp,
-              fileMetrics.fileIdentifier,
-              fileMetrics.sampledRowCount,
-              fileMetrics.matchCounts
-            )
-            progressRun.foreach { run =>
-              persistProgressRecords(
-                spark.sparkContext.hadoopConfiguration,
-                run,
-                "file",
-                fileResults,
-                Seq.empty
-              )
-            }
-          }
           logDebug(
             "group_scan_fallback_file_success",
             "file" -> physicalPath,
@@ -2405,17 +2424,6 @@ object PrivySparkApp {
           )
         case Left(error) =>
           fallbackErrors += error
-          if (!group.useDirectoryIdentifier) {
-            progressRun.foreach { run =>
-              persistProgressRecords(
-                spark.sparkContext.hadoopConfiguration,
-                run,
-                "file",
-                Seq.empty,
-                Seq(error)
-              )
-            }
-          }
           logDebug(
             "group_scan_fallback_file_error",
             "file" -> physicalPath,

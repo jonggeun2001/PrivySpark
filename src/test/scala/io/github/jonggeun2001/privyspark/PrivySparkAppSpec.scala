@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.concurrent.TrieMap
+import scala.concurrent.{Await, Future}
 import scala.util.control.ControlThrowable
 
 @RunWith(classOf[JUnitRunner])
@@ -2912,6 +2913,68 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroupByFile flushes file progress before the whole group completes") {
+    import scala.concurrent.ExecutionContext.Implicits.global
+
+    val inputDir = Files.createTempDirectory("privyspark-progress-live-input-")
+    val outputDir = Files.createTempDirectory("privyspark-progress-live-output-")
+
+    try {
+      val slowFile = inputDir.resolve("slow.csv")
+      val missingFile = inputDir.resolve("missing.csv")
+      val content = new StringBuilder("name,email\n")
+      (1 to 300000).foreach { index =>
+        content
+          .append("user")
+          .append(index)
+          .append(",user")
+          .append(index)
+          .append("@example.com\n")
+      }
+      writeText(slowFile, content.toString())
+
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        inputDir.toString,
+        "2026-04-13T00:00:00Z"
+      )
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(slowFile.toString, missingFile.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val scanFuture = Future {
+        PrivySparkApp.scanGroupByFile(
+          spark,
+          inputDir.toString,
+          group,
+          rules,
+          sampleRatio = 1.0,
+          timestamp = "2026-04-13T00:00:00Z",
+          fileParallelism = 2,
+          progressRun = Some(progressRun)
+        )
+      }
+
+      val errorRoot = outputDir.resolve(s"_progress/${progressRun.runId}/errors")
+      assert(waitForCondition(timeoutMillis = 10000L, pollMillis = 50L) {
+        countFilesWithExtension(errorRoot, ".jsonl") == 1L && !scanFuture.isCompleted
+      })
+
+      val (results, errors) = Await.result(scanFuture, scala.concurrent.duration.Duration("60s"))
+      assert(results.nonEmpty)
+      assert(errors.nonEmpty)
+    } finally {
+      deleteRecursively(inputDir)
+      deleteRecursively(outputDir)
+    }
+  }
+
   private def writeText(path: Path, content: String): Unit = {
     Files.write(path, content.getBytes(StandardCharsets.UTF_8))
   }
@@ -3139,6 +3202,17 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         stream.close()
       }
     }
+  }
+
+  private def waitForCondition(timeoutMillis: Long, pollMillis: Long)(condition: => Boolean): Boolean = {
+    val deadline = System.nanoTime() + timeoutMillis * 1000000L
+    while (System.nanoTime() < deadline) {
+      if (condition) {
+        return true
+      }
+      Thread.sleep(pollMillis)
+    }
+    condition
   }
 
   private def normalizeResults(results: Seq[ScanResult]): Seq[(String, String, String, Long, Double, Double)] = {
