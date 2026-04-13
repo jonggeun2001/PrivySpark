@@ -2868,6 +2868,32 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("prepareProgressRun removes stale unreadable active marker state and recreates progress root") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-unreadable-active-")
+    val staleRunDir = outputDir.resolve("_progress/corrupted-run/results")
+    val activeRunFile = outputDir.resolve("_progress/active-run.json")
+
+    try {
+      Files.createDirectories(staleRunDir)
+      writeText(staleRunDir.resolve("stale.jsonl"), """{"stale":true}""")
+      writeText(activeRunFile, """{"run_id":""")
+      Files.setLastModifiedTime(activeRunFile, FileTime.fromMillis(System.currentTimeMillis() - 10L * 60L * 1000L))
+
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        "/data/input",
+        "2026-04-13T00:00:00Z"
+      )
+
+      assert(progressRun.runId != "corrupted-run")
+      assert(!Files.exists(staleRunDir.resolve("stale.jsonl")))
+      assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/meta/run.json")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("scanGroup persists batch progress and mergeProgressReports finalizes outputs then deletes progress run") {
     val inputDir = Files.createTempDirectory("privyspark-progress-batch-input-")
     val outputDir = Files.createTempDirectory("privyspark-progress-batch-output-")

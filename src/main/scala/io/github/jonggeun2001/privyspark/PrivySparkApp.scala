@@ -3348,7 +3348,13 @@ object PrivySparkApp {
       case Some(marker) =>
         throw new IllegalStateException(s"Active progress run already exists under output root: $rootPath (run_id=${marker.runId})")
       case None =>
-        throw new IllegalStateException(s"Active progress marker is unreadable under output root: $rootPath")
+        val markerModifiedAt = fs.getFileStatus(activeMarkerPath).getModificationTime
+        if (System.currentTimeMillis() - markerModifiedAt > ActiveRunStaleThresholdMillis) {
+          logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "stale_unreadable_active_run_marker")
+          fs.delete(root, true)
+        } else {
+          throw new IllegalStateException(s"Active progress marker is unreadable under output root: $rootPath")
+        }
     }
   }
 
