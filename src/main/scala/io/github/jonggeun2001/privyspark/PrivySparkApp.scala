@@ -84,6 +84,7 @@ object PrivySparkApp {
     runId: String,
     rootPath: String,
     runPath: String,
+    activeRunPath: String,
     resultsPath: String,
     errorsPath: String,
     metaPath: String,
@@ -3110,7 +3111,12 @@ object PrivySparkApp {
     val rootPath = s"${outputRoot.stripSuffix("/")}/$ProgressDirectoryName"
     val root = new Path(rootPath)
     val fs = root.getFileSystem(conf)
+    val activeRunPath = s"$rootPath/active-run.json"
+    val activeRunMarker = new Path(activeRunPath)
     if (fs.exists(root)) {
+      if (fs.exists(activeRunMarker)) {
+        throw new IllegalStateException(s"Active progress run already exists under output root: $rootPath")
+      }
       logDebug("progress_cleanup_start", "path" -> rootPath)
       fs.delete(root, true)
     }
@@ -3125,11 +3131,18 @@ object PrivySparkApp {
 
     writeJsonFile(
       conf,
+      activeRunPath,
+      s"""{"run_id":${jsonString(runId)},"dataset_path":${jsonString(datasetPath)},"output_root":${jsonString(outputRoot)},"scan_timestamp":${jsonString(timestamp)},"state":"RUNNING"}"""
+    )
+
+    writeJsonFile(
+      conf,
       s"$metaPath/run.json",
       s"""{"run_id":${jsonString(runId)},"dataset_path":${jsonString(datasetPath)},"output_root":${jsonString(outputRoot)},"scan_timestamp":${jsonString(timestamp)},"state":"RUNNING"}"""
     )
 
-    val progressRun = ProgressRun(runId, rootPath, runPath, resultsPath, errorsPath, metaPath, completionsPath)
+    val progressRun =
+      ProgressRun(runId, rootPath, runPath, activeRunPath, resultsPath, errorsPath, metaPath, completionsPath)
     logDebug(
       "progress_run_prepared",
       "run_id" -> progressRun.runId,
@@ -3256,6 +3269,11 @@ object PrivySparkApp {
     val fs = runPath.getFileSystem(conf)
     if (fs.exists(runPath)) {
       fs.delete(runPath, true)
+    }
+
+    val activeRunPath = new Path(progressRun.activeRunPath)
+    if (fs.exists(activeRunPath)) {
+      fs.delete(activeRunPath, false)
     }
 
     val rootPath = new Path(progressRun.rootPath)

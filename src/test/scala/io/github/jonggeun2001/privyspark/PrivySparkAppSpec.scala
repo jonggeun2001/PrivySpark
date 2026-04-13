@@ -2802,10 +2802,34 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       assert(!Files.exists(staleProgressDir.resolve("stale.jsonl")))
+      assert(Files.exists(outputDir.resolve(s"_progress/active-run.json")))
       assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/meta/run.json")))
       assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/meta/completions")))
       assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/results")))
       assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/errors")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("prepareProgressRun fails when an active progress marker already exists") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-active-")
+    val activeRunFile = outputDir.resolve("_progress/active-run.json")
+
+    try {
+      Files.createDirectories(activeRunFile.getParent)
+      writeText(activeRunFile, """{"run_id":"active","state":"RUNNING"}""")
+
+      val error = intercept[IllegalStateException] {
+        PrivySparkApp.prepareProgressRun(
+          spark.sparkContext.hadoopConfiguration,
+          outputDir.toString,
+          "/data/input",
+          "2026-04-13T00:00:00Z"
+        )
+      }
+
+      assert(error.getMessage.contains("Active progress run already exists"))
     } finally {
       deleteRecursively(outputDir)
     }

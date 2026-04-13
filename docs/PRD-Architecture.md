@@ -60,4 +60,4 @@
 - 탐지/오류가 전혀 없는 clean completion도 `meta/completions` marker를 남깁니다. 결과 shard가 비어 있더라도 운영자가 완료 여부를 관측할 수 있어야 하기 때문입니다.
 - 이 설계를 택한 이유는 긴 스캔 동안 사용자가 이미 끝난 범위의 결과를 즉시 확인할 수 있게 하되, 최종 소비 경로에는 부분 결과가 섞이지 않게 하기 위해서입니다.
 - progress 저장 포맷은 JSONL만 사용하고, 최종 Parquet/CSV는 merge 시점에만 생성합니다. 임시 경로까지 Parquet/CSV를 동시에 쓰면 중간 관측성보다 작은 파일과 commit 비용만 늘기 때문입니다.
-- stale progress 정리는 shutdown hook이 아니라 다음 실행 시작 시 수행합니다. YARN 강제 종료, 컨테이너 회수, `kill -9`처럼 훅 실행이 보장되지 않는 종료 경로를 운영 기본값으로 보았기 때문입니다.
+- stale progress 정리는 shutdown hook이 아니라 다음 실행 시작 시 수행합니다. 다만 active-run marker가 남아 있는 경우에는 다른 실행의 live progress를 지우지 않도록 cleanup 대신 즉시 실패합니다.
