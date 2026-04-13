@@ -11,9 +11,12 @@
 - `RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
 - `DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
 - `DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
-- `SampleDatasetGenerator.scala`: 입력 처리 케이스 재현용 샘플 데이터셋 생성
 - `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, progress/최종 리포트 저장
 - `Models.scala`: 결과/오류/규칙 모델
+
+## 개발·검증 도구
+- `src/test/scala/io/github/jonggeun2001/privyspark/SampleDatasetGenerator.scala`: 입력 처리 케이스를 재현하는 샘플 데이터셋 생성기
+- `build.gradle.kts`의 `generateSampleDatasets`, `packageSampleDatasets`: 샘플 데이터셋 재생성과 릴리즈용 패키징 태스크
 
 ## 처리 플로우
 1. 입력 경로 검증
@@ -35,7 +38,7 @@
 - 원문 PII는 저장하지 않습니다.
 - `--pre-scan-parallelism`은 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용합니다.
 - pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
-- batch scan을 지원하지 않는 `xlsx` direct file scan 경로는 현재 CLI `--file-parallelism` 전달 대상이 아닙니다.
+- batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.
 - `--file-sample-ratio`는 batch-capable group scan에만 적용하고, `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.
 - `--file-sample-ratio`가 설정된 batch-capable group scan에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.

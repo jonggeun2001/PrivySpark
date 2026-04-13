@@ -11,9 +11,12 @@
 - `RulesetLoader.scala`: built-in and external ruleset loading and validation
 - `DriverLogger.scala`: driver log level parsing and structured log format
 - `DetectionAggregator.scala`: metric aggregation and fallback strategies
-- `SampleDatasetGenerator.scala`: reproducible sample datasets for input handling branches
 - `PrivySparkApp.scala`: input expansion, grouping, exact split, scan orchestration, progress/final report writing
 - `Models.scala`: result, error, and ruleset models
+
+## Development and Verification Tools
+- `src/test/scala/io/github/jonggeun2001/privyspark/SampleDatasetGenerator.scala`: sample dataset generator for reproducing input-handling branches
+- `generateSampleDatasets` and `packageSampleDatasets` in `build.gradle.kts`: regeneration and release packaging tasks for sample datasets
 
 ## Processing Flow
 1. validate input path
@@ -35,7 +38,7 @@
 - Raw PII is never stored.
 - `--pre-scan-parallelism` applies to input expansion, format probing, and schema split.
 - Effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
-- `xlsx` direct-file scans do not currently consume CLI `--file-parallelism`.
+- `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.
 - `--file-sample-ratio` only applies to batch-capable group scans and uniformly samples at least one file using `ceil(fileCount * ratio)`.
 - When `--file-sample-ratio` is active, `--sample-ratio < 1.0` is ignored for that batch-capable group and a warning is logged.
 - Sampled groups are never promoted to directory-level identifiers before exact-split validation.
