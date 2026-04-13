@@ -16,6 +16,7 @@
 
 # Logs
 *.log
+!samples/input-cases/files/flat/text-extension/notes.log
 
 # macOS
 .DS_Store

@@ -1,3 +1,6 @@
+import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     scala
     application
@@ -74,4 +77,19 @@ tasks.shadowJar {
     manifest {
         attributes["Main-Class"] = "io.github.jonggeun2001.privyspark.PrivySparkApp"
     }
+}
+
+tasks.register<JavaExec>("generateSampleDatasets") {
+    group = "verification"
+    description = "Generate the sample input-case datasets under samples/input-cases"
+    dependsOn(tasks.testClasses)
+    val testTask = tasks.named<Test>("test")
+    classpath = testTask.get().classpath
+    mainClass.set("io.github.jonggeun2001.privyspark.SampleDatasetGenerator")
+    workingDir = projectDir
+    jvmArgs(
+        "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+    )
 }

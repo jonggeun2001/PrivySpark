@@ -11,6 +11,7 @@
 - `RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
 - `DriverLogger.scala`: driver 로그 레벨 해석, 공통 로그 포맷, fatal/error 강제 출력
 - `DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
+- `SampleDatasetGenerator.scala`: 입력 처리 케이스 재현용 샘플 데이터셋 생성
 - `DriverLicenseNumberValidator.scala`: 운전면허번호 strict validator
 - `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, 리포트 저장
 - `Models.scala`: 결과/오류/규칙 모델

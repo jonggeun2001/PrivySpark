@@ -42,3 +42,7 @@
 - sampled multi-file group은 batch scan 전에 exact split으로 먼저 재검증합니다.
 - 일반 group에서 batch scan이 실패하면 별도 schema resplit 없이 곧바로 파일 단위 fallback으로 전환합니다.
 - 읽기 중 파일 교체/삭제가 발생하면 제한된 횟수 내에서 재시도합니다.
+
+## 샘플 데이터셋
+- 현재 구현된 지원/오류/skip 입력 케이스를 재현하는 번들은 `samples/input-cases`에 포함합니다.
+- 재생성 명령은 `./gradlew generateSampleDatasets`이며, case 목록과 기대 결과는 `samples/input-cases/scenario-manifest.tsv`에서 확인합니다.
