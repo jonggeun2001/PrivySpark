@@ -4,6 +4,7 @@
 - Parquet: `<output>/parquet/scan_results`
 - CSV: `<output>/csv/scan_results`
 - 두 출력 모두 `coalesce(1)`로 단일 data part file 저장 경로를 사용합니다.
+- 실행 중 임시 progress는 `<output>/_progress/<run_id>/results/*.jsonl`에 기록될 수 있지만, 이는 최종 출력 계약이 아닙니다.
 
 ## 결과 필드
 - `dataset_path`
@@ -33,11 +34,14 @@
 - Parquet: `<output>/parquet/scan_errors`
 - CSV: `<output>/csv/scan_errors`
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
+- 실행 중 임시 progress는 `<output>/_progress/<run_id>/errors/*.jsonl`에 기록될 수 있지만, 정상 종료 시 최종 리포트로 merge된 뒤 삭제됩니다.
 
 ## 오류 처리 원칙
 - 실패 파일은 오류 리포트에 남기고 나머지 처리를 계속합니다.
 - 파일 교체/삭제로 인한 읽기 오류는 내부 재시도 후 실패 시 기록합니다.
 - 손상 JSON, nested archive, unsafe archive path, 매직바이트 불일치 무확장자/미지원 확장자 파일 등은 명시적 오류로 기록합니다.
+- 진행 중 관측을 위해 group/file 완료 시점의 임시 JSONL을 남기지만, 최종 소비자는 항상 Parquet/CSV 결과만 보도록 경로를 분리합니다.
+- 다음 실행 시작 시 stale `_progress`를 먼저 정리하는 이유는 종료 훅보다 재시작 시점 cleanup이 운영적으로 더 예측 가능하기 때문입니다.
 
 ## 보안 원칙
 - 원문 PII 값은 저장하지 않습니다.

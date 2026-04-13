@@ -5,6 +5,7 @@
 - 입력/출력 경로는 절대경로 또는 URI만 허용합니다.
 - Spark on YARN cluster 실행을 기본 전제로 합니다.
 - 빌드 산출물은 Shadow fat JAR(`*-all.jar`)입니다.
+- 실행 중 임시 progress는 `<output>/_progress/<run_id>` 아래 JSONL shard로 기록하고, 정상 종료 시 최종 리포트로 merge 후 삭제합니다.
 
 ## CLI 인자
 - `--path <ABS_PATH_OR_URI>`: 입력 경로
@@ -36,6 +37,16 @@
 - `--file-sample-ratio`가 설정되고 동시에 `--sample-ratio < 1.0`이면 batch-capable group scan에서는 row sampling을 무시하고 `group_scan_row_sampling_ignored` warning 로그를 남깁니다.
 - 이 설계의 배경은 특정 데이터가 한 파일에 몰릴 가능성을 운영적으로 배제하지 않기 위해서입니다. 파일 크기 가중치 기반 추출은 큰 파일 편향을 강화할 수 있어, 현재 구현은 파일 단위 concentration risk를 더 직접 반영하는 균등 무작위 추출을 사용합니다.
 - `match_ratio`, `confidence`의 분모는 샘플링된 행 수입니다. `--file-sample-ratio`가 적용되면 이는 선택된 파일들에서 실제로 읽은 행 수를 뜻합니다.
+
+## 중간 결과 경로
+- batch-capable group scan은 그룹 완료 시점에 `_progress/<run_id>/results/*.jsonl` 또는 `errors/*.jsonl`을 씁니다.
+- file fallback/direct file scan은 최종 결과가 file identifier 기준일 때 파일 완료 시점마다 즉시 기록합니다.
+- directory identifier로 다시 합쳐야 하는 file fallback은 중간에 file-level 결과를 노출하지 않고, 그룹 집계가 끝난 뒤 기록합니다. 이유는 임시 결과와 최종 결과의 `file_identifier` 의미를 일치시키기 위해서입니다.
+- `_progress`는 최종 소비 경로가 아닙니다. 운영자가 장시간 스캔의 중간 상태를 확인하는 관측용 경로입니다.
+- 정상 종료 시 `_progress/<run_id>`를 읽어 최종 Parquet/CSV 리포트를 생성하고 곧바로 삭제합니다.
+- 비정상 종료 시 `_progress`가 남을 수 있으며, 다음 실행 시작 시 전체 `_progress`를 정리합니다.
+- shutdown hook을 쓰지 않는 이유는 YARN 강제 종료와 비정상 프로세스 종료에서 cleanup 보장이 약하기 때문입니다.
+- group/file 완료마다 즉시 쓰는 방식을 택한 이유는 배치 flush보다 관측 지연을 없애는 것이 이번 요구에서 더 중요했기 때문입니다. 임시 small file 증가는 `_progress`가 최종적으로 제거되는 전제를 두고 수용합니다.
 
 ## 빌드와 실행
 빌드:
@@ -106,6 +117,7 @@ spark-submit \
 - `info` 레벨에는 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 실행 lifecycle 로그가 포함됩니다.
 - `scan_start`의 병렬도 필드는 `configured_*` 이름으로 기록되며, 요청값 또는 `spark_conf_or_default` 상태를 나타냅니다.
 - `debug` 레벨에는 플랜 수립, 그룹/파일 스캔 진행, 리포트 저장 단계가 포함됩니다.
+- `debug` 레벨에는 `progress_run_prepared`, `progress_write_complete`, `progress_merge_start`, `progress_merge_complete` 같은 `_progress` lifecycle 로그도 포함됩니다.
 - `scanDirectoryStructure` debug 로그에는 파일 발견 duration, pre-scan 실행 시작/진행률/완료, pre-scan 후처리 duration, 초기 `(directory, format)` 그룹화 duration이 포함됩니다.
 
 ## 릴리즈

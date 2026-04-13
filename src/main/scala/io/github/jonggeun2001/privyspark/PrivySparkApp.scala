@@ -7,10 +7,11 @@ import org.apache.poi.ss.usermodel.WorkbookFactory
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.catalyst.csv.CSVOptions
 import org.apache.spark.sql.execution.datasources.csv.CSVUtils
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.{DataFrame, Encoders, Row, SparkSession}
 import org.apache.spark.sql.functions.{col, input_file_name}
 
-import java.io.{BufferedReader, InputStreamReader}
+import java.io.{BufferedReader, BufferedWriter, InputStreamReader, OutputStreamWriter}
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.nio.charset.{CharacterCodingException, CodingErrorAction}
@@ -79,8 +80,17 @@ object PrivySparkApp {
     skipped: Boolean = false,
     failure: Option[Throwable] = None
   )
+  private[privyspark] final case class ProgressRun(
+    runId: String,
+    rootPath: String,
+    runPath: String,
+    resultsPath: String,
+    errorsPath: String,
+    metaPath: String
+  )
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
+  private val ProgressDirectoryName = "_progress"
   private val TextFormat = "text"
   private val XlsxFormat = "xlsx"
   private val AvroFormat = "avro"
@@ -901,9 +911,21 @@ object PrivySparkApp {
         "total_files" -> scanPlan.totalFiles,
         "directories" -> scanPlan.directoryCount
       )
-
-      val results = ArrayBuffer.empty[ScanResult]
-      val errors = ArrayBuffer.empty[ScanError] ++ scanPlan.errors
+      val progressRun = prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        config.outputPath,
+        config.inputPath,
+        timestamp
+      )
+      if (scanPlan.errors.nonEmpty) {
+        persistProgressRecords(
+          spark.sparkContext.hadoopConfiguration,
+          progressRun,
+          "plan",
+          Seq.empty,
+          scanPlan.errors
+        )
+      }
 
       scanGroups(
         spark,
@@ -914,28 +936,25 @@ object PrivySparkApp {
         timestamp,
         groupParallelism,
         fileParallelism,
-        config.fileSampleRatio
-      ).foreach {
-        case (_, groupResults, groupErrors) =>
-          results ++= groupResults
-          errors ++= groupErrors
-      }
+        config.fileSampleRatio,
+        Some(progressRun)
+      )
 
-      logDebug("report_write_start", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
-      writeReports(spark, config.outputPath, results.toSeq, errors.toSeq)
-      logDebug("report_write_complete", "results" -> results.size, "errors" -> errors.size, "output_root" -> config.outputPath)
+      logDebug("report_write_start", "output_root" -> config.outputPath, "progress_run" -> progressRun.runId)
+      val (resultCount, errorCount) = mergeProgressReports(spark, config.outputPath, progressRun)
+      logDebug("report_write_complete", "results" -> resultCount, "errors" -> errorCount, "output_root" -> config.outputPath)
       logInfo(
         "scan_complete",
         "scanned_files" -> scanPlan.totalFiles,
         "grouped_dirs" -> scanPlan.directoryCount,
         "groups" -> scanPlan.groups.size,
-        "detections" -> results.size,
-        "errors" -> errors.size,
+        "detections" -> resultCount,
+        "errors" -> errorCount,
         "output_root" -> config.outputPath
       )
 
       println(
-        s"[PrivySpark] scanned_files=${scanPlan.totalFiles}, grouped_dirs=${scanPlan.directoryCount}, groups=${scanPlan.groups.size}, detections=${results.size}, errors=${errors.size}"
+        s"[PrivySpark] scanned_files=${scanPlan.totalFiles}, grouped_dirs=${scanPlan.directoryCount}, groups=${scanPlan.groups.size}, detections=$resultCount, errors=$errorCount"
       )
     } finally {
       cleanupStagingPaths(spark.sparkContext.hadoopConfiguration, scanPlan.stagingPaths)
@@ -951,7 +970,8 @@ object PrivySparkApp {
     timestamp: String,
     groupParallelism: Int = -1,
     fileParallelism: Int = -1,
-    fileSampleRatio: Option[Double] = None
+    fileSampleRatio: Option[Double] = None,
+    progressRun: Option[ProgressRun] = None
   ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] = {
     if (groups.isEmpty) {
       return Seq.empty
@@ -976,7 +996,7 @@ object PrivySparkApp {
           "parallelism" -> parallelism
         )
         val (groupResults, groupErrors) =
-          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, fileSampleRatio)
+          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, fileSampleRatio, progressRun)
         logDebug(
           "group_scan_recorded",
           "directory" -> group.directoryPath,
@@ -2145,7 +2165,8 @@ object PrivySparkApp {
     sampleRatio: Double,
     timestamp: String,
     fileParallelism: Int = -1,
-    fileSampleRatio: Option[Double] = None
+    fileSampleRatio: Option[Double] = None,
+    progressRun: Option[ProgressRun] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logDebug(
       "group_scan_start",
@@ -2163,14 +2184,15 @@ object PrivySparkApp {
       val exactSplitResult = rescanSampledGroupWithExactSplit(
         spark,
         datasetPath,
-            group,
-            rules,
-            sampleRatio,
-            timestamp,
-            "sampled_exact_split",
-            fileParallelism,
-            fileSampleRatio
-          )
+        group,
+        rules,
+        sampleRatio,
+        timestamp,
+        "sampled_exact_split",
+        fileParallelism,
+        fileSampleRatio,
+        progressRun
+      )
       logDebug(
         "group_scan_complete",
         "directory" -> group.directoryPath,
@@ -2184,7 +2206,7 @@ object PrivySparkApp {
     }
 
     if (!supportsBatchScan(group)) {
-      val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp)
+      val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, progressRun)
       logDebug(
         "group_scan_complete",
         "directory" -> group.directoryPath,
@@ -2199,6 +2221,15 @@ object PrivySparkApp {
 
     try {
       val results = scanGroupBatch(spark, datasetPath, group, rules, sampleRatio, timestamp, fileSampleRatio)
+      progressRun.foreach { run =>
+        persistProgressRecords(
+          spark.sparkContext.hadoopConfiguration,
+          run,
+          "group",
+          results,
+          Seq.empty
+        )
+      }
       logDebug(
         "group_scan_complete",
         "directory" -> group.directoryPath,
@@ -2246,7 +2277,8 @@ object PrivySparkApp {
             timestamp,
             "fallback_schema_resplit",
             fileParallelism,
-            fileSampleRatio
+            fileSampleRatio,
+            progressRun
           )
 
           logDebug(
@@ -2260,7 +2292,16 @@ object PrivySparkApp {
           )
           exactSplitResult
         } else {
-          val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism)
+          val fallbackResult = scanGroupByFile(
+            spark,
+            datasetPath,
+            group,
+            rules,
+            sampleRatio,
+            timestamp,
+            fileParallelism,
+            progressRun
+          )
           logDebug(
             "group_scan_complete",
             "directory" -> group.directoryPath,
@@ -2282,7 +2323,8 @@ object PrivySparkApp {
     rules: Seq[PiiRule],
     sampleRatio: Double,
     timestamp: String,
-    fileParallelism: Int = -1
+    fileParallelism: Int = -1,
+    progressRun: Option[ProgressRun] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logWarn(
       "group_scan_fallback_execute",
@@ -2336,6 +2378,24 @@ object PrivySparkApp {
         fileResult match {
         case Right(fileMetrics) =>
           successfulFileMetrics += fileMetrics
+          if (!group.useDirectoryIdentifier) {
+            val fileResults = buildScanResults(
+              datasetPath,
+              timestamp,
+              fileMetrics.fileIdentifier,
+              fileMetrics.sampledRowCount,
+              fileMetrics.matchCounts
+            )
+            progressRun.foreach { run =>
+              persistProgressRecords(
+                spark.sparkContext.hadoopConfiguration,
+                run,
+                "file",
+                fileResults,
+                Seq.empty
+              )
+            }
+          }
           logDebug(
             "group_scan_fallback_file_success",
             "file" -> physicalPath,
@@ -2345,6 +2405,17 @@ object PrivySparkApp {
           )
         case Left(error) =>
           fallbackErrors += error
+          if (!group.useDirectoryIdentifier) {
+            progressRun.foreach { run =>
+              persistProgressRecords(
+                spark.sparkContext.hadoopConfiguration,
+                run,
+                "file",
+                Seq.empty,
+                Seq(error)
+              )
+            }
+          }
           logDebug(
             "group_scan_fallback_file_error",
             "file" -> physicalPath,
@@ -2398,6 +2469,17 @@ object PrivySparkApp {
           fileMetrics.fileIdentifier,
           fileMetrics.sampledRowCount,
           fileMetrics.matchCounts
+        )
+      }
+    }
+    progressRun.foreach { run =>
+      if (group.useDirectoryIdentifier) {
+        persistProgressRecords(
+          spark.sparkContext.hadoopConfiguration,
+          run,
+          "group",
+          fallbackResults,
+          fallbackErrors.toSeq
         )
       }
     }
@@ -2883,7 +2965,8 @@ object PrivySparkApp {
     timestamp: String,
     mode: String,
     fileParallelism: Int,
-    fileSampleRatio: Option[Double]
+    fileSampleRatio: Option[Double],
+    progressRun: Option[ProgressRun]
   ): (Seq[ScanResult], Seq[ScanError]) = {
     val (splitGroups, splitErrors) = splitGroupBySchema(
       spark,
@@ -2904,6 +2987,17 @@ object PrivySparkApp {
 
     val rescannedResults = ArrayBuffer.empty[ScanResult]
     val rescannedErrors = ArrayBuffer.empty[ScanError] ++ splitErrors
+    if (splitErrors.nonEmpty) {
+      progressRun.foreach { run =>
+        persistProgressRecords(
+          spark.sparkContext.hadoopConfiguration,
+          run,
+          "schema-split",
+          Seq.empty,
+          splitErrors
+        )
+      }
+    }
     rescannedGroups.foreach { rescannedGroup =>
       val (groupResults, groupErrors) = scanGroup(
         spark,
@@ -2913,7 +3007,8 @@ object PrivySparkApp {
         sampleRatio,
         timestamp,
         fileParallelism,
-        fileSampleRatio
+        fileSampleRatio,
+        progressRun
       )
       rescannedResults ++= groupResults
       rescannedErrors ++= groupErrors
@@ -2939,11 +3034,24 @@ object PrivySparkApp {
     errors: Seq[ScanError]
   ): Unit = {
     import spark.implicits._
+    writeReports(
+      spark,
+      outputRoot,
+      spark.createDataset(results).toDF(),
+      spark.createDataset(errors).toDF()
+    )
+  }
 
+  private def writeReports(
+    spark: SparkSession,
+    outputRoot: String,
+    resultsDf: DataFrame,
+    errorsDf: DataFrame
+  ): Unit = {
     val root = outputRoot.stripSuffix("/")
-    logDebug("write_reports_materialize", "output_root" -> root, "results" -> results.size, "errors" -> errors.size)
-    val resultDf = spark.createDataset(results).toDF().coalesce(1).cache()
-    val errorDf = spark.createDataset(errors).toDF().coalesce(1).cache()
+    logDebug("write_reports_materialize", "output_root" -> root)
+    val resultDf = resultsDf.coalesce(1).cache()
+    val errorDf = errorsDf.coalesce(1).cache()
 
     val resultParquetPath = s"$root/parquet/scan_results"
     val errorParquetPath = s"$root/parquet/scan_errors"
@@ -2976,5 +3084,185 @@ object PrivySparkApp {
       "result_csv_path" -> resultCsvPath,
       "error_csv_path" -> errorCsvPath
     )
+  }
+
+  private[privyspark] def prepareProgressRun(
+    conf: org.apache.hadoop.conf.Configuration,
+    outputRoot: String,
+    datasetPath: String,
+    timestamp: String
+  ): ProgressRun = {
+    val rootPath = s"${outputRoot.stripSuffix("/")}/$ProgressDirectoryName"
+    val root = new Path(rootPath)
+    val fs = root.getFileSystem(conf)
+    if (fs.exists(root)) {
+      logDebug("progress_cleanup_start", "path" -> rootPath)
+      fs.delete(root, true)
+    }
+
+    val runId = s"${timestamp.replaceAll("[:.]", "-")}-${UUID.randomUUID().toString}"
+    val runPath = s"$rootPath/$runId"
+    val resultsPath = s"$runPath/results"
+    val errorsPath = s"$runPath/errors"
+    val metaPath = s"$runPath/meta"
+    Seq(runPath, resultsPath, errorsPath, metaPath).foreach(path => fs.mkdirs(new Path(path)))
+
+    writeJsonFile(
+      conf,
+      s"$metaPath/run.json",
+      s"""{"run_id":${jsonString(runId)},"dataset_path":${jsonString(datasetPath)},"output_root":${jsonString(outputRoot)},"scan_timestamp":${jsonString(timestamp)},"state":"RUNNING"}"""
+    )
+
+    val progressRun = ProgressRun(runId, rootPath, runPath, resultsPath, errorsPath, metaPath)
+    logDebug(
+      "progress_run_prepared",
+      "run_id" -> progressRun.runId,
+      "root_path" -> progressRun.rootPath,
+      "run_path" -> progressRun.runPath
+    )
+    progressRun
+  }
+
+  private[privyspark] def mergeProgressReports(
+    spark: SparkSession,
+    outputRoot: String,
+    progressRun: ProgressRun
+  ): (Long, Long) = {
+    logDebug(
+      "progress_merge_start",
+      "run_id" -> progressRun.runId,
+      "results_path" -> progressRun.resultsPath,
+      "errors_path" -> progressRun.errorsPath
+    )
+    val resultDf = readProgressRecords(spark, progressRun.resultsPath, Encoders.product[ScanResult].schema)
+    val errorDf = readProgressRecords(spark, progressRun.errorsPath, Encoders.product[ScanError].schema)
+    val resultCount = resultDf.count()
+    val errorCount = errorDf.count()
+    writeReports(spark, outputRoot, resultDf, errorDf)
+    deleteProgressRun(spark.sparkContext.hadoopConfiguration, progressRun)
+    logDebug(
+      "progress_merge_complete",
+      "run_id" -> progressRun.runId,
+      "results" -> resultCount,
+      "errors" -> errorCount
+    )
+    (resultCount, errorCount)
+  }
+
+  private def persistProgressRecords(
+    conf: org.apache.hadoop.conf.Configuration,
+    progressRun: ProgressRun,
+    scope: String,
+    results: Seq[ScanResult],
+    errors: Seq[ScanError]
+  ): Unit = {
+    if (results.nonEmpty) {
+      writeProgressLines(conf, progressRun.resultsPath, scope, results.map(scanResultToJson))
+    }
+    if (errors.nonEmpty) {
+      writeProgressLines(conf, progressRun.errorsPath, scope, errors.map(scanErrorToJson))
+    }
+    if (results.nonEmpty || errors.nonEmpty) {
+      logDebug(
+        "progress_write_complete",
+        "run_id" -> progressRun.runId,
+        "scope" -> scope,
+        "results" -> results.size,
+        "errors" -> errors.size
+      )
+    }
+  }
+
+  private def readProgressRecords(
+    spark: SparkSession,
+    directoryPath: String,
+    schema: StructType
+  ): DataFrame = {
+    val conf = spark.sparkContext.hadoopConfiguration
+    val directory = new Path(directoryPath)
+    val fs = directory.getFileSystem(conf)
+    val jsonPattern = new Path(s"${directoryPath.stripSuffix("/")}/*.jsonl")
+    val files = Option(fs.globStatus(jsonPattern)).getOrElse(Array.empty)
+    if (files.isEmpty) {
+      spark.createDataFrame(spark.sparkContext.emptyRDD[Row], schema)
+    } else {
+      spark.read.schema(schema).json(jsonPattern.toString)
+    }
+  }
+
+  private def writeProgressLines(
+    conf: org.apache.hadoop.conf.Configuration,
+    directoryPath: String,
+    scope: String,
+    lines: Seq[String]
+  ): Unit = {
+    if (lines.isEmpty) {
+      return
+    }
+
+    val filePath = new Path(s"${directoryPath.stripSuffix("/")}/$scope-${UUID.randomUUID().toString}.jsonl")
+    val fs = filePath.getFileSystem(conf)
+    val writer = new BufferedWriter(new OutputStreamWriter(fs.create(filePath, false), StandardCharsets.UTF_8))
+    try {
+      lines.foreach { line =>
+        writer.write(line)
+        writer.newLine()
+      }
+    } finally {
+      writer.close()
+    }
+  }
+
+  private def writeJsonFile(
+    conf: org.apache.hadoop.conf.Configuration,
+    filePath: String,
+    line: String
+  ): Unit = {
+    val path = new Path(filePath)
+    val fs = path.getFileSystem(conf)
+    val writer = new BufferedWriter(new OutputStreamWriter(fs.create(path, true), StandardCharsets.UTF_8))
+    try {
+      writer.write(line)
+      writer.newLine()
+    } finally {
+      writer.close()
+    }
+  }
+
+  private def deleteProgressRun(conf: org.apache.hadoop.conf.Configuration, progressRun: ProgressRun): Unit = {
+    val runPath = new Path(progressRun.runPath)
+    val fs = runPath.getFileSystem(conf)
+    if (fs.exists(runPath)) {
+      fs.delete(runPath, true)
+    }
+
+    val rootPath = new Path(progressRun.rootPath)
+    if (fs.exists(rootPath) && Option(fs.listStatus(rootPath)).getOrElse(Array.empty).isEmpty) {
+      fs.delete(rootPath, true)
+    }
+  }
+
+  private def scanResultToJson(result: ScanResult): String =
+    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"match_ratio":${result.match_ratio},"confidence":${result.confidence}}"""
+
+  private def scanErrorToJson(error: ScanError): String =
+    s"""{"dataset_path":${jsonString(error.dataset_path)},"scan_timestamp":${jsonString(error.scan_timestamp)},"file_identifier":${jsonString(error.file_identifier)},"error_message":${jsonString(error.error_message)}}"""
+
+  private def jsonString(value: String): String = "\"" + escapeJson(Option(value).getOrElse("")) + "\""
+
+  private def escapeJson(value: String): String = {
+    val builder = new StringBuilder
+    value.foreach {
+      case '"' => builder.append("\\\"")
+      case '\\' => builder.append("\\\\")
+      case '\b' => builder.append("\\b")
+      case '\f' => builder.append("\\f")
+      case '\n' => builder.append("\\n")
+      case '\r' => builder.append("\\r")
+      case '\t' => builder.append("\\t")
+      case ch if ch < ' ' => builder.append(f"\\u${ch.toInt}%04x")
+      case ch => builder.append(ch)
+    }
+    builder.toString()
   }
 }

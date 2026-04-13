@@ -2785,6 +2785,133 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("prepareProgressRun removes stale progress root and creates run metadata") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-prepare-")
+    val staleProgressDir = outputDir.resolve("_progress/old-run/results")
+
+    try {
+      Files.createDirectories(staleProgressDir)
+      writeText(staleProgressDir.resolve("stale.jsonl"), """{"stale":true}""")
+
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        "/data/input",
+        "2026-04-13T00:00:00Z"
+      )
+
+      assert(!Files.exists(staleProgressDir.resolve("stale.jsonl")))
+      assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/meta/run.json")))
+      assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/results")))
+      assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/errors")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("scanGroup persists batch progress and mergeProgressReports finalizes outputs then deletes progress run") {
+    val inputDir = Files.createTempDirectory("privyspark-progress-batch-input-")
+    val outputDir = Files.createTempDirectory("privyspark-progress-batch-output-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        inputDir.toString,
+        "2026-04-13T00:00:00Z"
+      )
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-04-13T00:00:00Z",
+        progressRun = Some(progressRun)
+      )
+
+      assert(results.nonEmpty)
+      assert(errors.isEmpty)
+      assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 1L)
+
+      val (mergedResults, mergedErrors) = PrivySparkApp.mergeProgressReports(spark, outputDir.toString, progressRun)
+
+      assert(mergedResults == 2L)
+      assert(mergedErrors == 0L)
+      assert(!Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}")))
+      assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results").count() == 2L)
+      assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors").count() == 0L)
+    } finally {
+      deleteRecursively(inputDir)
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("scanGroupByFile persists per-file progress records") {
+    val inputDir = Files.createTempDirectory("privyspark-progress-file-input-")
+    val outputDir = Files.createTempDirectory("privyspark-progress-file-output-")
+
+    try {
+      val existingFile = inputDir.resolve("part-0001.csv")
+      val missingFile = inputDir.resolve("missing.csv")
+      writeText(existingFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        inputDir.toString,
+        "2026-04-13T00:00:00Z"
+      )
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(existingFile.toString, missingFile.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-04-13T00:00:00Z",
+        progressRun = Some(progressRun)
+      )
+
+      assert(results.nonEmpty)
+      assert(errors.nonEmpty)
+      assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 1L)
+      assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/errors"), ".jsonl") == 1L)
+    } finally {
+      deleteRecursively(inputDir)
+      deleteRecursively(outputDir)
+    }
+  }
+
   private def writeText(path: Path, content: String): Unit = {
     Files.write(path, content.getBytes(StandardCharsets.UTF_8))
   }
@@ -2983,6 +3110,27 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         while (iter.hasNext) {
           val candidate = iter.next()
           if (Files.isRegularFile(candidate) && candidate.getFileName.toString.startsWith("part-")) {
+            count += 1L
+          }
+        }
+        count
+      } finally {
+        stream.close()
+      }
+    }
+  }
+
+  private def countFilesWithExtension(root: Path, extension: String): Long = {
+    if (!Files.exists(root)) {
+      0L
+    } else {
+      val stream = Files.walk(root)
+      try {
+        val iter = stream.iterator()
+        var count = 0L
+        while (iter.hasNext) {
+          val candidate = iter.next()
+          if (Files.isRegularFile(candidate) && candidate.getFileName.toString.endsWith(extension)) {
             count += 1L
           }
         }

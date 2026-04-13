@@ -26,10 +26,12 @@
 6. 대표 파일 기준 스키마 샘플링
 7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
 8. sampled multi-file group이면 exact split 재검증 후 재분류된 그룹 스캔
-9. non-sampled group 중 batch-capable group이면 필요 시 균등 무작위 file sampling 후 그룹 batch scan
-10. non-sampled `xlsx` group은 direct file scan
-11. 일반 group batch 실패 시 파일 단위 fallback
-12. 결과/오류 리포트 저장
+9. `<output>/_progress/<run_id>` 준비 및 이전 stale progress 정리
+10. non-sampled group 중 batch-capable group이면 필요 시 균등 무작위 file sampling 후 그룹 batch scan
+11. non-sampled `xlsx` group은 direct file scan
+12. 일반 group batch 실패 시 파일 단위 fallback
+13. group/file 완료 단위 progress JSONL 기록
+14. progress JSONL을 최종 `scan_results`/`scan_errors`로 merge 후 `_progress/<run_id>` 삭제
 
 ## 상세 문서 맵
 - 실행 환경과 운영 옵션: [mvp/execution-and-operations.md](mvp/execution-and-operations.md)
@@ -53,3 +55,8 @@
 - batch-capable group scan에서 `--file-sample-ratio`가 설정되면 `--sample-ratio < 1.0`은 무시하고 warning 로그를 남깁니다. 파일 샘플링 후 다시 row sampling을 적용하면 샘플 기준이 이중으로 바뀌어 결과 해석이 모호해지기 때문입니다.
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
+- `_progress`는 최종 출력 아래의 임시 경로이며, 공식 출력 계약은 여전히 `parquet/scan_results`, `parquet/scan_errors`, `csv/scan_results`, `csv/scan_errors`입니다.
+- batch-capable group scan은 그룹 완료 시점에 progress를 기록합니다. file fallback/direct file scan은 최종 식별자가 file-level일 때 파일 완료 시점마다 기록하고, directory identifier로 다시 합쳐야 하는 경로는 식별자 의미가 바뀌지 않도록 그룹 집계 후 기록합니다.
+- 이 설계를 택한 이유는 긴 스캔 동안 사용자가 이미 끝난 범위의 결과를 즉시 확인할 수 있게 하되, 최종 소비 경로에는 부분 결과가 섞이지 않게 하기 위해서입니다.
+- progress 저장 포맷은 JSONL만 사용하고, 최종 Parquet/CSV는 merge 시점에만 생성합니다. 임시 경로까지 Parquet/CSV를 동시에 쓰면 중간 관측성보다 작은 파일과 commit 비용만 늘기 때문입니다.
+- stale progress 정리는 shutdown hook이 아니라 다음 실행 시작 시 수행합니다. YARN 강제 종료, 컨테이너 회수, `kill -9`처럼 훅 실행이 보장되지 않는 종료 경로를 운영 기본값으로 보았기 때문입니다.

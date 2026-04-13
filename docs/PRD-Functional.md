@@ -17,6 +17,7 @@
 - release 자산에는 샘플 데이터셋 번들을 압축한 `privyspark-<tag>-sample-datasets.zip`를 포함할 수 있습니다.
 - 탐지는 ruleset 기반 regex + 일부 타입의 strict validator 조합입니다.
 - 출력은 Parquet + CSV 2종이며 `scan_results`, `scan_errors`를 함께 생성합니다.
+- 긴 스캔 동안에는 최종 출력과 분리된 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 임시 JSONL 결과를 즉시 기록할 수 있습니다. 정상 종료 시 최종 리포트로 merge 후 삭제하며, 비정상 종료 흔적은 다음 실행 시작 시 정리합니다.
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
 
 ## 상세 문서 맵
@@ -32,3 +33,4 @@
 3. ruleset 기반 탐지와 결과 필드(`match_count`, `match_ratio`, `confidence`) 의미가 문서화돼 있습니다.
 4. 일부 파일 실패 시 오류 리포트를 남기고 나머지 처리를 계속하는 동작이 문서화돼 있습니다.
 5. file sampling이 필요한 배경과 row sampling 무시 조건이 문서화돼 있습니다.
+6. `_progress` 임시 경로의 생성/merge/cleanup 동작과 이를 선택한 이유가 문서화돼 있습니다.
