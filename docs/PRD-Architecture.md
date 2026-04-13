@@ -26,7 +26,7 @@
 6. 대표 파일 기준 스키마 샘플링
 7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
 8. sampled multi-file group이면 exact split 재검증 후 재분류된 그룹 스캔
-9. `<output>/_progress/<run_id>` 준비 및 이전 stale progress 정리
+9. `<output>/_progress-preparing.json` lock 획득 후 `<output>/_progress/<run_id>` 준비 및 이전 stale progress 정리
 10. non-sampled group 중 batch-capable group이면 필요 시 균등 무작위 file sampling 후 그룹 batch scan
 11. non-sampled `xlsx` group은 direct file scan
 12. 일반 group batch 실패 시 파일 단위 fallback
@@ -60,4 +60,4 @@
 - 탐지/오류가 전혀 없는 clean completion도 `meta/completions` marker를 남깁니다. 결과 shard가 비어 있더라도 운영자가 완료 여부를 관측할 수 있어야 하기 때문입니다.
 - 이 설계를 택한 이유는 긴 스캔 동안 사용자가 이미 끝난 범위의 결과를 즉시 확인할 수 있게 하되, 최종 소비 경로에는 부분 결과가 섞이지 않게 하기 위해서입니다.
 - progress 저장 포맷은 JSONL만 사용하고, 최종 Parquet/CSV는 merge 시점에만 생성합니다. 임시 경로까지 Parquet/CSV를 동시에 쓰면 중간 관측성보다 작은 파일과 commit 비용만 늘기 때문입니다.
-- stale progress 정리는 shutdown hook이 아니라 다음 실행 시작 시 수행합니다. active-run marker는 주기 heartbeat로 갱신되며, `FAILED`이거나 stale heartbeat로 판정되면 cleanup하고, 최근 heartbeat의 `RUNNING` marker가 남아 있으면 다른 실행의 live progress를 지우지 않도록 즉시 실패합니다.
+- stale progress 정리는 shutdown hook이 아니라 다음 실행 시작 시 수행합니다. startup race는 `_progress-preparing.json` lock으로 막고, 준비가 끝나면 active-run marker를 주기 heartbeat로 갱신합니다. `FAILED`이거나 stale heartbeat/stale preparing lock으로 판정되면 cleanup하고, 최근 heartbeat의 `RUNNING` marker나 fresh preparing lock이 남아 있으면 다른 실행의 live progress를 지우지 않도록 즉시 실패합니다.

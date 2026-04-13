@@ -2814,6 +2814,61 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("prepareProgressRun removes stale preparing marker before recreating progress root") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-stale-preparing-")
+    val stalePreparingFile = outputDir.resolve("_progress-preparing.json")
+    val orphanDir = outputDir.resolve("_progress/orphan/results")
+
+    try {
+      Files.createDirectories(orphanDir)
+      writeText(orphanDir.resolve("orphan.jsonl"), """{"orphan":true}""")
+      writeText(
+        stalePreparingFile,
+        s"""{"run_id":"stale-prepare","state":"PREPARING","last_heartbeat_epoch_ms":${System.currentTimeMillis() - 10L * 60L * 1000L}}"""
+      )
+      Files.setLastModifiedTime(stalePreparingFile, FileTime.fromMillis(System.currentTimeMillis() - 10L * 60L * 1000L))
+
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        "/data/input",
+        "2026-04-13T00:00:00Z"
+      )
+
+      assert(!Files.exists(stalePreparingFile))
+      assert(!Files.exists(orphanDir.resolve("orphan.jsonl")))
+      assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/meta/run.json")))
+      assert(Files.exists(outputDir.resolve(s"_progress/active-run.json")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("prepareProgressRun fails when a fresh preparing marker already exists") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-fresh-preparing-")
+    val preparingFile = outputDir.resolve("_progress-preparing.json")
+
+    try {
+      writeText(
+        preparingFile,
+        s"""{"run_id":"fresh-prepare","state":"PREPARING","last_heartbeat_epoch_ms":${System.currentTimeMillis()}}"""
+      )
+
+      val error = intercept[IllegalStateException] {
+        PrivySparkApp.prepareProgressRun(
+          spark.sparkContext.hadoopConfiguration,
+          outputDir.toString,
+          "/data/input",
+          "2026-04-13T00:00:00Z"
+        )
+      }
+
+      assert(error.getMessage.contains("being prepared"))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("prepareProgressRun removes fresh markerless progress root without run metadata") {
     val outputDir = Files.createTempDirectory("privyspark-progress-markerless-")
     val orphanDir = outputDir.resolve("_progress/orphan/results")

@@ -45,7 +45,9 @@
 - 탐지/오류가 없는 clean completion도 `meta/completions/*.jsonl` marker를 남깁니다. 결과 shard가 비어도 처리 완료 여부를 관측할 수 있어야 하기 때문입니다.
 - `_progress`는 최종 소비 경로가 아닙니다. 운영자가 장시간 스캔의 중간 상태를 확인하는 관측용 경로입니다.
 - 정상 종료 시 `_progress/<run_id>`를 읽어 최종 Parquet/CSV 리포트를 생성하고 곧바로 삭제합니다.
+- startup race를 막기 위해 `_progress` 루트보다 먼저 `<output>/_progress-preparing.json` lock을 원자적으로 생성합니다. setup이 끝나면 이 lock을 제거하고 `_progress/active-run.json` heartbeat marker로 전환합니다.
 - 비정상 종료 시 `_progress`가 남을 수 있으며, active-run marker는 주기 heartbeat로 갱신됩니다. 다음 실행 시작 시 `FAILED` marker 또는 stale heartbeat로 판정된 active-run만 정리합니다.
+- fresh preparing lock이 남아 있으면 같은 `--output` 경로의 다른 실행은 `being prepared`로 즉시 실패합니다. stale preparing lock만 cleanup 대상으로 간주합니다.
 - active-run marker 없이 남은 `_progress`는 `meta/run.json` 흔적이 없으면 setup 초반 비정상 종료로 보고 즉시 정리합니다. run metadata가 이미 있으면 live setup 손상을 피하기 위해 recent root는 `being prepared`로 막고 stale root만 정리합니다.
 - 최근 heartbeat의 `RUNNING` active-run marker가 남아 있으면 cleanup 대신 충돌로 실패합니다. 이유는 다른 실행이 아직 `_progress`를 최종 merge 소스로 사용 중일 가능성을 배제할 수 없기 때문입니다.
 - shutdown hook을 쓰지 않는 이유는 YARN 강제 종료와 비정상 프로세스 종료에서 cleanup 보장이 약하기 때문입니다.

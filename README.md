@@ -11,7 +11,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - `--pre-scan-parallelism`은 파일 확장/포맷 판별뿐 아니라 그룹별 schema split 단계에도 적용됩니다.
 - 탐지 방식: ruleset 기반 regex + 일부 타입의 내장 strict validator, invalid regex는 ruleset 로드 단계에서 즉시 실패
 - 최종 출력: Parquet + CSV (`scan_results`, `scan_errors`)
-- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 임시 JSONL 결과를 남기고, 탐지/오류가 없더라도 `meta/completions` marker를 기록합니다. 정상 종료 시 최종 리포트로 merge한 뒤 삭제합니다. active-run marker는 주기 heartbeat로 갱신되며, 다음 실행은 `FAILED` 또는 stale heartbeat로 판정된 `_progress`만 정리합니다. 최근 heartbeat의 `RUNNING` marker가 남아 있으면 충돌로 실패해 다른 실행의 progress를 지우지 않습니다. 다만 active-run marker 없이 남은 `_progress`는 `meta/run.json` 흔적이 없으면 초기화 중 비정상 종료로 보고 즉시 정리합니다.
+- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 임시 JSONL 결과를 남기고, 탐지/오류가 없더라도 `meta/completions` marker를 기록합니다. 정상 종료 시 최종 리포트로 merge한 뒤 삭제합니다. startup race를 막기 위해 `_progress` 루트보다 먼저 `<output>/_progress-preparing.json` lock을 잡고, 준비가 끝나면 `_progress/active-run.json` heartbeat marker로 전환합니다. 다음 실행은 `FAILED` 또는 stale heartbeat로 판정된 `_progress`만 정리합니다. 최근 heartbeat의 `RUNNING` marker나 fresh preparing lock이 남아 있으면 충돌로 실패해 다른 실행의 progress를 지우지 않습니다.
 - 샘플링과 앱 레벨 병렬도 조정 지원
 
 ## 빠른 명령
@@ -56,7 +56,7 @@ driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...
 
 `--file-sample-ratio`는 group batch scan에서 파일을 균등 무작위로 추출합니다. 이 옵션을 추가한 이유는 작은 파일이 많은 입력에서 task/I/O를 직접 줄이기 위해서이기도 하지만, 더 중요한 배경은 특정 데이터가 한 파일에 몰릴 수 있다는 운영 우려입니다. 파일 크기 가중치 기반 샘플링은 큰 파일을 더 자주 선택하므로, 데이터 집중이 특정 파일에 몰린 경우 그 분포를 그대로 강화할 수 있습니다. 반대로 균등 무작위 파일 추출은 각 파일을 같은 확률로 보므로 파일 단위 concentration risk를 과도하게 편향시키지 않습니다.
 
-중간 `_progress` 경로를 추가한 이유는 긴 스캔에서 최종 `scan_results`/`scan_errors`가 완성되기 전에도 이미 끝난 group/file 단위 결과를 바로 확인할 수 있게 하려는 것입니다. 탐지/오류가 없는 clean completion도 `meta/completions` marker를 남기는 이유는 운영자가 `아직 처리 중`과 `탐지 없이 완료`를 구분할 수 있어야 하기 때문입니다. 진행 중 경로를 별도로 둔 이유는 최종 리포트 소비자가 부분 결과를 완성본으로 오해하지 않게 하기 위해서이고, 종료 훅 대신 다음 실행 시작 시 cleanup을 택한 이유는 YARN 강제 종료나 `kill -9` 같은 상황에서 훅 신뢰도가 낮기 때문입니다. active-run marker가 없는 `_progress`는 두 갈래로 처리합니다. `meta/run.json` 흔적이 없으면 setup 초반 비정상 종료로 보고 즉시 정리하고, run metadata가 이미 있으면 live setup 손상을 피하기 위해 recent root는 `being prepared`로 막고 stale root만 정리합니다.
+중간 `_progress` 경로를 추가한 이유는 긴 스캔에서 최종 `scan_results`/`scan_errors`가 완성되기 전에도 이미 끝난 group/file 단위 결과를 바로 확인할 수 있게 하려는 것입니다. 탐지/오류가 없는 clean completion도 `meta/completions` marker를 남기는 이유는 운영자가 `아직 처리 중`과 `탐지 없이 완료`를 구분할 수 있어야 하기 때문입니다. 진행 중 경로를 별도로 둔 이유는 최종 리포트 소비자가 부분 결과를 완성본으로 오해하지 않게 하기 위해서이고, 종료 훅 대신 다음 실행 시작 시 cleanup을 택한 이유는 YARN 강제 종료나 `kill -9` 같은 상황에서 훅 신뢰도가 낮기 때문입니다. 추가로 `_progress-preparing.json`을 둔 이유는 `_progress` 디렉토리를 active marker보다 먼저 만들 수밖에 없는 준비 구간에서 concurrent startup이 서로의 fresh root를 지우지 않게 하기 위해서입니다. preparing lock은 짧은 setup window만 보호하고, 준비가 끝나면 heartbeat 기반 `active-run.json`으로 전환합니다.
 
 ## 샘플 데이터셋
 - 재현 가능한 입력 케이스 번들은 [samples/input-cases/README.md](samples/input-cases/README.md)에 있습니다.

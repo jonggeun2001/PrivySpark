@@ -109,6 +109,7 @@ object PrivySparkApp {
   private val TextProbeByteLimit = 512
   private val ActiveRunHeartbeatIntervalMillis = 30000L
   private val ActiveRunStaleThresholdMillis = 3L * 60L * 1000L
+  private val PreparingRunStaleThresholdMillis = 30000L
   private val ParquetMagicBytes = Array[Byte]('P'.toByte, 'A'.toByte, 'R'.toByte, '1'.toByte)
   private val OrcMagicBytes = Array[Byte]('O'.toByte, 'R'.toByte, 'C'.toByte)
   private val MaxArchiveExpansionDepth = 1
@@ -3132,7 +3133,8 @@ object PrivySparkApp {
     val root = new Path(rootPath)
     val fs = root.getFileSystem(conf)
     val activeRunPath = s"$rootPath/active-run.json"
-    cleanupProgressRoot(conf, rootPath, activeRunPath)
+    val preparingRunPath = s"${outputRoot.stripSuffix("/")}/${ProgressDirectoryName}-preparing.json"
+    cleanupProgressRoot(conf, rootPath, activeRunPath, preparingRunPath)
 
     val runId = s"${timestamp.replaceAll("[:.]", "-")}-${UUID.randomUUID().toString}"
     val runPath = s"$rootPath/$runId"
@@ -3154,8 +3156,9 @@ object PrivySparkApp {
       completionsPath
     )
 
-    fs.mkdirs(root)
     try {
+      writePreparingRunMarker(conf, progressRun, preparingRunPath, overwrite = false)
+      fs.mkdirs(root)
       writeActiveRunMarker(conf, progressRun, state = "RUNNING", overwrite = false)
       Seq(runPath, resultsPath, errorsPath, metaPath, completionsPath).foreach(path => fs.mkdirs(new Path(path)))
       writeJsonFile(
@@ -3163,6 +3166,7 @@ object PrivySparkApp {
         s"$metaPath/run.json",
         progressRunMetadataJson(progressRun, state = "RUNNING", errorMessage = None)
       )
+      deleteOwnedPreparingRunMarker(conf, preparingRunPath, progressRun.runId)
 
       logDebug(
         "progress_run_prepared",
@@ -3173,8 +3177,10 @@ object PrivySparkApp {
       progressRun
     } catch {
       case _: org.apache.hadoop.fs.FileAlreadyExistsException =>
+        deleteOwnedPreparingRunMarker(conf, preparingRunPath, progressRun.runId)
         throw new IllegalStateException(s"Active progress run already exists under output root: $rootPath")
       case NonFatal(e) =>
+        deleteOwnedPreparingRunMarker(conf, preparingRunPath, progressRun.runId)
         deleteOwnedActiveRunMarker(conf, progressRun)
         fs.delete(new Path(runPath), true)
         deleteEmptyProgressRoot(fs, root)
@@ -3312,10 +3318,22 @@ object PrivySparkApp {
   private def cleanupProgressRoot(
     conf: org.apache.hadoop.conf.Configuration,
     rootPath: String,
-    activeRunPath: String
+    activeRunPath: String,
+    preparingRunPath: String
   ): Unit = {
     val root = new Path(rootPath)
     val fs = root.getFileSystem(conf)
+    val preparingMarkerPath = new Path(preparingRunPath)
+    if (fs.exists(preparingMarkerPath)) {
+      val preparingModifiedAt = fs.getFileStatus(preparingMarkerPath).getModificationTime
+      if (System.currentTimeMillis() - preparingModifiedAt > PreparingRunStaleThresholdMillis) {
+        logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "stale_preparing_run_marker")
+        fs.delete(preparingMarkerPath, false)
+      } else {
+        throw new IllegalStateException(s"Progress root is being prepared under output root: $rootPath")
+      }
+    }
+
     if (!fs.exists(root)) {
       return
     }
@@ -3435,17 +3453,43 @@ object PrivySparkApp {
     )
   }
 
+  private def writePreparingRunMarker(
+    conf: org.apache.hadoop.conf.Configuration,
+    progressRun: ProgressRun,
+    preparingRunPath: String,
+    overwrite: Boolean
+  ): Unit = {
+    writeJsonFile(
+      conf,
+      preparingRunPath,
+      activeRunMetadataJson(progressRun, state = "PREPARING", System.currentTimeMillis(), errorMessage = None),
+      overwrite = overwrite
+    )
+  }
+
   private def deleteOwnedActiveRunMarker(
     conf: org.apache.hadoop.conf.Configuration,
     progressRun: ProgressRun
+  ): Unit = deleteOwnedRunMarker(conf, progressRun.activeRunPath, progressRun.runId)
+
+  private def deleteOwnedPreparingRunMarker(
+    conf: org.apache.hadoop.conf.Configuration,
+    preparingRunPath: String,
+    runId: String
+  ): Unit = deleteOwnedRunMarker(conf, preparingRunPath, runId)
+
+  private def deleteOwnedRunMarker(
+    conf: org.apache.hadoop.conf.Configuration,
+    markerPath: String,
+    runId: String
   ): Unit = {
     ActiveRunMarkerLock.synchronized {
-      readActiveRunMarker(conf, progressRun.activeRunPath) match {
-        case Some(marker) if marker.runId == progressRun.runId =>
-          val activeRunPath = new Path(progressRun.activeRunPath)
-          val fs = activeRunPath.getFileSystem(conf)
-          if (fs.exists(activeRunPath)) {
-            fs.delete(activeRunPath, false)
+      readActiveRunMarker(conf, markerPath) match {
+        case Some(marker) if marker.runId == runId =>
+          val path = new Path(markerPath)
+          val fs = path.getFileSystem(conf)
+          if (fs.exists(path)) {
+            fs.delete(path, false)
           }
         case _ =>
       }
