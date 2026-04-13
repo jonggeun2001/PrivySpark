@@ -3025,6 +3025,38 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("prepareProgressRun cleans unreadable active marker immediately when run metadata is failed") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-failed-cleanup-")
+
+    try {
+      val failedRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        "/data/input",
+        "2026-04-13T00:00:00Z"
+      )
+      val activeRunFile = outputDir.resolve("_progress/active-run.json")
+      val runMetadataFile = outputDir.resolve(s"_progress/${failedRun.runId}/meta/run.json")
+      val failedRunMetadata = new String(Files.readAllBytes(runMetadataFile), StandardCharsets.UTF_8)
+        .replace("\"state\":\"RUNNING\"", "\"state\":\"FAILED\"")
+
+      writeTextViaHadoop(runMetadataFile, failedRunMetadata)
+      writeTextViaHadoop(activeRunFile, """{"run_id":""")
+
+      val recoveredRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        "/data/input",
+        "2026-04-13T00:01:00Z"
+      )
+
+      assert(recoveredRun.runId != failedRun.runId)
+      assert(Files.exists(outputDir.resolve(s"_progress/${recoveredRun.runId}/meta/run.json")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("scanGroup persists batch progress and mergeProgressReports finalizes outputs then deletes progress run") {
     val inputDir = Files.createTempDirectory("privyspark-progress-batch-input-")
     val outputDir = Files.createTempDirectory("privyspark-progress-batch-output-")

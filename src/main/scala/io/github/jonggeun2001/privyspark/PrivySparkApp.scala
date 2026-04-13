@@ -3369,12 +3369,17 @@ object PrivySparkApp {
       case Some(marker) =>
         throw new IllegalStateException(s"Active progress run already exists under output root: $rootPath (run_id=${marker.runId})")
       case None =>
-        val markerModifiedAt = fs.getFileStatus(activeMarkerPath).getModificationTime
-        if (System.currentTimeMillis() - markerModifiedAt > ActiveRunStaleThresholdMillis) {
-          logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "stale_unreadable_active_run_marker")
+        if (progressRootHasFailedRunMetadata(conf, root)) {
+          logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "failed_run_metadata_with_unreadable_active_run_marker")
           fs.delete(root, true)
         } else {
-          throw new IllegalStateException(s"Active progress marker is unreadable under output root: $rootPath")
+          val markerModifiedAt = fs.getFileStatus(activeMarkerPath).getModificationTime
+          if (System.currentTimeMillis() - markerModifiedAt > ActiveRunStaleThresholdMillis) {
+            logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "stale_unreadable_active_run_marker")
+            fs.delete(root, true)
+          } else {
+            throw new IllegalStateException(s"Active progress marker is unreadable under output root: $rootPath")
+          }
         }
     }
   }
@@ -3518,12 +3523,26 @@ object PrivySparkApp {
       status.isDirectory && fs.exists(new Path(status.getPath, "meta/run.json"))
     }
 
+  private def progressRootHasFailedRunMetadata(
+    conf: org.apache.hadoop.conf.Configuration,
+    root: Path
+  ): Boolean = {
+    val fs = root.getFileSystem(conf)
+    Option(fs.listStatus(root)).getOrElse(Array.empty).exists { status =>
+      status.isDirectory && readRunMetadataFile(conf, new Path(status.getPath, "meta/run.json")).exists(_.state == "FAILED")
+    }
+  }
+
   private def readProgressRunMetadata(
     conf: org.apache.hadoop.conf.Configuration,
     progressRun: ProgressRun
+  ): Option[ProgressRunMetadata] =
+    readRunMetadataFile(conf, new Path(s"${progressRun.metaPath}/run.json"))
+
+  private def readRunMetadataFile(
+    conf: org.apache.hadoop.conf.Configuration,
+    path: Path
   ): Option[ProgressRunMetadata] = {
-    val runMetadataPath = s"${progressRun.metaPath}/run.json"
-    val path = new Path(runMetadataPath)
     val fs = path.getFileSystem(conf)
     if (!fs.exists(path)) {
       return None

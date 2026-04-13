@@ -49,6 +49,7 @@
 - 비정상 종료 시 `_progress`가 남을 수 있으며, active-run marker는 주기 heartbeat로 갱신됩니다. 다음 실행 시작 시 `FAILED` marker 또는 stale heartbeat로 판정된 active-run만 정리합니다.
 - live run 도중 `active-run.json`이 partial/corrupt 상태가 되더라도 owner run은 `meta/run.json`의 `run_id`를 근거로 다음 heartbeat에서 active marker를 self-heal합니다.
 - 반대로 `meta/run.json`이 이미 `FAILED`로 전환된 뒤에는 늦게 끝난 sibling task가 heartbeat를 다시 쏘더라도 같은 run의 active marker를 `RUNNING`으로 되살리지 않습니다.
+- startup cleanup도 unreadable active marker만 보고 3분을 기다리지 않습니다. 같은 `_progress` 아래 `meta/run.json`이 이미 `FAILED`면 즉시 stale failure로 정리합니다.
 - fresh preparing lock이 남아 있으면 같은 `--output` 경로의 다른 실행은 `being prepared`로 즉시 실패합니다. stale preparing lock만 cleanup 대상으로 간주합니다.
 - active-run marker 없이 남은 `_progress`는 `meta/run.json` 흔적이 없으면 setup 초반 비정상 종료로 보고 즉시 정리합니다. run metadata가 이미 있으면 live setup 손상을 피하기 위해 recent root는 `being prepared`로 막고 stale root만 정리합니다.
 - 최근 heartbeat의 `RUNNING` active-run marker가 남아 있으면 cleanup 대신 충돌로 실패합니다. 이유는 다른 실행이 아직 `_progress`를 최종 merge 소스로 사용 중일 가능성을 배제할 수 없기 때문입니다.
