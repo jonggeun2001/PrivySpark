@@ -29,6 +29,11 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 ./gradlew generateSampleDatasets
 ```
 
+샘플 입력 케이스 zip 패키징:
+```bash
+./gradlew packageSampleDatasets
+```
+
 YARN cluster 실행:
 ```bash
 PRIVYSPARK_DEBUG=debug \
@@ -50,6 +55,7 @@ driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...
 ## 샘플 데이터셋
 - 재현 가능한 입력 케이스 번들은 [samples/input-cases/README.md](samples/input-cases/README.md)에 있습니다.
 - `./gradlew generateSampleDatasets`로 `csv/json/jsonl/ndjson/parquet/orc/avro/xlsx/zip/jar`, extensionless magic-byte, text fallback, zero-byte skip, unsupported/error archive 케이스를 다시 생성할 수 있습니다.
+- `./gradlew packageSampleDatasets`는 체크인된 `samples/input-cases` 번들을 그대로 `build/distributions/privyspark-sample-datasets.zip`으로 묶고, GitHub Release에서는 `privyspark-<tag>-sample-datasets.zip` 자산으로 함께 배포합니다.
 - 케이스별 기대 결과/오류는 `samples/input-cases/scenario-manifest.tsv`에 정리됩니다.
 
 ## 문서 맵
@@ -68,5 +74,6 @@ driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...
 
 ## 릴리즈
 - 태그 `v*` 또는 bare semver(`0.1.3`) 푸시 시 GitHub Actions가 Shadow fat JAR를 빌드해 Release 자산으로 업로드합니다.
-- 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml` 형식입니다.
+- 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip` 형식입니다.
 - `default-rules.yaml`은 배포 예시 ruleset 파일이며, YARN 제출 시 `--files /abs/path/default-rules.yaml#default-rules.yaml` 또는 `PRIVYSPARK_SPARK_FILES=/abs/path/default-rules.yaml#default-rules.yaml`로 함께 전달할 수 있습니다.
+- `privyspark-<tag>-sample-datasets.zip`은 압축 해제 시 `input-cases/` 루트를 기준으로 샘플 ruleset, manifest, 입력 케이스 파일 트리를 제공합니다.

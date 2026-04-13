@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.bundling.Zip
 import org.gradle.api.tasks.testing.Test
 
 plugins {
@@ -8,7 +9,7 @@ plugins {
 }
 
 group = "io.github.jonggeun2001"
-version = "1.0.15"
+version = "1.0.16"
 
 repositories {
     mavenCentral()
@@ -92,4 +93,16 @@ tasks.register<JavaExec>("generateSampleDatasets") {
         "--add-opens=java.base/java.lang=ALL-UNNAMED",
         "--add-opens=java.base/java.nio=ALL-UNNAMED",
     )
+}
+
+tasks.register<Zip>("packageSampleDatasets") {
+    group = "distribution"
+    description = "Package the sample input-case datasets as a distributable zip archive"
+    archiveFileName.set("privyspark-sample-datasets.zip")
+    destinationDirectory.set(layout.buildDirectory.dir("distributions"))
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+    from(layout.projectDirectory.dir("samples/input-cases")) {
+        into("input-cases")
+    }
 }

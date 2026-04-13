@@ -46,3 +46,4 @@
 ## 샘플 데이터셋
 - 현재 구현된 지원/오류/skip 입력 케이스를 재현하는 번들은 `samples/input-cases`에 포함합니다.
 - 재생성 명령은 `./gradlew generateSampleDatasets`이며, case 목록과 기대 결과는 `samples/input-cases/scenario-manifest.tsv`에서 확인합니다.
+- 배포용 zip은 `./gradlew packageSampleDatasets`로 생성하며, release 자산 이름은 `privyspark-<tag>-sample-datasets.zip`입니다.

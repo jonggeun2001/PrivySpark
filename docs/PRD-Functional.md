@@ -12,6 +12,7 @@
 - 실행 옵션으로 pre-scan, group, file fallback 병렬도를 조정할 수 있으며, pre-scan 병렬도는 파일 확장/포맷 판별과 그룹별 schema split에 적용됩니다.
 - driver 로그 레벨은 `PRIVYSPARK_DEBUG` / `privyspark.debug`로 `error`, `warn`, `info`, `debug`를 설정할 수 있고, 기본값은 `warn`입니다. `true`/`false`는 각각 `debug`/`warn`으로 해석됩니다.
 - 저장소에는 현재 입력 처리 분기를 재현하는 샘플 데이터셋 번들과 재생성 task(`generateSampleDatasets`)를 포함할 수 있습니다.
+- release 자산에는 샘플 데이터셋 번들을 압축한 `privyspark-<tag>-sample-datasets.zip`를 포함할 수 있습니다.
 - 탐지는 ruleset 기반 regex + 일부 타입의 strict validator 조합입니다.
 - 출력은 Parquet + CSV 2종이며 `scan_results`, `scan_errors`를 함께 생성합니다.
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
