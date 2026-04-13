@@ -17,7 +17,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.charset.{CharacterCodingException, CodingErrorAction}
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.Executors
+import java.util.concurrent.{Executors, ScheduledExecutorService, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipInputStream
 import java.nio.file.NoSuchFileException
@@ -107,7 +107,8 @@ object PrivySparkApp {
   private val NonDirectoryIdentifierFormats = Set(TextFormat, XlsxFormat)
   private val MagicProbeByteLimit = 4
   private val TextProbeByteLimit = 512
-  private val ActiveRunStaleThresholdMillis = 24L * 60L * 60L * 1000L
+  private val ActiveRunHeartbeatIntervalMillis = 30000L
+  private val ActiveRunStaleThresholdMillis = 3L * 60L * 1000L
   private val ParquetMagicBytes = Array[Byte]('P'.toByte, 'A'.toByte, 'R'.toByte, '1'.toByte)
   private val OrcMagicBytes = Array[Byte]('O'.toByte, 'R'.toByte, 'C'.toByte)
   private val MaxArchiveExpansionDepth = 1
@@ -913,6 +914,7 @@ object PrivySparkApp {
     val timestamp = Instant.now().toString
     val scanPlan = scanDirectoryStructure(spark, config.inputPath, config.inputPath, timestamp, preScanParallelism)
     var progressRun: Option[ProgressRun] = None
+    var heartbeatExecutor: Option[ScheduledExecutorService] = None
     try {
       logInfo(
         "scan_plan_ready",
@@ -928,6 +930,7 @@ object PrivySparkApp {
         timestamp
       )
       progressRun = Some(preparedProgressRun)
+      heartbeatExecutor = Some(startProgressHeartbeat(spark.sparkContext.hadoopConfiguration, preparedProgressRun))
       if (scanPlan.errors.nonEmpty) {
         persistProgressRecords(
           spark.sparkContext.hadoopConfiguration,
@@ -970,11 +973,13 @@ object PrivySparkApp {
       )
     } catch {
       case NonFatal(e) =>
+        heartbeatExecutor.foreach(stopProgressHeartbeat)
         progressRun.foreach { run =>
           markProgressRunFailed(spark.sparkContext.hadoopConfiguration, run, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
         }
         throw e
     } finally {
+      heartbeatExecutor.foreach(stopProgressHeartbeat)
       cleanupStagingPaths(spark.sparkContext.hadoopConfiguration, scanPlan.stagingPaths)
     }
   }
@@ -3320,8 +3325,13 @@ object PrivySparkApp {
 
     val activeMarkerPath = new Path(activeRunPath)
     if (!fs.exists(activeMarkerPath)) {
-      logDebug("progress_cleanup_start", "path" -> rootPath)
-      fs.delete(root, true)
+      val rootModifiedAt = fs.getFileStatus(root).getModificationTime
+      if (System.currentTimeMillis() - rootModifiedAt > ActiveRunStaleThresholdMillis) {
+        logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "missing_active_run_marker")
+        fs.delete(root, true)
+      } else {
+        throw new IllegalStateException(s"Progress root is being prepared under output root: $rootPath")
+      }
       return
     }
 
@@ -3360,6 +3370,33 @@ object PrivySparkApp {
     conf: org.apache.hadoop.conf.Configuration,
     progressRun: ProgressRun
   ): Unit = updateActiveRunMarker(conf, progressRun, state = "RUNNING", errorMessage = None)
+
+  private def startProgressHeartbeat(
+    conf: org.apache.hadoop.conf.Configuration,
+    progressRun: ProgressRun
+  ): ScheduledExecutorService = {
+    val executor = Executors.newSingleThreadScheduledExecutor()
+    executor.scheduleAtFixedRate(
+      new Runnable {
+        override def run(): Unit = {
+          try {
+            updateActiveRunHeartbeat(conf, progressRun)
+          } catch {
+            case NonFatal(_) =>
+          }
+        }
+      },
+      ActiveRunHeartbeatIntervalMillis,
+      ActiveRunHeartbeatIntervalMillis,
+      TimeUnit.MILLISECONDS
+    )
+    executor
+  }
+
+  private def stopProgressHeartbeat(executor: ScheduledExecutorService): Unit = {
+    executor.shutdownNow()
+    executor.awaitTermination(5L, TimeUnit.SECONDS)
+  }
 
   private def updateActiveRunMarker(
     conf: org.apache.hadoop.conf.Configuration,

@@ -13,7 +13,7 @@ import java.io.{ByteArrayOutputStream, PrintStream}
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.attribute.{FileTime, PosixFilePermissions}
 import java.util.Comparator
 import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import java.util.zip.{ZipEntry, ZipOutputStream}
@@ -2789,10 +2789,12 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   test("prepareProgressRun removes stale progress root and creates run metadata") {
     val outputDir = Files.createTempDirectory("privyspark-progress-prepare-")
     val staleProgressDir = outputDir.resolve("_progress/old-run/results")
+    val staleRoot = outputDir.resolve("_progress")
 
     try {
       Files.createDirectories(staleProgressDir)
       writeText(staleProgressDir.resolve("stale.jsonl"), """{"stale":true}""")
+      Files.setLastModifiedTime(staleRoot, FileTime.fromMillis(System.currentTimeMillis() - 10L * 60L * 1000L))
 
       val progressRun = PrivySparkApp.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,

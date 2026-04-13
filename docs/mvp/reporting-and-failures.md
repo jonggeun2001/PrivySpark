@@ -43,7 +43,7 @@
 - 손상 JSON, nested archive, unsafe archive path, 매직바이트 불일치 무확장자/미지원 확장자 파일 등은 명시적 오류로 기록합니다.
 - 진행 중 관측을 위해 group/file 완료 시점의 임시 JSONL을 남기지만, 최종 소비자는 항상 Parquet/CSV 결과만 보도록 경로를 분리합니다.
 - 다음 실행 시작 시 stale `_progress`를 먼저 정리하는 이유는 종료 훅보다 재시작 시점 cleanup이 운영적으로 더 예측 가능하기 때문입니다.
-- 단, recent heartbeat의 `RUNNING` active-run marker가 남아 있으면 stale cleanup 대신 충돌로 실패합니다. `FAILED` 또는 stale heartbeat marker만 cleanup 대상으로 간주합니다.
+- 단, active-run marker는 주기 heartbeat로 갱신되며, recent heartbeat의 `RUNNING` marker가 남아 있으면 stale cleanup 대신 충돌로 실패합니다. `FAILED` 또는 stale heartbeat marker만 cleanup 대상으로 간주합니다.
 
 ## 보안 원칙
 - 원문 PII 값은 저장하지 않습니다.
