@@ -3348,8 +3348,7 @@ object PrivySparkApp {
       case Some(marker) =>
         throw new IllegalStateException(s"Active progress run already exists under output root: $rootPath (run_id=${marker.runId})")
       case None =>
-        logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "unreadable_active_run_marker")
-        fs.delete(root, true)
+        throw new IllegalStateException(s"Active progress marker is unreadable under output root: $rootPath")
     }
   }
 
