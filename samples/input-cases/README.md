@@ -4,12 +4,16 @@
 
 - 생성기 엔트리: `io.github.jonggeun2001.privyspark.SampleDatasetGenerator`
 - 재생성 명령: `./gradlew generateSampleDatasets`
+- zip 패키징 명령: `./gradlew packageSampleDatasets`
 - 생성 산출물:
   - `sample-rules.yaml`: 샘플 검증용 최소 ruleset
   - `scenario-manifest.tsv`: 케이스별 기대 결과/오류 manifest
   - `files/`: 실제 스캔 대상 파일/디렉토리
+  - `build/distributions/privyspark-sample-datasets.zip`: `build/` 아래 staging 결과를 묶은 release 배포용 zip
 
 `files/` 아래 binary 파일은 생성기로 다시 만들어지는 산출물이므로 수동 편집하지 않습니다.
+
+GitHub Release에는 같은 내용을 담은 `privyspark-<tag>-sample-datasets.zip` 자산이 추가됩니다. 압축을 해제하면 `input-cases/` 루트 아래에 이 디렉토리 구조가 그대로 풀립니다.
 
 ## 사용 방법
 

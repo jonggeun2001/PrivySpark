@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.bundling.Zip
 import org.gradle.api.tasks.testing.Test
 
 plugins {
@@ -92,4 +93,35 @@ tasks.register<JavaExec>("generateSampleDatasets") {
         "--add-opens=java.base/java.lang=ALL-UNNAMED",
         "--add-opens=java.base/java.nio=ALL-UNNAMED",
     )
+}
+
+val sampleDatasetsPackageSourceDir = layout.buildDirectory.dir("generated/sample-datasets/input-cases")
+
+tasks.register<JavaExec>("stageSampleDatasetsForPackaging") {
+    group = "distribution"
+    description = "Generate the sample input-case datasets under build/ for packaging"
+    dependsOn(tasks.testClasses)
+    val testTask = tasks.named<Test>("test")
+    classpath = testTask.get().classpath
+    mainClass.set("io.github.jonggeun2001.privyspark.SampleDatasetGenerator")
+    workingDir = projectDir
+    args(sampleDatasetsPackageSourceDir.get().asFile.absolutePath)
+    jvmArgs(
+        "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+    )
+}
+
+tasks.register<Zip>("packageSampleDatasets") {
+    group = "distribution"
+    description = "Package the sample input-case datasets as a distributable zip archive"
+    dependsOn("stageSampleDatasetsForPackaging")
+    archiveFileName.set("privyspark-sample-datasets.zip")
+    destinationDirectory.set(layout.buildDirectory.dir("distributions"))
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+    from(sampleDatasetsPackageSourceDir) {
+        into("input-cases")
+    }
 }

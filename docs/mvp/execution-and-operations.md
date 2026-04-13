@@ -48,6 +48,11 @@
 ./gradlew generateSampleDatasets
 ```
 
+샘플 입력 케이스 zip 패키징:
+```bash
+./gradlew packageSampleDatasets
+```
+
 제출 스크립트:
 ```bash
 bin/privyspark-submit scan --path /abs/input --output /abs/output --ruleset default
@@ -100,5 +105,7 @@ spark-submit \
 
 ## 릴리즈
 - GitHub Release는 `v*` 또는 bare semver 태그 푸시로 트리거됩니다.
-- Release 자산 파일명은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`입니다.
+- Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행해 jar와 샘플 데이터셋 zip을 함께 준비합니다.
+- Release 자산 파일명은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`입니다.
 - `default-rules.yaml`은 클러스터 제출 시 함께 배포할 수 있는 예시 기본 ruleset 파일입니다.
+- `privyspark-<tag>-sample-datasets.zip`은 압축 해제 시 `input-cases/` 디렉토리 아래에 샘플 ruleset, manifest, 입력 케이스 파일을 제공합니다.
