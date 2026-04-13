@@ -9,7 +9,7 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
-import java.io.{ByteArrayOutputStream, PrintStream}
+import java.io.{BufferedWriter, ByteArrayOutputStream, OutputStreamWriter, PrintStream}
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
@@ -2983,13 +2983,43 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "2026-04-13T00:00:00Z"
       )
       val activeRunFile = outputDir.resolve("_progress/active-run.json")
-      writeText(activeRunFile, """{"run_id":""")
+      writeTextViaHadoop(activeRunFile, """{"run_id":""")
 
       PrivySparkApp.updateActiveRunHeartbeat(spark.sparkContext.hadoopConfiguration, progressRun)
 
       val healedMarker = new String(Files.readAllBytes(activeRunFile), StandardCharsets.UTF_8)
       assert(healedMarker.contains(progressRun.runId))
       assert(healedMarker.contains("RUNNING"))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("updateActiveRunHeartbeat does not revive a failed run") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-no-revive-")
+
+    try {
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        "/data/input",
+        "2026-04-13T00:00:00Z"
+      )
+      val activeRunFile = outputDir.resolve("_progress/active-run.json")
+      val runMetadataFile = outputDir.resolve(s"_progress/${progressRun.runId}/meta/run.json")
+      val failedRunMetadata = new String(Files.readAllBytes(runMetadataFile), StandardCharsets.UTF_8)
+        .replace("\"state\":\"RUNNING\"", "\"state\":\"FAILED\"")
+
+      writeTextViaHadoop(runMetadataFile, failedRunMetadata)
+      writeTextViaHadoop(activeRunFile, """{"run_id":""")
+
+      PrivySparkApp.updateActiveRunHeartbeat(spark.sparkContext.hadoopConfiguration, progressRun)
+
+      val activeMarkerAfter = new String(Files.readAllBytes(activeRunFile), StandardCharsets.UTF_8)
+      assert(!activeMarkerAfter.contains(progressRun.runId))
+      assert(!activeMarkerAfter.contains("RUNNING"))
+      val runMetadataAfter = new String(Files.readAllBytes(runMetadataFile), StandardCharsets.UTF_8)
+      assert(runMetadataAfter.contains("\"state\":\"FAILED\""))
     } finally {
       deleteRecursively(outputDir)
     }
@@ -3208,6 +3238,17 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def writeText(path: Path, content: String): Unit = {
     Files.write(path, content.getBytes(StandardCharsets.UTF_8))
+  }
+
+  private def writeTextViaHadoop(path: Path, content: String): Unit = {
+    val hadoopPath = new org.apache.hadoop.fs.Path(path.toString)
+    val fs = hadoopPath.getFileSystem(spark.sparkContext.hadoopConfiguration)
+    val writer = new BufferedWriter(new OutputStreamWriter(fs.create(hadoopPath, true), StandardCharsets.UTF_8))
+    try {
+      writer.write(content)
+    } finally {
+      writer.close()
+    }
   }
 
   private def writeBytes(path: Path, content: Array[Byte]): Unit = {

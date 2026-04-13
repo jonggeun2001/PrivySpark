@@ -95,6 +95,7 @@ object PrivySparkApp {
     completionsPath: String
   )
   private final case class ActiveRunMarker(runId: String, state: String, lastHeartbeatEpochMillis: Long)
+  private final case class ProgressRunMetadata(runId: String, state: String)
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
   private val ProgressDirectoryName = "_progress"
@@ -3383,12 +3384,12 @@ object PrivySparkApp {
     progressRun: ProgressRun,
     errorMessage: String
   ): Unit = {
-    updateActiveRunMarker(conf, progressRun, state = "FAILED", errorMessage = Some(errorMessage))
     writeJsonFile(
       conf,
       s"${progressRun.metaPath}/run.json",
       progressRunMetadataJson(progressRun, state = "FAILED", errorMessage = Some(errorMessage))
     )
+    updateActiveRunMarker(conf, progressRun, state = "FAILED", errorMessage = Some(errorMessage))
   }
 
   private[privyspark] def updateActiveRunHeartbeat(
@@ -3430,10 +3431,15 @@ object PrivySparkApp {
     errorMessage: Option[String]
   ): Unit = {
     ActiveRunMarkerLock.synchronized {
+      val runMetadata = readProgressRunMetadata(conf, progressRun)
+      val failedRunMetadata = runMetadata.exists(metadata => metadata.runId == progressRun.runId && metadata.state == "FAILED")
       readActiveRunMarker(conf, progressRun.activeRunPath) match {
+        case Some(marker) if marker.runId == progressRun.runId && marker.state == "FAILED" && state == "RUNNING" =>
+        case Some(marker) if marker.runId == progressRun.runId && failedRunMetadata && state == "RUNNING" =>
         case Some(marker) if marker.runId == progressRun.runId =>
           writeActiveRunMarker(conf, progressRun, state, overwrite = true, errorMessage)
-        case None if progressRunHasOwnedMetadata(conf, progressRun) =>
+        case None if failedRunMetadata && state == "RUNNING" =>
+        case None if runMetadata.exists(_.runId == progressRun.runId) =>
           logWarn(
             "progress_active_run_marker_self_healed",
             "run_id" -> progressRun.runId,
@@ -3512,22 +3518,26 @@ object PrivySparkApp {
       status.isDirectory && fs.exists(new Path(status.getPath, "meta/run.json"))
     }
 
-  private def progressRunHasOwnedMetadata(
+  private def readProgressRunMetadata(
     conf: org.apache.hadoop.conf.Configuration,
     progressRun: ProgressRun
-  ): Boolean = {
+  ): Option[ProgressRunMetadata] = {
     val runMetadataPath = s"${progressRun.metaPath}/run.json"
     val path = new Path(runMetadataPath)
     val fs = path.getFileSystem(conf)
     if (!fs.exists(path)) {
-      return false
+      return None
     }
 
     val reader = new BufferedReader(new InputStreamReader(fs.open(path), StandardCharsets.UTF_8))
     try {
       Option(reader.readLine())
-        .flatMap(line => extractJsonStringField(line, "run_id"))
-        .contains(progressRun.runId)
+        .flatMap { line =>
+          for {
+            runId <- extractJsonStringField(line, "run_id")
+            state <- extractJsonStringField(line, "state")
+          } yield ProgressRunMetadata(runId, state)
+        }
     } finally {
       reader.close()
     }
