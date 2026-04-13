@@ -9,7 +9,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, Paths}
 import java.util.Comparator
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
@@ -60,6 +60,20 @@ class SampleDatasetGeneratorSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
     } finally {
       deleteRecursively(outputRoot)
+    }
+  }
+
+  test("checked-in sample bundle paths stay aligned with manifest") {
+    val outputRoot = Paths.get("samples", "input-cases")
+    val scenarios = loadManifest(outputRoot.resolve("scenario-manifest.tsv"))
+
+    assert(Files.exists(outputRoot.resolve("sample-rules.yaml")))
+    assert(Files.isDirectory(outputRoot.resolve("files")))
+    assert(scenarios.nonEmpty)
+
+    scenarios.foreach { scenario =>
+      val samplePath = outputRoot.resolve(scenario.relativePath)
+      assert(Files.exists(samplePath), s"case=${scenario.caseId} path=$samplePath")
     }
   }
 
