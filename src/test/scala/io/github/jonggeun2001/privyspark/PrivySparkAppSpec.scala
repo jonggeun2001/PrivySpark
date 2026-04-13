@@ -2818,7 +2818,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     try {
       Files.createDirectories(activeRunFile.getParent)
-      writeText(activeRunFile, """{"run_id":"active","state":"RUNNING"}""")
+      writeText(
+        activeRunFile,
+        s"""{"run_id":"active","state":"RUNNING","last_heartbeat_epoch_ms":${System.currentTimeMillis()}}"""
+      )
 
       val error = intercept[IllegalStateException] {
         PrivySparkApp.prepareProgressRun(
@@ -2830,6 +2833,34 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
 
       assert(error.getMessage.contains("Active progress run already exists"))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("prepareProgressRun removes failed active marker state and recreates progress root") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-failed-active-")
+    val staleRunDir = outputDir.resolve("_progress/failed-run/results")
+    val activeRunFile = outputDir.resolve("_progress/active-run.json")
+
+    try {
+      Files.createDirectories(staleRunDir)
+      writeText(staleRunDir.resolve("stale.jsonl"), """{"stale":true}""")
+      writeText(
+        activeRunFile,
+        s"""{"run_id":"failed-run","state":"FAILED","last_heartbeat_epoch_ms":${System.currentTimeMillis()}}"""
+      )
+
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        "/data/input",
+        "2026-04-13T00:00:00Z"
+      )
+
+      assert(progressRun.runId != "failed-run")
+      assert(!Files.exists(staleRunDir.resolve("stale.jsonl")))
+      assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/meta/run.json")))
     } finally {
       deleteRecursively(outputDir)
     }

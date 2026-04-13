@@ -11,7 +11,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - `--pre-scan-parallelism`은 파일 확장/포맷 판별뿐 아니라 그룹별 schema split 단계에도 적용됩니다.
 - 탐지 방식: ruleset 기반 regex + 일부 타입의 내장 strict validator, invalid regex는 ruleset 로드 단계에서 즉시 실패
 - 최종 출력: Parquet + CSV (`scan_results`, `scan_errors`)
-- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 임시 JSONL 결과를 남기고, 탐지/오류가 없더라도 `meta/completions` marker를 기록합니다. 정상 종료 시 최종 리포트로 merge한 뒤 삭제합니다. 다음 실행은 active-run marker가 없을 때만 stale `_progress`를 정리하고, active marker가 남아 있으면 충돌로 실패해 다른 실행의 progress를 지우지 않습니다.
+- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 임시 JSONL 결과를 남기고, 탐지/오류가 없더라도 `meta/completions` marker를 기록합니다. 정상 종료 시 최종 리포트로 merge한 뒤 삭제합니다. 다음 실행은 active-run marker가 `FAILED`이거나 stale heartbeat로 판정될 때만 stale `_progress`를 정리하고, 최근 heartbeat의 `RUNNING` marker가 남아 있으면 충돌로 실패해 다른 실행의 progress를 지우지 않습니다.
 - 샘플링과 앱 레벨 병렬도 조정 지원
 
 ## 빠른 명령
