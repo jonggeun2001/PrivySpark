@@ -43,6 +43,11 @@
 ./gradlew test
 ```
 
+샘플 입력 케이스 번들 재생성:
+```bash
+./gradlew generateSampleDatasets
+```
+
 제출 스크립트:
 ```bash
 bin/privyspark-submit scan --path /abs/input --output /abs/output --ruleset default

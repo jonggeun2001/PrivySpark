@@ -1,0 +1,3 @@
+{"email":"alpha@example.com","phone":"010-1111-2222","message":"ok"}
+{"email":"invalid-email","phone":"not-phone","message":"skip"}
+{"email":"beta@example.com","phone":"031-555-7777","message":"ok"}

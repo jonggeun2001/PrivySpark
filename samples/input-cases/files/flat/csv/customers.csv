@@ -1,0 +1,4 @@
+email,phone,message
+alpha@example.com,010-1111-2222,ok
+invalid-email,not-phone,skip
+beta@example.com,031-555-7777,ok

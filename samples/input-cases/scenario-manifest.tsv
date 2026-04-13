@@ -1,0 +1,22 @@
+case_id	relative_path	expected_result_rows	expected_error_rows	expected_identifier_fragment	expected_error_fragment
+flat_csv	files/flat/csv/customers.csv	2	0	customers.csv	
+flat_json	files/flat/json/records.json	2	0	records.json	
+flat_jsonl	files/flat/jsonl/events.jsonl	2	0	events.jsonl	
+flat_ndjson	files/flat/ndjson/events.ndjson	2	0	events.ndjson	
+flat_parquet	files/flat/parquet/contacts.parquet	2	0	contacts.parquet	
+flat_orc	files/flat/orc/contacts.orc	2	0	contacts.orc	
+flat_avro	files/flat/avro/contacts.avro	2	0	contacts.avro	
+flat_xlsx	files/flat/xlsx/contacts.xlsx	2	0	contacts.xlsx#Contacts	
+flat_text_extension	files/flat/text-extension/notes.log	2	0	notes.log	
+flat_text_no_extension	files/flat/text-no-extension/notes	2	0	notes	
+flat_extensionless_parquet	files/flat/extensionless-parquet/payload	2	0	payload	
+flat_extensionless_orc	files/flat/extensionless-orc/payload	2	0	payload	
+flat_parq_alias	files/flat/parquet-alias/contacts.parq	2	0	contacts.parq	
+archive_zip_mixed	files/archive/mixed.zip	6	0	mixed.zip!	
+archive_jar_jsonl	files/archive/mixed.jar	2	0	mixed.jar!	
+archive_zero_byte_entry	files/archive/zero-byte-entry.zip	2	0	zero-byte-entry.zip!	
+edge_zero_byte_sibling	files/edge/zero-byte-sibling	2	0	contacts.csv	
+edge_unsupported_binary	files/edge/unsupported-binary/Bytecode.class	0	1	Bytecode.class	Unsupported file format
+edge_broken_workbook	files/edge/broken-workbook/broken.xlsx	0	1	broken.xlsx	Workbook read failed
+edge_nested_archive	files/edge/nested-archive/nested.zip	0	1	nested.zip!inner.zip	Nested archive expansion is not supported
+edge_unsafe_archive	files/edge/unsafe-archive/unsafe.zip	0	1	unsafe.zip!..	Unsafe archive entry path

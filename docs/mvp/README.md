@@ -19,3 +19,6 @@
 - 현재 구현된 동작만 기록합니다.
 - 중복 설명은 줄이고, 상세 규칙은 가장 가까운 책임 문서 한 곳에 둡니다.
 - `docs/PRD-Functional.md`, `docs/PRD-Architecture.md`는 이 문서 묶음으로 연결되는 허브 역할을 합니다.
+
+## 샘플 번들
+- 입력 처리 케이스 재현용 샘플 데이터셋은 [../../samples/input-cases/README.md](../../samples/input-cases/README.md)에 있습니다.
