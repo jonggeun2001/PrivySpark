@@ -2972,6 +2972,29 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("updateActiveRunHeartbeat self-heals unreadable active marker from run metadata") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-self-heal-")
+
+    try {
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        "/data/input",
+        "2026-04-13T00:00:00Z"
+      )
+      val activeRunFile = outputDir.resolve("_progress/active-run.json")
+      writeText(activeRunFile, """{"run_id":""")
+
+      PrivySparkApp.updateActiveRunHeartbeat(spark.sparkContext.hadoopConfiguration, progressRun)
+
+      val healedMarker = new String(Files.readAllBytes(activeRunFile), StandardCharsets.UTF_8)
+      assert(healedMarker.contains(progressRun.runId))
+      assert(healedMarker.contains("RUNNING"))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("scanGroup persists batch progress and mergeProgressReports finalizes outputs then deletes progress run") {
     val inputDir = Files.createTempDirectory("privyspark-progress-batch-input-")
     val outputDir = Files.createTempDirectory("privyspark-progress-batch-output-")

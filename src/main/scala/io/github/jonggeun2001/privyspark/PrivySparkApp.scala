@@ -3391,7 +3391,7 @@ object PrivySparkApp {
     )
   }
 
-  private def updateActiveRunHeartbeat(
+  private[privyspark] def updateActiveRunHeartbeat(
     conf: org.apache.hadoop.conf.Configuration,
     progressRun: ProgressRun
   ): Unit = updateActiveRunMarker(conf, progressRun, state = "RUNNING", errorMessage = None)
@@ -3432,6 +3432,14 @@ object PrivySparkApp {
     ActiveRunMarkerLock.synchronized {
       readActiveRunMarker(conf, progressRun.activeRunPath) match {
         case Some(marker) if marker.runId == progressRun.runId =>
+          writeActiveRunMarker(conf, progressRun, state, overwrite = true, errorMessage)
+        case None if progressRunHasOwnedMetadata(conf, progressRun) =>
+          logWarn(
+            "progress_active_run_marker_self_healed",
+            "run_id" -> progressRun.runId,
+            "path" -> progressRun.activeRunPath,
+            "state" -> state
+          )
           writeActiveRunMarker(conf, progressRun, state, overwrite = true, errorMessage)
         case _ =>
       }
@@ -3504,6 +3512,27 @@ object PrivySparkApp {
       status.isDirectory && fs.exists(new Path(status.getPath, "meta/run.json"))
     }
 
+  private def progressRunHasOwnedMetadata(
+    conf: org.apache.hadoop.conf.Configuration,
+    progressRun: ProgressRun
+  ): Boolean = {
+    val runMetadataPath = s"${progressRun.metaPath}/run.json"
+    val path = new Path(runMetadataPath)
+    val fs = path.getFileSystem(conf)
+    if (!fs.exists(path)) {
+      return false
+    }
+
+    val reader = new BufferedReader(new InputStreamReader(fs.open(path), StandardCharsets.UTF_8))
+    try {
+      Option(reader.readLine())
+        .flatMap(line => extractJsonStringField(line, "run_id"))
+        .contains(progressRun.runId)
+    } finally {
+      reader.close()
+    }
+  }
+
   private def deleteEmptyProgressRoot(
     fs: org.apache.hadoop.fs.FileSystem,
     root: Path
@@ -3523,16 +3552,20 @@ object PrivySparkApp {
       return None
     }
 
-    val reader = new BufferedReader(new InputStreamReader(fs.open(path), StandardCharsets.UTF_8))
     try {
-      val line = Option(reader.readLine()).getOrElse("")
-      for {
-        runId <- extractJsonStringField(line, "run_id")
-        state <- extractJsonStringField(line, "state")
-        heartbeat <- extractJsonLongField(line, "last_heartbeat_epoch_ms")
-      } yield ActiveRunMarker(runId, state, heartbeat)
-    } finally {
-      reader.close()
+      val reader = new BufferedReader(new InputStreamReader(fs.open(path), StandardCharsets.UTF_8))
+      try {
+        val line = Option(reader.readLine()).getOrElse("")
+        for {
+          runId <- extractJsonStringField(line, "run_id")
+          state <- extractJsonStringField(line, "state")
+          heartbeat <- extractJsonLongField(line, "last_heartbeat_epoch_ms")
+        } yield ActiveRunMarker(runId, state, heartbeat)
+      } finally {
+        reader.close()
+      }
+    } catch {
+      case NonFatal(_) => None
     }
   }
 
