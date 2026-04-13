@@ -3140,9 +3140,6 @@ object PrivySparkApp {
     val errorsPath = s"$runPath/errors"
     val metaPath = s"$runPath/meta"
     val completionsPath = s"$metaPath/completions"
-    fs.mkdirs(root)
-    Seq(runPath, resultsPath, errorsPath, metaPath, completionsPath).foreach(path => fs.mkdirs(new Path(path)))
-
     val progressRun = ProgressRun(
       runId,
       rootPath,
@@ -3157,8 +3154,10 @@ object PrivySparkApp {
       completionsPath
     )
 
+    fs.mkdirs(root)
     try {
       writeActiveRunMarker(conf, progressRun, state = "RUNNING", overwrite = false)
+      Seq(runPath, resultsPath, errorsPath, metaPath, completionsPath).foreach(path => fs.mkdirs(new Path(path)))
       writeJsonFile(
         conf,
         s"$metaPath/run.json",
@@ -3174,7 +3173,6 @@ object PrivySparkApp {
       progressRun
     } catch {
       case _: org.apache.hadoop.fs.FileAlreadyExistsException =>
-        fs.delete(new Path(runPath), true)
         throw new IllegalStateException(s"Active progress run already exists under output root: $rootPath")
       case NonFatal(e) =>
         deleteOwnedActiveRunMarker(conf, progressRun)
