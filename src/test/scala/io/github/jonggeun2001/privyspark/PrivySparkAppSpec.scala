@@ -2814,6 +2814,29 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("prepareProgressRun removes fresh markerless progress root without run metadata") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-markerless-")
+    val orphanDir = outputDir.resolve("_progress/orphan/results")
+
+    try {
+      Files.createDirectories(orphanDir)
+      writeText(orphanDir.resolve("orphan.jsonl"), """{"orphan":true}""")
+
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        "/data/input",
+        "2026-04-13T00:00:00Z"
+      )
+
+      assert(!Files.exists(orphanDir.resolve("orphan.jsonl")))
+      assert(Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}/meta/run.json")))
+      assert(Files.exists(outputDir.resolve(s"_progress/active-run.json")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("prepareProgressRun fails when an active progress marker already exists") {
     val outputDir = Files.createTempDirectory("privyspark-progress-active-")
     val activeRunFile = outputDir.resolve("_progress/active-run.json")

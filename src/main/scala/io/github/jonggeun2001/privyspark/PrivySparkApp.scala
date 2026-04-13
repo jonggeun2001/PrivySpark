@@ -3177,6 +3177,7 @@ object PrivySparkApp {
       case NonFatal(e) =>
         deleteOwnedActiveRunMarker(conf, progressRun)
         fs.delete(new Path(runPath), true)
+        deleteEmptyProgressRoot(fs, root)
         throw e
     }
   }
@@ -3305,9 +3306,7 @@ object PrivySparkApp {
     deleteOwnedActiveRunMarker(conf, progressRun)
 
     val rootPath = new Path(progressRun.rootPath)
-    if (fs.exists(rootPath) && Option(fs.listStatus(rootPath)).getOrElse(Array.empty).isEmpty) {
-      fs.delete(rootPath, true)
-    }
+    deleteEmptyProgressRoot(fs, rootPath)
   }
 
   private def cleanupProgressRoot(
@@ -3323,12 +3322,17 @@ object PrivySparkApp {
 
     val activeMarkerPath = new Path(activeRunPath)
     if (!fs.exists(activeMarkerPath)) {
-      val rootModifiedAt = fs.getFileStatus(root).getModificationTime
-      if (System.currentTimeMillis() - rootModifiedAt > ActiveRunStaleThresholdMillis) {
-        logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "missing_active_run_marker")
+      if (!progressRootHasRunMetadata(fs, root)) {
+        logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "missing_active_run_marker_without_run_metadata")
         fs.delete(root, true)
       } else {
-        throw new IllegalStateException(s"Progress root is being prepared under output root: $rootPath")
+        val rootModifiedAt = fs.getFileStatus(root).getModificationTime
+        if (System.currentTimeMillis() - rootModifiedAt > ActiveRunStaleThresholdMillis) {
+          logWarn("progress_cleanup_stale", "path" -> rootPath, "reason" -> "missing_active_run_marker")
+          fs.delete(root, true)
+        } else {
+          throw new IllegalStateException(s"Progress root is being prepared under output root: $rootPath")
+        }
       }
       return
     }
@@ -3445,6 +3449,23 @@ object PrivySparkApp {
           }
         case _ =>
       }
+    }
+  }
+
+  private def progressRootHasRunMetadata(
+    fs: org.apache.hadoop.fs.FileSystem,
+    root: Path
+  ): Boolean =
+    Option(fs.listStatus(root)).getOrElse(Array.empty).exists { status =>
+      status.isDirectory && fs.exists(new Path(status.getPath, "meta/run.json"))
+    }
+
+  private def deleteEmptyProgressRoot(
+    fs: org.apache.hadoop.fs.FileSystem,
+    root: Path
+  ): Unit = {
+    if (fs.exists(root) && Option(fs.listStatus(root)).getOrElse(Array.empty).isEmpty) {
+      fs.delete(root, true)
     }
   }
 
