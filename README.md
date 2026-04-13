@@ -10,7 +10,8 @@ PrivySpark는 Spark 기반 배치 스캐너로, 데이터셋에서 잠재적 개
 - 0바이트 빈 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 그대로 skip합니다.
 - `--pre-scan-parallelism`은 파일 확장/포맷 판별뿐 아니라 그룹별 schema split 단계에도 적용됩니다.
 - 탐지 방식: ruleset 기반 regex + 일부 타입의 내장 strict validator, invalid regex는 ruleset 로드 단계에서 즉시 실패
-- 출력: Parquet + CSV (`scan_results`, `scan_errors`)
+- 최종 출력: Parquet + CSV (`scan_results`, `scan_errors`)
+- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 임시 JSONL 결과를 남기고, 탐지/오류가 없더라도 `meta/completions` marker를 기록합니다. 정상 종료 시 최종 리포트로 merge한 뒤 삭제합니다. startup race를 막기 위해 `_progress` 루트보다 먼저 `<output>/_progress-preparing.json` lock을 잡고, 준비가 끝나면 `_progress/active-run.json` heartbeat marker로 전환합니다. 다음 실행은 `FAILED` 또는 stale heartbeat로 판정된 `_progress`만 정리합니다. 최근 heartbeat의 `RUNNING` marker나 fresh preparing lock이 남아 있으면 충돌로 실패해 다른 실행의 progress를 지우지 않습니다. `active-run.json`이 깨져도 owner run은 `meta/run.json`을 근거로 다음 heartbeat에서 marker를 self-heal합니다.
 - 샘플링과 앱 레벨 병렬도 조정 지원
 
 ## 빠른 명령
@@ -43,6 +44,7 @@ bin/privyspark-submit \
   --output /abs/output \
   --ruleset default \
   --sample-ratio 0.2 \
+  --file-sample-ratio 0.1 \
   --pre-scan-parallelism 6 \
   --group-parallelism 8 \
   --file-parallelism 4
@@ -50,7 +52,11 @@ bin/privyspark-submit \
 
 `PRIVYSPARK_DEBUG` / `-Dprivyspark.debug`는 driver 로그 레벨 설정으로 동작합니다. 지원값은 `error`, `warn`, `info`, `debug`이며 `off`로 driver 로그를 끌 수 있습니다. 기본값은 `warn`이고, 하위호환으로 `true`는 `debug`, `false`는 `warn`으로 해석합니다.
 
-driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...` 형식으로 통일됩니다. field 값에 공백, 개행, `=` 같은 문자가 있으면 quote/escape해 구조를 유지합니다. `info` 레벨에서는 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 실행 lifecycle이 남고, `scan_start`의 병렬도 필드는 `configured_*` 이름으로 요청값 또는 `spark_conf_or_default` 상태를 기록합니다. `debug` 레벨에서는 `scanDirectoryStructure`의 파일 발견, pre-scan 실행, pre-scan 후처리, 초기 그룹화 단계에 대한 duration/progress 로그까지 함께 남습니다.
+driver 로그는 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...` 형식으로 통일됩니다. field 값에 공백, 개행, `=` 같은 문자가 있으면 quote/escape해 구조를 유지합니다. `info` 레벨에서는 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 실행 lifecycle이 남고, `scan_start`의 병렬도 필드는 `configured_*` 이름으로 요청값 또는 `spark_conf_or_default` 상태를 기록합니다. `debug` 레벨에서는 `scanDirectoryStructure`의 파일 발견, pre-scan 실행, pre-scan 후처리, 초기 그룹화 단계에 대한 duration/progress 로그와 `_progress` 준비/쓰기/merge 로그까지 함께 남습니다. `--file-sample-ratio`가 적용된 group batch scan에서 `--sample-ratio < 1.0`이 함께 들어오면 row sampling은 무시되고 `group_scan_row_sampling_ignored` 경고가 driver 로그에 남습니다.
+
+`--file-sample-ratio`는 group batch scan에서 파일을 균등 무작위로 추출합니다. 이 옵션을 추가한 이유는 작은 파일이 많은 입력에서 task/I/O를 직접 줄이기 위해서이기도 하지만, 더 중요한 배경은 특정 데이터가 한 파일에 몰릴 수 있다는 운영 우려입니다. 파일 크기 가중치 기반 샘플링은 큰 파일을 더 자주 선택하므로, 데이터 집중이 특정 파일에 몰린 경우 그 분포를 그대로 강화할 수 있습니다. 반대로 균등 무작위 파일 추출은 각 파일을 같은 확률로 보므로 파일 단위 concentration risk를 과도하게 편향시키지 않습니다.
+
+중간 `_progress` 경로를 추가한 이유는 긴 스캔에서 최종 `scan_results`/`scan_errors`가 완성되기 전에도 이미 끝난 group/file 단위 결과를 바로 확인할 수 있게 하려는 것입니다. 탐지/오류가 없는 clean completion도 `meta/completions` marker를 남기는 이유는 운영자가 `아직 처리 중`과 `탐지 없이 완료`를 구분할 수 있어야 하기 때문입니다. 진행 중 경로를 별도로 둔 이유는 최종 리포트 소비자가 부분 결과를 완성본으로 오해하지 않게 하기 위해서이고, 종료 훅 대신 다음 실행 시작 시 cleanup을 택한 이유는 YARN 강제 종료나 `kill -9` 같은 상황에서 훅 신뢰도가 낮기 때문입니다. 추가로 `_progress-preparing.json`을 둔 이유는 `_progress` 디렉토리를 active marker보다 먼저 만들 수밖에 없는 준비 구간에서 concurrent startup이 서로의 fresh root를 지우지 않게 하기 위해서입니다. preparing lock은 짧은 setup window만 보호하고, 준비가 끝나면 heartbeat 기반 `active-run.json`으로 전환합니다. marker가 깨졌을 때는 owner run이 `meta/run.json`으로 self-heal하지만, `run.json`이 `FAILED`로 바뀐 뒤에는 늦게 끝난 sibling task가 marker를 `RUNNING`으로 되살리지 못하도록 막고, 다음 실행의 cleanup도 그 `FAILED` metadata를 근거로 즉시 stale failure를 정리합니다.
 
 ## 샘플 데이터셋
 - 재현 가능한 입력 케이스 번들은 [samples/input-cases/README.md](samples/input-cases/README.md)에 있습니다.

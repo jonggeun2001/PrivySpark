@@ -5,12 +5,14 @@
 - 입력/출력 경로는 절대경로 또는 URI만 허용합니다.
 - Spark on YARN cluster 실행을 기본 전제로 합니다.
 - 빌드 산출물은 Shadow fat JAR(`*-all.jar`)입니다.
+- 실행 중 임시 progress는 `<output>/_progress/<run_id>` 아래 JSONL shard로 기록하고, 정상 종료 시 최종 리포트로 merge 후 삭제합니다.
 
 ## CLI 인자
 - `--path <ABS_PATH_OR_URI>`: 입력 경로
 - `--output <ABS_PATH_OR_URI>`: 출력 경로
 - `--ruleset <default|path>`: 규칙셋 경로 또는 `default`
 - `--sample-ratio <(0.0, 1.0]>`: 샘플링 비율, 기본 `0.2`
+- `--file-sample-ratio <(0.0, 1.0]>`: 그룹 batch scan 파일 샘플링 비율, 기본 미설정
 - `--pre-scan-parallelism <INT>`: 파일 pre-scan 확장과 schema split 병렬도, `> 0`
 - `--group-parallelism <INT>`: 그룹 스캔 병렬도, `> 0`
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
@@ -29,8 +31,31 @@
 
 ## 샘플링
 - 샘플링은 비결정적 랜덤 방식입니다.
-- `sampleRatio >= 1.0`이면 샘플링 없이 전체를 사용합니다.
-- `match_ratio`, `confidence`의 분모는 샘플링된 행 수입니다.
+- `sampleRatio >= 1.0`이면 row sampling 없이 전체 행을 사용합니다.
+- `--file-sample-ratio`는 batch-capable group scan에서 그룹 내부 파일을 균등 무작위로 추출합니다.
+- file sample 개수는 `ceil(fileCount * fileSampleRatio)`로 계산하고, 최소 1개 파일은 항상 선택합니다.
+- `--file-sample-ratio`가 설정되고 동시에 `--sample-ratio < 1.0`이면 batch-capable group scan에서는 row sampling을 무시하고 `group_scan_row_sampling_ignored` warning 로그를 남깁니다.
+- 이 설계의 배경은 특정 데이터가 한 파일에 몰릴 가능성을 운영적으로 배제하지 않기 위해서입니다. 파일 크기 가중치 기반 추출은 큰 파일 편향을 강화할 수 있어, 현재 구현은 파일 단위 concentration risk를 더 직접 반영하는 균등 무작위 추출을 사용합니다.
+- `match_ratio`, `confidence`의 분모는 샘플링된 행 수입니다. `--file-sample-ratio`가 적용되면 이는 선택된 파일들에서 실제로 읽은 행 수를 뜻합니다.
+
+## 중간 결과 경로
+- batch-capable group scan은 그룹 완료 시점에 `_progress/<run_id>/results/*.jsonl` 또는 `errors/*.jsonl`을 씁니다.
+- file fallback/direct file scan은 최종 결과가 file identifier 기준일 때 파일 완료 시점마다 즉시 기록합니다.
+- directory identifier로 다시 합쳐야 하는 file fallback은 중간에 file-level 결과를 노출하지 않고, 그룹 집계가 끝난 뒤 기록합니다. 이유는 임시 결과와 최종 결과의 `file_identifier` 의미를 일치시키기 위해서입니다.
+- 탐지/오류가 없는 clean completion도 `meta/completions/*.jsonl` marker를 남깁니다. 결과 shard가 비어도 처리 완료 여부를 관측할 수 있어야 하기 때문입니다.
+- `_progress`는 최종 소비 경로가 아닙니다. 운영자가 장시간 스캔의 중간 상태를 확인하는 관측용 경로입니다.
+- 정상 종료 시 `_progress/<run_id>`를 읽어 최종 Parquet/CSV 리포트를 생성하고 곧바로 삭제합니다.
+- `_progress` 기반 최종 merge를 쓰는 `runScan` 경로에서는 group/file scan 반환 payload를 드라이버에 계속 누적하지 않습니다. driver 메모리에는 progress shard merge 결과만 최종 집계 소스로 남깁니다.
+- startup race를 막기 위해 `_progress` 루트보다 먼저 `<output>/_progress-preparing.json` lock을 원자적으로 생성합니다. setup이 끝나면 이 lock을 제거하고 `_progress/active-run.json` heartbeat marker로 전환합니다.
+- 비정상 종료 시 `_progress`가 남을 수 있으며, active-run marker는 주기 heartbeat로 갱신됩니다. 다음 실행 시작 시 `FAILED` marker 또는 stale heartbeat로 판정된 active-run만 정리합니다.
+- live run 도중 `active-run.json`이 partial/corrupt 상태가 되더라도 owner run은 `meta/run.json`의 `run_id`를 근거로 다음 heartbeat에서 active marker를 self-heal합니다.
+- 반대로 `meta/run.json`이 이미 `FAILED`로 전환된 뒤에는 늦게 끝난 sibling task가 heartbeat를 다시 쏘더라도 같은 run의 active marker를 `RUNNING`으로 되살리지 않습니다.
+- startup cleanup도 unreadable active marker만 보고 3분을 기다리지 않습니다. 같은 `_progress` 아래 `meta/run.json`이 이미 `FAILED`면 즉시 stale failure로 정리합니다.
+- fresh preparing lock이 남아 있으면 같은 `--output` 경로의 다른 실행은 `being prepared`로 즉시 실패합니다. stale preparing lock만 cleanup 대상으로 간주합니다.
+- active-run marker 없이 남은 `_progress`는 `meta/run.json` 흔적이 없으면 setup 초반 비정상 종료로 보고 즉시 정리합니다. run metadata가 이미 있으면 live setup 손상을 피하기 위해 recent root는 `being prepared`로 막고 stale root만 정리합니다.
+- 최근 heartbeat의 `RUNNING` active-run marker가 남아 있으면 cleanup 대신 충돌로 실패합니다. 이유는 다른 실행이 아직 `_progress`를 최종 merge 소스로 사용 중일 가능성을 배제할 수 없기 때문입니다.
+- shutdown hook을 쓰지 않는 이유는 YARN 강제 종료와 비정상 프로세스 종료에서 cleanup 보장이 약하기 때문입니다.
+- group/file 완료마다 즉시 쓰는 방식을 택한 이유는 배치 flush보다 관측 지연을 없애는 것이 이번 요구에서 더 중요했기 때문입니다. 임시 small file 증가는 `_progress`가 최종적으로 제거되는 전제를 두고 수용합니다.
 
 ## 빌드와 실행
 빌드:
@@ -101,6 +126,7 @@ spark-submit \
 - `info` 레벨에는 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 실행 lifecycle 로그가 포함됩니다.
 - `scan_start`의 병렬도 필드는 `configured_*` 이름으로 기록되며, 요청값 또는 `spark_conf_or_default` 상태를 나타냅니다.
 - `debug` 레벨에는 플랜 수립, 그룹/파일 스캔 진행, 리포트 저장 단계가 포함됩니다.
+- `debug` 레벨에는 `progress_run_prepared`, `progress_write_complete`, `progress_merge_start`, `progress_merge_complete` 같은 `_progress` lifecycle 로그도 포함됩니다.
 - `scanDirectoryStructure` debug 로그에는 파일 발견 duration, pre-scan 실행 시작/진행률/완료, pre-scan 후처리 duration, 초기 `(directory, format)` 그룹화 duration이 포함됩니다.
 
 ## 릴리즈

@@ -10,6 +10,7 @@ final case class CliConfig(
   outputPath: String = "",
   ruleset: String = "default",
   sampleRatio: Double = 0.2,
+  fileSampleRatio: Option[Double] = None,
   preScanParallelism: Option[Int] = None,
   groupParallelism: Option[Int] = None,
   fileParallelism: Option[Int] = None
@@ -49,6 +50,14 @@ object Cli {
           else failure("sample-ratio must be > 0.0 and <= 1.0")
         }
         .text("샘플링 비율(0.0, 1.0]"),
+      opt[Double]("file-sample-ratio")
+        .optional()
+        .action((value, config) => config.copy(fileSampleRatio = Some(value)))
+        .validate { value =>
+          if (value > 0.0 && value <= 1.0) success
+          else failure("file-sample-ratio must be > 0.0 and <= 1.0")
+        }
+        .text("그룹 batch scan 파일 샘플링 비율(0.0, 1.0]"),
       opt[Int]("pre-scan-parallelism")
         .optional()
         .action((value, config) => config.copy(preScanParallelism = Some(value)))
