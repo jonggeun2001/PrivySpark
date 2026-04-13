@@ -954,7 +954,8 @@ object PrivySparkApp {
         groupParallelism,
         fileParallelism,
         config.fileSampleRatio,
-        Some(preparedProgressRun)
+        Some(preparedProgressRun),
+        retainPayloads = false
       )
 
       logDebug("report_write_start", "output_root" -> config.outputPath, "progress_run" -> preparedProgressRun.runId)
@@ -996,7 +997,8 @@ object PrivySparkApp {
     groupParallelism: Int = -1,
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
-    progressRun: Option[ProgressRun] = None
+    progressRun: Option[ProgressRun] = None,
+    retainPayloads: Boolean = true
   ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] = {
     if (groups.isEmpty) {
       return Seq.empty
@@ -1030,7 +1032,11 @@ object PrivySparkApp {
           "result_rows" -> groupResults.size,
           "error_rows" -> groupErrors.size
         )
-        (group, groupResults, groupErrors)
+        if (retainPayloads) {
+          (group, groupResults, groupErrors)
+        } else {
+          (group, Seq.empty, Seq.empty)
+        }
       }
     })
   }

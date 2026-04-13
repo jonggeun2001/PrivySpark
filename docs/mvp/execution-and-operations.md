@@ -45,6 +45,7 @@
 - 탐지/오류가 없는 clean completion도 `meta/completions/*.jsonl` marker를 남깁니다. 결과 shard가 비어도 처리 완료 여부를 관측할 수 있어야 하기 때문입니다.
 - `_progress`는 최종 소비 경로가 아닙니다. 운영자가 장시간 스캔의 중간 상태를 확인하는 관측용 경로입니다.
 - 정상 종료 시 `_progress/<run_id>`를 읽어 최종 Parquet/CSV 리포트를 생성하고 곧바로 삭제합니다.
+- `_progress` 기반 최종 merge를 쓰는 `runScan` 경로에서는 group/file scan 반환 payload를 드라이버에 계속 누적하지 않습니다. driver 메모리에는 progress shard merge 결과만 최종 집계 소스로 남깁니다.
 - startup race를 막기 위해 `_progress` 루트보다 먼저 `<output>/_progress-preparing.json` lock을 원자적으로 생성합니다. setup이 끝나면 이 lock을 제거하고 `_progress/active-run.json` heartbeat marker로 전환합니다.
 - 비정상 종료 시 `_progress`가 남을 수 있으며, active-run marker는 주기 heartbeat로 갱신됩니다. 다음 실행 시작 시 `FAILED` marker 또는 stale heartbeat로 판정된 active-run만 정리합니다.
 - live run 도중 `active-run.json`이 partial/corrupt 상태가 되더라도 owner run은 `meta/run.json`의 `run_id`를 근거로 다음 heartbeat에서 active marker를 self-heal합니다.

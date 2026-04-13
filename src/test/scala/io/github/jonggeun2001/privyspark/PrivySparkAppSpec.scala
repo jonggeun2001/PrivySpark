@@ -1995,6 +1995,39 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroups can drop returned payloads when caller only needs side effects") {
+    val inputDir = Files.createTempDirectory("privyspark-group-drop-payloads-")
+    val customersDir = Files.createDirectories(inputDir.resolve("customers"))
+    val timestamp = "2026-03-13T00:00:00Z"
+
+    try {
+      writeText(customersDir.resolve("customers.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+      )
+      val plan = PrivySparkApp.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
+
+      val outcomes = PrivySparkApp.scanGroups(
+        spark,
+        inputDir.toString,
+        plan.groups,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp,
+        groupParallelism = 1,
+        retainPayloads = false
+      )
+
+      assert(outcomes.map(_._2).forall(_.isEmpty))
+      assert(outcomes.map(_._3).forall(_.isEmpty))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure and scanGroup detect expected pii counts from bundled dataset") {
     val datasetDir = resolveResourcePath("datasets/pii-sample")
     val timestamp = "2026-03-05T00:00:00Z"
