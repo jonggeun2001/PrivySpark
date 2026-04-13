@@ -11,6 +11,7 @@
 - `--output <ABS_PATH_OR_URI>`: 출력 경로
 - `--ruleset <default|path>`: 규칙셋 경로 또는 `default`
 - `--sample-ratio <(0.0, 1.0]>`: 샘플링 비율, 기본 `0.2`
+- `--file-sample-ratio <(0.0, 1.0]>`: 그룹 batch scan 파일 샘플링 비율, 기본 미설정
 - `--pre-scan-parallelism <INT>`: 파일 pre-scan 확장과 schema split 병렬도, `> 0`
 - `--group-parallelism <INT>`: 그룹 스캔 병렬도, `> 0`
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
@@ -29,8 +30,12 @@
 
 ## 샘플링
 - 샘플링은 비결정적 랜덤 방식입니다.
-- `sampleRatio >= 1.0`이면 샘플링 없이 전체를 사용합니다.
-- `match_ratio`, `confidence`의 분모는 샘플링된 행 수입니다.
+- `sampleRatio >= 1.0`이면 row sampling 없이 전체 행을 사용합니다.
+- `--file-sample-ratio`는 batch-capable group scan에서 그룹 내부 파일을 균등 무작위로 추출합니다.
+- file sample 개수는 `ceil(fileCount * fileSampleRatio)`로 계산하고, 최소 1개 파일은 항상 선택합니다.
+- `--file-sample-ratio`가 설정되고 동시에 `--sample-ratio < 1.0`이면 batch-capable group scan에서는 row sampling을 무시하고 `group_scan_row_sampling_ignored` warning 로그를 남깁니다.
+- 이 설계의 배경은 특정 데이터가 한 파일에 몰릴 가능성을 운영적으로 배제하지 않기 위해서입니다. 파일 크기 가중치 기반 추출은 큰 파일 편향을 강화할 수 있어, 현재 구현은 파일 단위 concentration risk를 더 직접 반영하는 균등 무작위 추출을 사용합니다.
+- `match_ratio`, `confidence`의 분모는 샘플링된 행 수입니다. `--file-sample-ratio`가 적용되면 이는 선택된 파일들에서 실제로 읽은 행 수를 뜻합니다.
 
 ## 빌드와 실행
 빌드:

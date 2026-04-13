@@ -27,6 +27,7 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.control.ControlThrowable
 import scala.util.control.NonFatal
+import scala.util.Random
 
 object PrivySparkApp {
   private[privyspark] final case class ScanReadOptions(sheetName: Option[String] = None)
@@ -882,6 +883,7 @@ object PrivySparkApp {
       "output_path" -> config.outputPath,
       "ruleset" -> config.ruleset,
       "sample_ratio" -> config.sampleRatio,
+      "file_sample_ratio" -> config.fileSampleRatio.getOrElse("none"),
       "configured_pre_scan_parallelism" -> renderConfiguredParallelism(config.preScanParallelism),
       "configured_group_parallelism" -> renderConfiguredParallelism(config.groupParallelism),
       "configured_file_parallelism" -> renderConfiguredParallelism(config.fileParallelism),
@@ -911,7 +913,8 @@ object PrivySparkApp {
         config.sampleRatio,
         timestamp,
         groupParallelism,
-        fileParallelism
+        fileParallelism,
+        config.fileSampleRatio
       ).foreach {
         case (_, groupResults, groupErrors) =>
           results ++= groupResults
@@ -947,7 +950,8 @@ object PrivySparkApp {
     sampleRatio: Double,
     timestamp: String,
     groupParallelism: Int = -1,
-    fileParallelism: Int = -1
+    fileParallelism: Int = -1,
+    fileSampleRatio: Option[Double] = None
   ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] = {
     if (groups.isEmpty) {
       return Seq.empty
@@ -972,7 +976,7 @@ object PrivySparkApp {
           "parallelism" -> parallelism
         )
         val (groupResults, groupErrors) =
-          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism)
+          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, fileSampleRatio)
         logDebug(
           "group_scan_recorded",
           "directory" -> group.directoryPath,
@@ -2140,7 +2144,8 @@ object PrivySparkApp {
     rules: Seq[PiiRule],
     sampleRatio: Double,
     timestamp: String,
-    fileParallelism: Int = -1
+    fileParallelism: Int = -1,
+    fileSampleRatio: Option[Double] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logDebug(
       "group_scan_start",
@@ -2149,6 +2154,7 @@ object PrivySparkApp {
       "schema" -> group.schemaSignature,
       "files" -> group.filePaths.size,
       "sample_ratio" -> sampleRatio,
+      "file_sample_ratio" -> fileSampleRatio.getOrElse("none"),
       "use_directory_identifier" -> group.useDirectoryIdentifier,
       "schema_sampled" -> group.schemaSampled,
       "csv_has_header" -> group.csvHasHeader
@@ -2157,13 +2163,14 @@ object PrivySparkApp {
       val exactSplitResult = rescanSampledGroupWithExactSplit(
         spark,
         datasetPath,
-        group,
-        rules,
-        sampleRatio,
-        timestamp,
-        "sampled_exact_split",
-        fileParallelism
-      )
+            group,
+            rules,
+            sampleRatio,
+            timestamp,
+            "sampled_exact_split",
+            fileParallelism,
+            fileSampleRatio
+          )
       logDebug(
         "group_scan_complete",
         "directory" -> group.directoryPath,
@@ -2191,7 +2198,7 @@ object PrivySparkApp {
     }
 
     try {
-      val results = scanGroupBatch(spark, datasetPath, group, rules, sampleRatio, timestamp)
+      val results = scanGroupBatch(spark, datasetPath, group, rules, sampleRatio, timestamp, fileSampleRatio)
       logDebug(
         "group_scan_complete",
         "directory" -> group.directoryPath,
@@ -2238,7 +2245,8 @@ object PrivySparkApp {
             sampleRatio,
             timestamp,
             "fallback_schema_resplit",
-            fileParallelism
+            fileParallelism,
+            fileSampleRatio
           )
 
           logDebug(
@@ -2412,7 +2420,8 @@ object PrivySparkApp {
     group: ScanGroup,
     rules: Seq[PiiRule],
     sampleRatio: Double,
-    timestamp: String
+    timestamp: String,
+    fileSampleRatio: Option[Double] = None
   ): Seq[ScanResult] = {
     logDebug(
       "group_scan_batch_start",
@@ -2421,9 +2430,37 @@ object PrivySparkApp {
       "schema" -> group.schemaSignature,
       "files" -> group.filePaths.size,
       "sample_ratio" -> sampleRatio,
+      "file_sample_ratio" -> fileSampleRatio.getOrElse("none"),
       "use_directory_identifier" -> group.useDirectoryIdentifier
     )
-    val physicalPaths = group.filePaths.map(sourceKey => resolvePhysicalPath(group, sourceKey))
+    val selectedSourceKeys = fileSampleRatio match {
+      case Some(ratio) =>
+        val sampledKeys = selectSampledFileKeys(group.filePaths, ratio)
+        if (sampleRatio < 1.0) {
+          logWarn(
+            "group_scan_row_sampling_ignored",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "schema" -> group.schemaSignature,
+            "sample_ratio" -> sampleRatio,
+            "file_sample_ratio" -> ratio,
+            "selected_files" -> sampledKeys.size,
+            "total_files" -> group.filePaths.size
+          )
+        }
+        logDebug(
+          "group_scan_file_sampling_applied",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "file_sample_ratio" -> ratio,
+          "selected_files" -> sampledKeys.size,
+          "total_files" -> group.filePaths.size
+        )
+        sampledKeys
+      case None => group.filePaths
+    }
+    val physicalPaths = selectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
       val effectiveRules = effectiveRulesForFormat(group.format, rules)
       val baseDf = readSource(spark, group.format, physicalPaths, group.csvHasHeader)
@@ -2444,7 +2481,11 @@ object PrivySparkApp {
         "file_identifier_mode" -> fileIdentifierColumn.fold("directory")(identity)
       )
 
-      val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
+      val sampledDf = if (fileSampleRatio.nonEmpty || sampleRatio >= 1.0) {
+        sourceDf
+      } else {
+        sourceDf.sample(withReplacement = false, sampleRatio)
+      }
 
       sampledDf.cache()
       try {
@@ -2775,6 +2816,15 @@ object PrivySparkApp {
       isCsvHeaderFieldShape(trimmed)
   }
 
+  private[privyspark] def selectSampledFileKeys(fileKeys: Seq[String], fileSampleRatio: Double): Seq[String] = {
+    require(fileKeys.nonEmpty, "fileKeys must not be empty")
+    require(fileSampleRatio > 0.0 && fileSampleRatio <= 1.0, "fileSampleRatio must be > 0.0 and <= 1.0")
+
+    val sampleSize = math.max(1, math.min(fileKeys.size, math.ceil(fileKeys.size * fileSampleRatio).toInt))
+    val selectedKeySet = Random.shuffle(fileKeys.indices.toVector).take(sampleSize).map(fileKeys).toSet
+    fileKeys.filter(selectedKeySet.contains)
+  }
+
   private def hasStrongCsvHeaderSignal(value: String): Boolean = {
     val trimmed = Option(value).getOrElse("").trim
     val tokens = tokenizeCsvHeaderField(trimmed)
@@ -2832,7 +2882,8 @@ object PrivySparkApp {
     sampleRatio: Double,
     timestamp: String,
     mode: String,
-    fileParallelism: Int
+    fileParallelism: Int,
+    fileSampleRatio: Option[Double]
   ): (Seq[ScanResult], Seq[ScanError]) = {
     val (splitGroups, splitErrors) = splitGroupBySchema(
       spark,
@@ -2861,7 +2912,8 @@ object PrivySparkApp {
         rules,
         sampleRatio,
         timestamp,
-        fileParallelism
+        fileParallelism,
+        fileSampleRatio
       )
       rescannedResults ++= groupResults
       rescannedErrors ++= groupErrors
