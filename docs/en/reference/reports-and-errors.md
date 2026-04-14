@@ -26,7 +26,8 @@ PrivySpark always writes final outputs in both Parquet and CSV. The `_progress` 
 - The input-root directory group uses `.`.
 - Archive entries use `<archive>!<entry>`.
 - Excel sheets use `<workbook>#<sheet>`.
-- Single-file groups and logical inputs keep file or logical identifiers.
+- Single-file directories below the input root may promote to directory identifiers when the same safety checks pass.
+- A single file at the input root and logical inputs keep file or logical identifiers.
 
 Directory-level promotion is intentionally strict so the semantic unit of a result row does not drift. Aggregating too early would make result interpretation ambiguous when schema drift or pre-scan errors exist.
 
