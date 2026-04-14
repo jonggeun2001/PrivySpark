@@ -110,6 +110,8 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(emailFullMatch.matcher("alice@example.com").matches())
     assert(emailFullMatch.matcher("alice+tag@example.co.kr").matches())
     assert(emailRegex.findFirstIn("contact:alice@example.com").contains("alice@example.com"))
+    assert(!emailFullMatch.matcher("a@b.c").matches())
+    assert(!emailFullMatch.matcher("user@example.123").matches())
     assert(!emailFullMatch.matcher("alice@example..com").matches())
     assert(!emailFullMatch.matcher("alice@example-.com").matches())
     assert(!emailRegex.findFirstIn("alice@example.com_suffix").nonEmpty)
@@ -125,6 +127,8 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(creditCardFullMatch.matcher("5555555555554444").matches())
     assert(creditCardFullMatch.matcher("6011111111111117").matches())
     assert(creditCardFullMatch.matcher("3566002020360505").matches())
+    assert(!creditCardFullMatch.matcher("2220111111111111").matches())
+    assert(!creditCardFullMatch.matcher("2721111111111111").matches())
     assert(!creditCardFullMatch.matcher("2025102712345678").matches())
     assert(!creditCardFullMatch.matcher("1234-5678-9012-3456").matches())
 
