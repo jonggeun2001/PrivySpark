@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.scheduler.{SparkListener, SparkListenerStageSubmitted}
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
@@ -15,6 +16,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.nio.file.attribute.{FileTime, PosixFilePermissions}
 import java.util.Comparator
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
@@ -33,6 +35,27 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   override def afterAll(): Unit = {
     spark.stop()
     super.afterAll()
+  }
+
+  private def capturePersistedRddNames[T](block: => T): (T, Seq[String]) = {
+    val persistedRdds = new ConcurrentLinkedQueue[String]()
+    val listener = new SparkListener {
+      override def onStageSubmitted(stageSubmitted: SparkListenerStageSubmitted): Unit = {
+        stageSubmitted.stageInfo.rddInfos.foreach { rddInfo =>
+          val storageLevel = rddInfo.storageLevel
+          if (storageLevel.useMemory || storageLevel.useDisk || storageLevel.useOffHeap) {
+            persistedRdds.add(s"${rddInfo.name}:${storageLevel.description}")
+          }
+        }
+      }
+    }
+
+    spark.sparkContext.addSparkListener(listener)
+    try {
+      (block, persistedRdds.toArray(new Array[String](0)).toSeq.distinct)
+    } finally {
+      spark.sparkContext.removeSparkListener(listener)
+    }
   }
 
   test("executeInParallel preserves task order while allowing concurrent execution") {
@@ -1928,6 +1951,88 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroupBatch does not persist sampled dataframes in storage") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-no-cache-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, persistedRdds) = capturePersistedRddNames {
+        PrivySparkApp.scanGroupBatch(
+          spark,
+          inputDir.toString,
+          group,
+          rules,
+          sampleRatio = 1.0,
+          timestamp = "2026-04-14T00:00:00Z"
+        )
+      }
+
+      assert(results.nonEmpty)
+      assert(persistedRdds.isEmpty, s"expected no persisted RDDs, found: ${persistedRdds.mkString(", ")}")
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile does not persist sampled dataframes in storage") {
+    val inputDir = Files.createTempDirectory("privyspark-group-file-no-cache-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val ((results, errors), persistedRdds) = capturePersistedRddNames {
+        PrivySparkApp.scanGroupByFile(
+          spark,
+          inputDir.toString,
+          group,
+          rules,
+          sampleRatio = 1.0,
+          timestamp = "2026-04-14T00:00:00Z",
+          fileParallelism = 1
+        )
+      }
+
+      assert(results.nonEmpty)
+      assert(errors.isEmpty)
+      assert(persistedRdds.isEmpty, s"expected no persisted RDDs, found: ${persistedRdds.mkString(", ")}")
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("runMain emits structured scan_failed logs when Spark bootstrap fails") {
     val logs = captureStderr {
       val exit = intercept[ExitCalled] {
@@ -2814,6 +2919,42 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(countPartFiles(outputDir.resolve("csv/scan_errors")) == 1L)
       assert(countPartFiles(outputDir.resolve("parquet/scan_results")) == 1L)
       assert(countPartFiles(outputDir.resolve("parquet/scan_errors")) == 1L)
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("writeReports does not persist output dataframes in storage") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-no-cache-")
+
+    try {
+      val results = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-04-14T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 1L,
+          match_ratio = 1.0,
+          confidence = 1.0
+        )
+      )
+
+      val errors = Seq(
+        ScanError(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-04-14T00:00:00Z",
+          file_identifier = "broken.csv",
+          error_message = "Unsupported file format"
+        )
+      )
+
+      val (_, persistedRdds) = capturePersistedRddNames {
+        PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
+      }
+
+      assert(persistedRdds.isEmpty, s"expected no persisted RDDs, found: ${persistedRdds.mkString(", ")}")
     } finally {
       deleteRecursively(outputDir)
     }

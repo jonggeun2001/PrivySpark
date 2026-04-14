@@ -16,6 +16,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - `DetectionAggregator`는 메트릭별 개별 job 대신 batched aggregation을 기본 경로로 사용합니다.
 - legacy fallback threshold는 `50,000` 표현식으로 올려져 있고, 초과 시에도 메트릭당 개별 count 대신 소배치 집계를 사용합니다.
 - `_progress`를 최종 집계 소스로 사용해 long scan에서 driver가 모든 결과 row payload를 끝까지 들고 있지 않도록 합니다.
+- sampled scan과 최종 리포트 저장 경로는 Spark storage cache를 사용하지 않습니다. dynamic allocation 환경에서 cached executor가 YARN 자원을 오래 점유하지 않게 하기 위한 선택입니다.
 
 ## 작은 파일이 많은 입력
 - `--pre-scan-parallelism`은 파일 probe와 schema split 대기 시간을 줄이는 1차 옵션입니다.
@@ -48,6 +49,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 
 ## Spark/YARN 운영 팁
 - dynamic allocation이 켜져 있어도 작은 job이 짧게 끝나면 executor scale-out이 제한될 수 있습니다.
+- 반대로 cached block이 executor에 남아 있으면 scale-in도 늦어질 수 있습니다. PrivySpark는 이 문제를 줄이기 위해 sampled scan과 report write 경로에서 storage cache를 제거했습니다.
 - 앱 레벨 병렬도만 올려도 Spark scheduler가 FIFO이거나 backlog가 작으면 executor fan-out이 기대보다 작을 수 있습니다.
 - 큰 그룹 batch scan에서는 input partitioning과 Spark 파일 파티션 설정도 함께 봐야 합니다.
 - `info`/`debug` driver 로그를 켜면 pre-scan, grouping, progress merge 구간을 단계별로 확인할 수 있습니다.

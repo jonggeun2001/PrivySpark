@@ -16,6 +16,7 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 - `DetectionAggregator` uses batched aggregation instead of one Spark job per metric.
 - The legacy fallback threshold is raised to `50,000` expressions, and the fallback still uses smaller aggregation batches rather than per-metric counts.
 - `_progress` acts as the final merge source so long scans do not require the driver to retain all result row payloads in memory.
+- Sampled scan paths and final report writes do not use Spark storage caching. This is an intentional trade-off so dynamic allocation can release cached executors more aggressively on YARN.
 
 ## Small-File-Heavy Inputs
 - `--pre-scan-parallelism` is the first lever for probe and schema-split latency.
@@ -48,6 +49,7 @@ When `scan_directory_files_discovered` to `scan_directory_initial_groups_ready` 
 
 ## Spark/YARN Operating Notes
 - With dynamic allocation enabled, short jobs may not create enough backlog to scale executors out.
+- The opposite problem also happens: cached blocks can delay executor scale-in. PrivySpark avoids this in sampled scan and report-write paths by removing storage cache from those flows.
 - Increasing application-level parallelism alone may still lead to limited executor fan-out if the scheduler stays FIFO or backlog remains small.
 - For large batch groups, input partitioning and Spark file partition settings matter as much as PrivySpark CLI knobs.
 - Enable `info` or `debug` driver logs to separate pre-scan, grouping, and progress-merge bottlenecks.
