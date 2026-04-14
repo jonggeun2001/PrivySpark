@@ -387,6 +387,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       ("11-12-345678-90"),
       ("1212345678"),
       ("면허번호 11-12-345678-90"),
+      ("구형 면허번호 서울 07 - 111111 - 10"),
       ("이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90"),
       ("27-12-345678-90"),
       ("271234567890"),
@@ -396,12 +397,35 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val rules = Seq(
       PiiRule(
         "driver_license_number",
-        "(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|[0-9]{10}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])"
+        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|[0-9]{10}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
       )
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("driver_license", "driver_license_number", 4L))
+    val expected = Seq(MatchCount("driver_license", "driver_license_number", 5L))
+
+    assert(actual == expected)
+  }
+
+  test("counts Korean region-name driver license numbers for full-column rules") {
+    val df = Seq(
+      ("서울 07 - 111111 - 10"),
+      ("부산0711111110"),
+      ("면허번호 서울 07 - 111111 - 10"),
+      ("세종 07 - 111111 - 10"),
+      ("noise")
+    ).toDF("driver_license")
+
+    val rules = Seq(
+      PiiRule(
+        "driver_license_number",
+        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|[0-9]{10}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))",
+        matchType = PiiRuleMatchType.FullColumn
+      )
+    )
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
+    val expected = Seq(MatchCount("driver_license", "driver_license_number", 2L))
 
     assert(actual == expected)
   }
