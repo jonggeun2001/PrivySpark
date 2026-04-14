@@ -1172,7 +1172,32 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(_.match_ratio).toSet == Set(0.67))
+      assert(results.map(_.non_null_match_ratio).toSet == Set(0.67))
       assert(results.map(_.confidence).toSet == Set(0.67))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules reports non-null match ratio separately from sampled-row match ratio") {
+    val inputDir = Files.createTempDirectory("privyspark-non-null-match-ratio-")
+    val timestamp = "2026-04-14T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("customers.json"),
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n" +
+          "{\"email\":\"carol@example.com\"}\n" +
+          "{}\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result =>
+        (result.column_name, result.pii_type, result.match_count, result.match_ratio, result.non_null_match_ratio, result.confidence)
+      ).toSet == Set(("email", "email", 2L, 0.4, 0.67, 0.4)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2884,6 +2909,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           pii_type = "email",
           match_count = 3L,
           match_ratio = 0.6,
+          non_null_match_ratio = 0.75,
           confidence = 0.6
         ),
         ScanResult(
@@ -2894,6 +2920,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           pii_type = "phone",
           match_count = 1L,
           match_ratio = 0.2,
+          non_null_match_ratio = 0.25,
           confidence = 0.2
         )
       )
@@ -2915,6 +2942,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(resultCsvDf.count() == 2L)
       assert(errorCsvDf.count() == 1L)
       assert(resultCsvDf.columns.toSet.contains("file_identifier"))
+      assert(resultCsvDf.columns.toSet.contains("non_null_match_ratio"))
       assert(errorCsvDf.columns.toSet.contains("error_message"))
       assert(countPartFiles(outputDir.resolve("csv/scan_results")) == 1L)
       assert(countPartFiles(outputDir.resolve("csv/scan_errors")) == 1L)
@@ -2938,6 +2966,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           pii_type = "email",
           match_count = 1L,
           match_ratio = 1.0,
+          non_null_match_ratio = 1.0,
           confidence = 1.0
         )
       )
@@ -3694,7 +3723,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     condition
   }
 
-  private def normalizeResults(results: Seq[ScanResult]): Seq[(String, String, String, Long, Double, Double)] = {
+  private def normalizeResults(results: Seq[ScanResult]): Seq[(String, String, String, Long, Double, Double, Double)] = {
     results
       .map(result =>
         (
@@ -3703,6 +3732,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           result.pii_type,
           result.match_count,
           result.match_ratio,
+          result.non_null_match_ratio,
           result.confidence
         )
       )
@@ -3717,7 +3747,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def normalizeOutcomeResults(
     outcomes: Seq[(PrivySparkApp.ScanGroup, Seq[ScanResult], Seq[ScanError])]
-  ): Seq[(String, String, String, Long, Double, Double)] = {
+  ): Seq[(String, String, String, Long, Double, Double, Double)] = {
     normalizeResults(outcomes.flatMap(_._2))
   }
 

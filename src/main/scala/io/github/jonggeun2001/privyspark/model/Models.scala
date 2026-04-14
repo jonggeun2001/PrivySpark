@@ -26,6 +26,7 @@ final case class ScanResult(
   pii_type: String,
   match_count: Long,
   match_ratio: Double,
+  non_null_match_ratio: Double,
   confidence: Double
 )
 
