@@ -45,7 +45,7 @@ Rulesets are validated before scanning so long-running jobs do not fail late bec
 - `resident_registration_number`: supports hyphenated and compact forms, including a 1-digit gender/century short form.
 - `resident_registration_number`: the default ruleset only constrains month `01`-`12` and day `01`-`31`, and rejects matches inside longer numeric tokens.
 - `foreign_registration_number`: mirrors the resident-registration month/day constraints and only allows foreign-registration codes `5`-`8` in the seventh digit.
-- `driver_license_number`: separates legacy 10-digit and current 12-digit patterns at the regex level, and only allows current region codes `11`-`26`, `28` for the 12-digit format. A strict validator still rechecks the final candidate.
+- `driver_license_number`: accepts legacy 10-digit numbers, current 12-digit numbers, and pre-July-2-2014 Korean region-name formats such as `서울 00 - 123456 - 01` and `부산0012345601`. Current numeric region codes are still limited to `11`-`26`, `28`, and Korean region-name forms are limited to the KoROAD notice list: `서울`, `부산`, `경기`, `강원`, `충북`, `충남`, `전북`, `전남`, `경북`, `경남`, `제주`, `대구`, `인천`, `광주`, `대전`, and `울산`. A strict validator still rechecks the final candidate.
 - `address`: remains relatively conservative because Korean address strings vary heavily in real datasets. Tightening it too aggressively would increase misses faster than it reduces false positives.
 - `bank_account_number`: keeps hyphenated account-number detection, but tightens segment lengths to avoid obvious date-like patterns such as `YYYY-MM-DD`.
 - `credit_card_number`: is limited to common 16-digit issuer prefixes, keeps Mastercard 2-series inside the `2221`-`2720` range, and avoids matches inside larger numeric tokens.
