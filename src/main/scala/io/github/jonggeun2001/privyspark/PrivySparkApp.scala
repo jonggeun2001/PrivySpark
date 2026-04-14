@@ -9,7 +9,7 @@ import org.apache.spark.sql.catalyst.csv.CSVOptions
 import org.apache.spark.sql.execution.datasources.csv.CSVUtils
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, Encoders, Row, SparkSession}
-import org.apache.spark.sql.functions.{col, input_file_name, lit, sum => sparkSum, when}
+import org.apache.spark.sql.functions.{col, input_file_name}
 
 import java.io.{BufferedReader, BufferedWriter, InputStreamReader, OutputStreamWriter}
 import java.nio.ByteBuffer
@@ -657,60 +657,6 @@ object PrivySparkApp {
           confidence = matchRatio
         )
       }
-    }
-  }
-
-  private def countNonNullValues(
-    df: DataFrame,
-    columns: Seq[String]
-  ): Map[String, Long] = {
-    val targetColumns = columns.distinct.filter(df.columns.contains)
-    if (targetColumns.isEmpty) {
-      Map.empty
-    } else {
-      val expressions = targetColumns.zipWithIndex.map {
-        case (columnName, index) =>
-          sparkSum(when(col(columnName).isNotNull, lit(1L)).otherwise(lit(0L))).cast("long").as(s"nn_$index")
-      }
-      val aggregated = df.agg(expressions.head, expressions.tail: _*).head()
-      targetColumns.zipWithIndex.map {
-        case (columnName, index) =>
-          val count = if (aggregated.isNullAt(index)) 0L else aggregated.getLong(index)
-          columnName -> count
-      }.toMap
-    }
-  }
-
-  private def countNonNullValuesByFile(
-    df: DataFrame,
-    fileIdentifierColumn: String,
-    columns: Seq[String]
-  ): Map[(String, String), Long] = {
-    val targetColumns = columns.distinct.filter(columnName => columnName != fileIdentifierColumn && df.columns.contains(columnName))
-    if (targetColumns.isEmpty) {
-      Map.empty
-    } else {
-      val expressions = targetColumns.zipWithIndex.map {
-        case (columnName, index) =>
-          sparkSum(when(col(columnName).isNotNull, lit(1L)).otherwise(lit(0L))).cast("long").as(s"nn_$index")
-      }
-
-      df.groupBy(col(fileIdentifierColumn))
-        .agg(expressions.head, expressions.tail: _*)
-        .collect()
-        .flatMap { row =>
-          val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
-          if (fileIdentifier == null || fileIdentifier.isEmpty) {
-            Seq.empty
-          } else {
-            targetColumns.zipWithIndex.map {
-              case (columnName, index) =>
-                val count = if (row.isNullAt(index + 1)) 0L else row.getLong(index + 1)
-                (fileIdentifier, columnName) -> count
-            }
-          }
-        }
-        .toMap
     }
   }
 
@@ -2704,7 +2650,7 @@ object PrivySparkApp {
               timestamp,
               resolveDirectoryIdentifier(datasetPath, group.directoryPath),
               sampledRowCount,
-              countNonNullValues(sampledDf, matchCounts.map(_.columnName).distinct),
+              DetectionAggregator.countNonNull(sampledDf, matchCounts.map(_.columnName).distinct),
               matchCounts
             )
             logDebug(
@@ -2747,7 +2693,7 @@ object PrivySparkApp {
             Seq.empty
           } else {
             val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules)
-            val nonNullCountsByFile = countNonNullValuesByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
+            val nonNullCountsByFile = DetectionAggregator.countNonNullByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
             val results = matchCountsByFile.flatMap { matchCount =>
               sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
                 buildScanResults(
@@ -2818,7 +2764,7 @@ object PrivySparkApp {
           Right(FileScanMetrics(fileIdentifier, sampledRowCount, Map.empty, Seq.empty))
         } else {
           val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
-          val nonNullValueCounts = countNonNullValues(sampledDf, matchCounts.map(_.columnName).distinct)
+          val nonNullValueCounts = DetectionAggregator.countNonNull(sampledDf, matchCounts.map(_.columnName).distinct)
           logDebug(
             "scan_file_complete",
             "file" -> physicalPath,

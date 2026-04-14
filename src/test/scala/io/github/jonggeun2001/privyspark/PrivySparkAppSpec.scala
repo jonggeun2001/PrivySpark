@@ -995,20 +995,22 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val inputDir = Files.createTempDirectory("privyspark-group-batch-")
 
     try {
-      val file1 = inputDir.resolve("part-0001.csv")
-      val file2 = inputDir.resolve("part-0002.csv")
+      val file1 = inputDir.resolve("part-0001.json")
+      val file2 = inputDir.resolve("part-0002.json")
 
       writeText(file1,
-        "name,email\n" +
-          "alice,alice@example.com\n")
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n")
       writeText(file2,
-        "name,email\n" +
-          "bob,bob@example.com\n")
+        "{\"email\":\"bob@example.com\"}\n" +
+          "{\"email\":\"carol@example.com\"}\n" +
+          "{}\n")
 
       val group = PrivySparkApp.ScanGroup(
         directoryPath = inputDir.toString,
-        format = "csv",
-        schemaSignature = "email|name",
+        format = "json",
+        schemaSignature = "email",
         filePaths = Seq(file1.toString, file2.toString)
       )
 
@@ -1023,8 +1025,12 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       assert(results.nonEmpty)
-      assert(results.map(_.file_identifier).toSet == Set("part-0001.csv", "part-0002.csv"))
-      assert(results.forall(_.pii_type == "email"))
+      assert(results.map(result =>
+        (result.file_identifier, result.pii_type, result.match_count, result.match_ratio, result.non_null_match_ratio)
+      ).toSet == Set(
+        ("part-0001.json", "email", 1L, 0.33, 0.5),
+        ("part-0002.json", "email", 2L, 0.67, 1.0)
+      ))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -3266,15 +3272,17 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val outputDir = Files.createTempDirectory("privyspark-progress-batch-output-")
 
     try {
-      val file1 = inputDir.resolve("part-0001.csv")
-      val file2 = inputDir.resolve("part-0002.csv")
+      val file1 = inputDir.resolve("part-0001.json")
+      val file2 = inputDir.resolve("part-0002.json")
 
       writeText(file1,
-        "name,email\n" +
-          "alice,alice@example.com\n")
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n")
       writeText(file2,
-        "name,email\n" +
-          "bob,bob@example.com\n")
+        "{\"email\":\"bob@example.com\"}\n" +
+          "{\"email\":\"carol@example.com\"}\n" +
+          "{}\n")
 
       val progressRun = PrivySparkApp.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
@@ -3285,8 +3293,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val group = PrivySparkApp.ScanGroup(
         directoryPath = inputDir.toString,
-        format = "csv",
-        schemaSignature = "name|email",
+        format = "json",
+        schemaSignature = "email",
         filePaths = Seq(file1.toString, file2.toString)
       )
 
@@ -3310,7 +3318,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(mergedResults == 2L)
       assert(mergedErrors == 0L)
       assert(!Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}")))
-      assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results").count() == 2L)
+      val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
+      assert(resultCsvDf.count() == 2L)
+      assert(resultCsvDf.select("file_identifier", "match_ratio", "non_null_match_ratio").collect().map { row =>
+        (row.getString(0), row.getString(1), row.getString(2))
+      }.toSet == Set(
+        ("part-0001.json", "0.33", "0.5"),
+        ("part-0002.json", "0.67", "1.0")
+      ))
       assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors").count() == 0L)
     } finally {
       deleteRecursively(inputDir)
@@ -3323,11 +3338,12 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val outputDir = Files.createTempDirectory("privyspark-progress-file-output-")
 
     try {
-      val existingFile = inputDir.resolve("part-0001.csv")
+      val existingFile = inputDir.resolve("part-0001.json")
       val missingFile = inputDir.resolve("missing.csv")
       writeText(existingFile,
-        "name,email\n" +
-          "alice,alice@example.com\n")
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n")
 
       val progressRun = PrivySparkApp.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
@@ -3338,8 +3354,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val group = PrivySparkApp.ScanGroup(
         directoryPath = inputDir.toString,
-        format = "csv",
-        schemaSignature = "name|email",
+        format = "json",
+        schemaSignature = "email",
         filePaths = Seq(existingFile.toString, missingFile.toString)
       )
 
@@ -3356,6 +3372,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(results.nonEmpty)
       assert(errors.nonEmpty)
+      assert(results.map(result => (result.file_identifier, result.match_ratio, result.non_null_match_ratio)).toSet ==
+        Set(("part-0001.json", 0.33, 0.5)))
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 1L)
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/errors"), ".jsonl") == 1L)
     } finally {
