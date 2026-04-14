@@ -1,9 +1,9 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
-import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, trim, udf, when}
+import org.apache.spark.sql.functions.{col, first, lit, sum => sparkSum, trim, udf, when}
 import org.apache.spark.sql.types.StringType
-import org.apache.spark.sql.{Column, DataFrame, Row}
+import org.apache.spark.sql.{Column, DataFrame}
 
 import java.util.regex.Pattern
 import scala.util.control.NonFatal
@@ -285,23 +285,19 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[MatchCount]
   ): Map[(String, String), SampleValue] = {
-    val metricByKey = buildMetrics(sampledDf.columns.toSeq, rules)
-      .groupBy(metric => (metric.columnName, metric.piiType))
-      .map {
-        case (key, values) => key -> values.head
+    if (matchCounts.isEmpty) {
+      Map.empty
+    } else {
+      val requestedKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
+      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq, rules).filter {
+        case (key, _) => requestedKeys.contains(key)
       }
-      .toMap
 
-    matchCounts.flatMap { matchCount =>
-      val key = (matchCount.columnName, matchCount.piiType)
-      metricByKey.get(key).flatMap { metric =>
-        sampleValue(
-          sampledDf,
-          metric,
-          sampledDf.filter(metric.predicate).select(col(metric.columnName).cast(StringType)).limit(1).collect().headOption
-        ).map(key -> _)
+      collectSampleRawValues(sampledDf, metricByKey.values.toSeq, AggregationConfig().maxExpressionsPerAgg).flatMap {
+        case (key, rawValue) =>
+          metricByKey.get(key).flatMap(metric => sampleValue(metric, rawValue)).map(key -> _)
       }
-    }.toMap
+    }
   }
 
   def sampleMatchesByFile(
@@ -310,28 +306,28 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[FileMatchCount]
   ): Map[(String, String, String), SampleValue] = {
-    val metricByKey = buildMetrics(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules)
-      .groupBy(metric => (metric.columnName, metric.piiType))
-      .map {
-        case (key, values) => key -> values.head
+    if (matchCounts.isEmpty) {
+      Map.empty
+    } else {
+      val requestedMetricKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
+      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules).filter {
+        case (key, _) => requestedMetricKeys.contains(key)
       }
-      .toMap
+      val requestedKeys = matchCounts.map(matchCount =>
+        (matchCount.fileIdentifier, matchCount.columnName, matchCount.piiType)
+      ).toSet
 
-    matchCounts.flatMap { matchCount =>
-      val key = (matchCount.fileIdentifier, matchCount.columnName, matchCount.piiType)
-      metricByKey.get((matchCount.columnName, matchCount.piiType)).flatMap { metric =>
-        sampleValue(
-          sampledDf,
-          metric,
-          sampledDf
-            .filter(col(fileIdentifierColumn) === lit(matchCount.fileIdentifier) && metric.predicate)
-            .select(col(metric.columnName).cast(StringType))
-            .limit(1)
-            .collect()
-            .headOption
-        ).map(key -> _)
+      collectSampleRawValuesByFile(
+        sampledDf,
+        fileIdentifierColumn,
+        metricByKey.values.toSeq,
+        AggregationConfig().maxExpressionsPerAgg
+      ).flatMap {
+        case (key @ (_, columnName, piiType), rawValue) if requestedKeys.contains(key) =>
+          metricByKey.get((columnName, piiType)).flatMap(metric => sampleValue(metric, rawValue)).map(key -> _)
+        case _ => None
       }
-    }.toMap
+    }
   }
 
   private def buildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[Metric] = {
@@ -376,6 +372,12 @@ object DetectionAggregator {
   private def buildExpressions(batch: Seq[Metric]): Seq[Column] = {
     batch.map { metric =>
       sparkSum(when(metric.predicate, lit(1L)).otherwise(lit(0L))).cast("long").as(metric.alias)
+    }
+  }
+
+  private def buildSampleExpressions(batch: Seq[Metric]): Seq[Column] = {
+    batch.map { metric =>
+      first(when(metric.predicate, col(metric.columnName).cast(StringType)), ignoreNulls = true).as(metric.alias)
     }
   }
 
@@ -522,21 +524,62 @@ object DetectionAggregator {
     batches.toSeq
   }
 
-  private def sampleValue(
+  private def buildMetricByKey(columns: Seq[String], rules: Seq[PiiRule]): Map[(String, String), Metric] = {
+    buildMetrics(columns, rules)
+      .groupBy(metric => (metric.columnName, metric.piiType))
+      .map {
+        case (key, values) => key -> values.head
+      }
+      .toMap
+  }
+
+  private def collectSampleRawValues(
     sampledDf: DataFrame,
-    metric: Metric,
-    row: Option[Row]
-  ): Option[SampleValue] = {
-    row
-      .flatMap(r => Option(r.getAs[String](0)))
-      .flatMap { rawValue =>
-        extractMatch(rawValue, metric).map { extracted =>
-          SampleValue(
-            sampleRawValue = buildRawSnippet(rawValue, extracted.start, extracted.end),
-            sampleMatchedFragment = extracted.fragment
-          )
+    metrics: Seq[Metric],
+    maxExpressionsPerAgg: Int
+  ): Map[(String, String), String] = {
+    groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).foldLeft(Map.empty[(String, String), String]) { (acc, batch) =>
+      val expressions = buildSampleExpressions(batch)
+      val row = sampledDf.agg(expressions.head, expressions.tail: _*).head()
+      val batchValues = batch.zipWithIndex.flatMap {
+        case (metric, index) =>
+          Option(row.getAs[String](index)).map(value => (metric.columnName, metric.piiType) -> value)
+      }
+      acc ++ batchValues
+    }
+  }
+
+  private def collectSampleRawValuesByFile(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    metrics: Seq[Metric],
+    maxExpressionsPerAgg: Int
+  ): Map[(String, String, String), String] = {
+    groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).foldLeft(Map.empty[(String, String, String), String]) { (acc, batch) =>
+      val expressions = buildSampleExpressions(batch)
+      val groupedRows = sampledDf.groupBy(col(fileIdentifierColumn)).agg(expressions.head, expressions.tail: _*).collect()
+      val batchValues = groupedRows.flatMap { row =>
+        Option(row.getAs[String](0)).filter(_.nonEmpty).toSeq.flatMap { fileIdentifier =>
+          batch.zipWithIndex.flatMap {
+            case (metric, batchIndex) =>
+              Option(row.getAs[String](batchIndex + 1)).map(value => (fileIdentifier, metric.columnName, metric.piiType) -> value)
+          }
         }
       }
+      acc ++ batchValues
+    }
+  }
+
+  private def sampleValue(
+    metric: Metric,
+    rawValue: String
+  ): Option[SampleValue] = {
+    extractMatch(rawValue, metric).map { extracted =>
+      SampleValue(
+        sampleRawValue = buildRawSnippet(rawValue, extracted.start, extracted.end),
+        sampleMatchedFragment = extracted.fragment
+      )
+    }
   }
 
   private def extractMatch(rawValue: String, metric: Metric): Option[ExtractedMatch] = {

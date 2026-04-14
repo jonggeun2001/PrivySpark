@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.DetectionAggregator.{AggregationConfig, FileMatchCount, MatchCount}
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
+import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
 import org.apache.spark.sql.functions.{col, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
@@ -12,6 +13,7 @@ import org.scalatestplus.junit.JUnitRunner
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(classOf[JUnitRunner])
 class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
@@ -215,6 +217,28 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(sortByKey(actual) == sortByKey(expected))
   }
 
+  test("sampleMatches extracts dataset samples with bounded Spark jobs per batch") {
+    val df = Seq(
+      ("alpha@example.com", "010-1234-5678"),
+      ("beta@example.com", "noise"),
+      ("noise", "010-9999-8888")
+    ).toDF("c_email", "c_phone")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val matchCounts = DetectionAggregator.aggregate(df, rules)
+    val (samples, jobCount) = captureJobCount {
+      DetectionAggregator.sampleMatches(df, rules, matchCounts)
+    }
+
+    assert(jobCount == 2, s"expected two Spark jobs for batched sample extraction, found $jobCount")
+    assert(samples(("c_email", "email")).sampleMatchedFragment == "alpha@example.com")
+    assert(samples(("c_phone", "phone")).sampleMatchedFragment == "010-1234-5678")
+  }
+
   test("aggregateByFile matches legacy per-file behavior") {
     val df = Seq(
       ("alpha.csv", "alpha@example.com", "010-1234-5678"),
@@ -357,6 +381,28 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(actual == sortByFileKey(expected))
   }
 
+  test("sampleMatchesByFile extracts per-file samples with bounded Spark jobs per batch") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("alpha.csv", "noise", "none"),
+      ("beta.csv", "beta@example.com", "010-9999-8888")
+    ).toDF("file_id", "c_email", "c_phone")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules)
+    val (samples, jobCount) = captureJobCount {
+      DetectionAggregator.sampleMatchesByFile(df, "file_id", rules, matchCounts)
+    }
+
+    assert(jobCount == 2, s"expected two Spark jobs for batched per-file sample extraction, found $jobCount")
+    assert(samples(("alpha.csv", "c_email", "email")).sampleMatchedFragment == "alpha@example.com")
+    assert(samples(("beta.csv", "c_phone", "phone")).sampleMatchedFragment == "010-9999-8888")
+  }
+
   test("counts only full-value matches per file for full-column rules") {
     val df = Seq(
       ("alpha.csv", "alpha@example.com"),
@@ -451,6 +497,22 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       System.setErr(originalErr)
     }
     output.toString(StandardCharsets.UTF_8.name())
+  }
+
+  private def captureJobCount[A](block: => A): (A, Int) = {
+    val jobCount = new AtomicInteger(0)
+    val listener = new SparkListener {
+      override def onJobStart(jobStart: SparkListenerJobStart): Unit = {
+        jobCount.incrementAndGet()
+      }
+    }
+
+    spark.sparkContext.addSparkListener(listener)
+    try {
+      (block, jobCount.get())
+    } finally {
+      spark.sparkContext.removeSparkListener(listener)
+    }
   }
 
   private def withDebugLoggingEnabled[A](block: => A): A = {
