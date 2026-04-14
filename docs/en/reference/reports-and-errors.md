@@ -18,6 +18,7 @@ PrivySpark always writes final outputs in both Parquet and CSV. The `_progress` 
 - `pii_type`
 - `match_count`
 - `match_ratio`
+- `non_null_match_ratio`
 - `confidence`
 
 ## `file_identifier` Rules
@@ -33,6 +34,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 
 ## Ratio Fields
 - `match_ratio` is based on sampled rows.
+- `non_null_match_ratio` uses only non-null values in the column as its denominator.
 - `full_column` only changes how `match_count` is computed. The denominator for `match_ratio` and `confidence` still uses sampled row count.
 - `confidence` currently equals `match_ratio`.
 - Both values are rounded to two decimal places.
