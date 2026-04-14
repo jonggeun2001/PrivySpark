@@ -1,0 +1,94 @@
+# 빠른 시작
+
+## 전제 조건
+- Spark `3.5.3`
+- Scala `2.12`
+- JVM 바이트코드 타겟 `1.8`
+- YARN cluster 실행 환경
+
+PrivySpark는 클러스터 제공 Spark 런타임을 전제로 하고, 애플리케이션 의존성은 Shadow fat JAR에 포함합니다.
+
+## 빌드
+
+```bash
+./gradlew clean shadowJar
+```
+
+생성 산출물은 `build/libs/*-all.jar`입니다.
+
+## 테스트
+
+```bash
+./gradlew test
+```
+
+샘플 데이터셋을 다시 만들려면 아래 명령을 사용합니다.
+
+```bash
+./gradlew generateSampleDatasets
+./gradlew packageSampleDatasets
+```
+
+## 기본 실행
+
+```bash
+PRIVYSPARK_DEBUG=info \
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ruleset default \
+  --sample-ratio 0.2
+```
+
+`--path`, `--output`은 절대경로 또는 URI만 허용합니다.
+
+## 병렬도와 샘플링 예시
+
+```bash
+PRIVYSPARK_DEBUG=debug \
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ruleset default \
+  --sample-ratio 0.2 \
+  --file-sample-ratio 0.1 \
+  --pre-scan-parallelism 6 \
+  --group-parallelism 8 \
+  --file-parallelism 4
+```
+
+`--file-sample-ratio`가 batch-capable group scan에 적용되면 `--sample-ratio < 1.0`은 해당 그룹에서 무시되고 warning 로그가 남습니다. 이유는 파일 샘플링 후 다시 row sampling을 적용하면 샘플 기준이 이중으로 바뀌어 결과 해석이 불명확해지기 때문입니다.
+
+## 커스텀 ruleset 배포
+
+YARN cluster 실행에서 커스텀 ruleset을 사용할 때는 ruleset 파일도 함께 배포해야 합니다.
+
+```bash
+PRIVYSPARK_SPARK_FILES=/abs/path/my-rules.yaml#my-rules.yaml \
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ruleset my-rules.yaml
+```
+
+직접 `spark-submit`을 사용할 수도 있습니다.
+
+```bash
+spark-submit \
+  --class io.github.jonggeun2001.privyspark.PrivySparkApp \
+  --master yarn \
+  --deploy-mode cluster \
+  --files /abs/path/my-rules.yaml#my-rules.yaml \
+  /abs/path/privyspark-<version>-all.jar \
+  scan --path hdfs:///data/input --output hdfs:///data/output --ruleset my-rules.yaml
+```
+
+## 결과 확인
+- 최종 결과: `<output>/parquet/scan_results`, `<output>/csv/scan_results`
+- 최종 오류: `<output>/parquet/scan_errors`, `<output>/csv/scan_errors`
+- 실행 중 progress: `<output>/_progress/<run_id>`
+
+progress 경로는 관측용 임시 경로입니다. 최종 소비자는 항상 Parquet/CSV 최종 리포트를 기준으로 봐야 합니다.

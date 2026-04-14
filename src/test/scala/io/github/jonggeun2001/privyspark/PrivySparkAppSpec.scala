@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.scheduler.{SparkListener, SparkListenerStageSubmitted}
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
@@ -15,6 +16,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.nio.file.attribute.{FileTime, PosixFilePermissions}
 import java.util.Comparator
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
@@ -33,6 +35,27 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   override def afterAll(): Unit = {
     spark.stop()
     super.afterAll()
+  }
+
+  private def capturePersistedRddNames[T](block: => T): (T, Seq[String]) = {
+    val persistedRdds = new ConcurrentLinkedQueue[String]()
+    val listener = new SparkListener {
+      override def onStageSubmitted(stageSubmitted: SparkListenerStageSubmitted): Unit = {
+        stageSubmitted.stageInfo.rddInfos.foreach { rddInfo =>
+          val storageLevel = rddInfo.storageLevel
+          if (storageLevel.useMemory || storageLevel.useDisk || storageLevel.useOffHeap) {
+            persistedRdds.add(s"${rddInfo.name}:${storageLevel.description}")
+          }
+        }
+      }
+    }
+
+    spark.sparkContext.addSparkListener(listener)
+    try {
+      (block, persistedRdds.toArray(new Array[String](0)).toSeq.distinct)
+    } finally {
+      spark.sparkContext.removeSparkListener(listener)
+    }
   }
 
   test("executeInParallel preserves task order while allowing concurrent execution") {
@@ -972,20 +995,22 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val inputDir = Files.createTempDirectory("privyspark-group-batch-")
 
     try {
-      val file1 = inputDir.resolve("part-0001.csv")
-      val file2 = inputDir.resolve("part-0002.csv")
+      val file1 = inputDir.resolve("part-0001.json")
+      val file2 = inputDir.resolve("part-0002.json")
 
       writeText(file1,
-        "name,email\n" +
-          "alice,alice@example.com\n")
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n")
       writeText(file2,
-        "name,email\n" +
-          "bob,bob@example.com\n")
+        "{\"email\":\"bob@example.com\"}\n" +
+          "{\"email\":\"carol@example.com\"}\n" +
+          "{}\n")
 
       val group = PrivySparkApp.ScanGroup(
         directoryPath = inputDir.toString,
-        format = "csv",
-        schemaSignature = "email|name",
+        format = "json",
+        schemaSignature = "email",
         filePaths = Seq(file1.toString, file2.toString)
       )
 
@@ -1000,8 +1025,12 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       assert(results.nonEmpty)
-      assert(results.map(_.file_identifier).toSet == Set("part-0001.csv", "part-0002.csv"))
-      assert(results.forall(_.pii_type == "email"))
+      assert(results.map(result =>
+        (result.file_identifier, result.pii_type, result.match_count, result.match_ratio, result.non_null_match_ratio)
+      ).toSet == Set(
+        ("part-0001.json", "email", 1L, 0.33, 0.5),
+        ("part-0002.json", "email", 2L, 0.67, 1.0)
+      ))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1071,7 +1100,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanWithRules uses relative file path for nested single file results") {
+  test("scanWithRules uses directory identifier for nested single file results") {
     val inputDir = Files.createTempDirectory("privyspark-relative-file-id-")
     val nestedDir = Files.createDirectories(inputDir.resolve("daily"))
     val timestamp = "2026-03-12T00:00:00Z"
@@ -1082,10 +1111,19 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "alice,alice@example.com\n")
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        timestamp
+      )
       val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
 
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.useDirectoryIdentifier)
       assert(errors.isEmpty)
-      assert(results.map(_.file_identifier).toSet == Set("daily/customers.csv"))
+      assert(results.map(_.file_identifier).toSet == Set("daily"))
+      assert(!results.exists(_.file_identifier == "daily/customers.csv"))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1149,7 +1187,32 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(_.match_ratio).toSet == Set(0.67))
+      assert(results.map(_.non_null_match_ratio).toSet == Set(0.67))
       assert(results.map(_.confidence).toSet == Set(0.67))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules reports non-null match ratio separately from sampled-row match ratio") {
+    val inputDir = Files.createTempDirectory("privyspark-non-null-match-ratio-")
+    val timestamp = "2026-04-14T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("customers.json"),
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n" +
+          "{\"email\":\"carol@example.com\"}\n" +
+          "{}\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result =>
+        (result.column_name, result.pii_type, result.match_count, result.sampled_row_count, result.match_ratio, result.non_null_match_ratio, result.confidence)
+      ).toSet == Set(("email", "email", 2L, 5L, 0.4, 0.67, 0.4)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1167,14 +1230,15 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "carol,XM12345678\n" +
           "dave,M12345678Y\n" +
           "erin,m12345678\n" +
-          "frank,M1234567\n")
+          "frank,M1234567\n" +
+          "grace,S00000000\n")
 
       val rules = Seq(RulesetLoader.load("default").find(_.piiType == "passport_number").get)
       val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
 
       assert(errors.isEmpty)
       assert(results.map(result => (result.column_name, result.pii_type, result.match_count, result.match_ratio)).toSet ==
-        Set(("passport_no", "passport_number", 2L, 0.33)))
+        Set(("passport_no", "passport_number", 2L, 0.29)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1409,6 +1473,45 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           ("users/part-a.csv", "email", 1L),
           ("users/part-b.csv", "_c1", 2L)
         ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile keeps directory-level non-null denominator when some files have zero matches") {
+    val inputDir = Files.createTempDirectory("privyspark-directory-fallback-non-null-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-04-14T00:00:00Z"
+
+    try {
+      val matchingFile = groupedDir.resolve("part-a.json")
+      val invalidFile = groupedDir.resolve("part-b.json")
+
+      writeText(matchingFile, "{\"email\":\"alice@example.com\"}\n")
+      writeText(invalidFile, "{\"email\":\"not-an-email\"}\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "json",
+        schemaSignature = "email",
+        filePaths = Seq(matchingFile.toString, invalidFile.toString),
+        useDirectoryIdentifier = true
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(result =>
+        (result.file_identifier, result.column_name, result.match_count, result.match_ratio, result.non_null_match_ratio)
+      ).toSet == Set(("users", "email", 1L, 0.5, 0.5)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1923,6 +2026,88 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(logs.contains("group_scan_row_sampling_ignored"))
       assert(logs.contains("file_sample_ratio=0.2"))
       assert(logs.contains("sample_ratio=0.5"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupBatch does not persist sampled dataframes in storage") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-no-cache-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, persistedRdds) = capturePersistedRddNames {
+        PrivySparkApp.scanGroupBatch(
+          spark,
+          inputDir.toString,
+          group,
+          rules,
+          sampleRatio = 1.0,
+          timestamp = "2026-04-14T00:00:00Z"
+        )
+      }
+
+      assert(results.nonEmpty)
+      assert(persistedRdds.isEmpty, s"expected no persisted RDDs, found: ${persistedRdds.mkString(", ")}")
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile does not persist sampled dataframes in storage") {
+    val inputDir = Files.createTempDirectory("privyspark-group-file-no-cache-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val ((results, errors), persistedRdds) = capturePersistedRddNames {
+        PrivySparkApp.scanGroupByFile(
+          spark,
+          inputDir.toString,
+          group,
+          rules,
+          sampleRatio = 1.0,
+          timestamp = "2026-04-14T00:00:00Z",
+          fileParallelism = 1
+        )
+      }
+
+      assert(results.nonEmpty)
+      assert(errors.isEmpty)
+      assert(persistedRdds.isEmpty, s"expected no persisted RDDs, found: ${persistedRdds.mkString(", ")}")
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2777,7 +2962,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           column_name = "email",
           pii_type = "email",
           match_count = 3L,
+          sampled_row_count = 5L,
           match_ratio = 0.6,
+          non_null_match_ratio = 0.75,
           confidence = 0.6
         ),
         ScanResult(
@@ -2787,7 +2974,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           column_name = "phone",
           pii_type = "phone",
           match_count = 1L,
+          sampled_row_count = 5L,
           match_ratio = 0.2,
+          non_null_match_ratio = 0.25,
           confidence = 0.2
         )
       )
@@ -2809,11 +2998,51 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(resultCsvDf.count() == 2L)
       assert(errorCsvDf.count() == 1L)
       assert(resultCsvDf.columns.toSet.contains("file_identifier"))
+      assert(resultCsvDf.columns.toSet.contains("sampled_row_count"))
+      assert(resultCsvDf.columns.toSet.contains("non_null_match_ratio"))
       assert(errorCsvDf.columns.toSet.contains("error_message"))
       assert(countPartFiles(outputDir.resolve("csv/scan_results")) == 1L)
       assert(countPartFiles(outputDir.resolve("csv/scan_errors")) == 1L)
       assert(countPartFiles(outputDir.resolve("parquet/scan_results")) == 1L)
       assert(countPartFiles(outputDir.resolve("parquet/scan_errors")) == 1L)
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("writeReports does not persist output dataframes in storage") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-no-cache-")
+
+    try {
+      val results = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-04-14T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 1L,
+          sampled_row_count = 1L,
+          match_ratio = 1.0,
+          non_null_match_ratio = 1.0,
+          confidence = 1.0
+        )
+      )
+
+      val errors = Seq(
+        ScanError(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-04-14T00:00:00Z",
+          file_identifier = "broken.csv",
+          error_message = "Unsupported file format"
+        )
+      )
+
+      val (_, persistedRdds) = capturePersistedRddNames {
+        PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
+      }
+
+      assert(persistedRdds.isEmpty, s"expected no persisted RDDs, found: ${persistedRdds.mkString(", ")}")
     } finally {
       deleteRecursively(outputDir)
     }
@@ -3095,15 +3324,17 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val outputDir = Files.createTempDirectory("privyspark-progress-batch-output-")
 
     try {
-      val file1 = inputDir.resolve("part-0001.csv")
-      val file2 = inputDir.resolve("part-0002.csv")
+      val file1 = inputDir.resolve("part-0001.json")
+      val file2 = inputDir.resolve("part-0002.json")
 
       writeText(file1,
-        "name,email\n" +
-          "alice,alice@example.com\n")
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n")
       writeText(file2,
-        "name,email\n" +
-          "bob,bob@example.com\n")
+        "{\"email\":\"bob@example.com\"}\n" +
+          "{\"email\":\"carol@example.com\"}\n" +
+          "{}\n")
 
       val progressRun = PrivySparkApp.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
@@ -3114,8 +3345,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val group = PrivySparkApp.ScanGroup(
         directoryPath = inputDir.toString,
-        format = "csv",
-        schemaSignature = "name|email",
+        format = "json",
+        schemaSignature = "email",
         filePaths = Seq(file1.toString, file2.toString)
       )
 
@@ -3139,7 +3370,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(mergedResults == 2L)
       assert(mergedErrors == 0L)
       assert(!Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}")))
-      assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results").count() == 2L)
+      val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
+      assert(resultCsvDf.count() == 2L)
+      assert(resultCsvDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_null_match_ratio").collect().map { row =>
+        (row.getString(0), row.getString(1), row.getString(2), row.getString(3))
+      }.toSet == Set(
+        ("part-0001.json", "3", "0.33", "0.5"),
+        ("part-0002.json", "3", "0.67", "1.0")
+      ))
       assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors").count() == 0L)
     } finally {
       deleteRecursively(inputDir)
@@ -3152,11 +3390,12 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val outputDir = Files.createTempDirectory("privyspark-progress-file-output-")
 
     try {
-      val existingFile = inputDir.resolve("part-0001.csv")
+      val existingFile = inputDir.resolve("part-0001.json")
       val missingFile = inputDir.resolve("missing.csv")
       writeText(existingFile,
-        "name,email\n" +
-          "alice,alice@example.com\n")
+        "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n")
 
       val progressRun = PrivySparkApp.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
@@ -3167,8 +3406,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val group = PrivySparkApp.ScanGroup(
         directoryPath = inputDir.toString,
-        format = "csv",
-        schemaSignature = "name|email",
+        format = "json",
+        schemaSignature = "email",
         filePaths = Seq(existingFile.toString, missingFile.toString)
       )
 
@@ -3185,6 +3424,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(results.nonEmpty)
       assert(errors.nonEmpty)
+      assert(results.map(result => (result.file_identifier, result.match_ratio, result.non_null_match_ratio)).toSet ==
+        Set(("part-0001.json", 0.33, 0.5)))
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 1L)
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/errors"), ".jsonl") == 1L)
     } finally {
@@ -3552,7 +3793,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     condition
   }
 
-  private def normalizeResults(results: Seq[ScanResult]): Seq[(String, String, String, Long, Double, Double)] = {
+  private def normalizeResults(results: Seq[ScanResult]): Seq[(String, String, String, Long, Long, Double, Double, Double)] = {
     results
       .map(result =>
         (
@@ -3560,7 +3801,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           result.column_name,
           result.pii_type,
           result.match_count,
+          result.sampled_row_count,
           result.match_ratio,
+          result.non_null_match_ratio,
           result.confidence
         )
       )
@@ -3575,7 +3818,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def normalizeOutcomeResults(
     outcomes: Seq[(PrivySparkApp.ScanGroup, Seq[ScanResult], Seq[ScanError])]
-  ): Seq[(String, String, String, Long, Double, Double)] = {
+  ): Seq[(String, String, String, Long, Long, Double, Double, Double)] = {
     normalizeResults(outcomes.flatMap(_._2))
   }
 

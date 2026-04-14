@@ -66,6 +66,7 @@ object PrivySparkApp {
   private final case class FileScanMetrics(
     fileIdentifier: String,
     sampledRowCount: Long,
+    nonNullValueCounts: Map[String, Long],
     matchCounts: Seq[MatchCount]
   )
   private final case class ProbeSample(bytes: Array[Byte], truncated: Boolean)
@@ -252,6 +253,16 @@ object PrivySparkApp {
       } else {
         fallbackIdentifier(targetPath)
       }
+    }
+  }
+
+  private def comparableGroupingPath(path: String): String = {
+    try {
+      val uri = new Path(path).toUri.normalize()
+      stripTrailingSlash(Option(uri.getPath).filter(_.nonEmpty).getOrElse(path))
+    } catch {
+      case NonFatal(_) =>
+        stripTrailingSlash(path)
     }
   }
 
@@ -634,6 +645,7 @@ object PrivySparkApp {
     timestamp: String,
     fileIdentifier: String,
     sampledRowCount: Long,
+    nonNullValueCounts: Map[String, Long],
     matchCounts: Seq[MatchCount]
   ): Seq[ScanResult] = {
     if (sampledRowCount <= 0L) {
@@ -641,6 +653,8 @@ object PrivySparkApp {
     } else {
       matchCounts.map { matchCount =>
         val matchRatio = roundProbability(matchCount.count.toDouble / sampledRowCount.toDouble)
+        val nonNullDenominator = nonNullValueCounts.get(matchCount.columnName).filter(_ > 0L).getOrElse(sampledRowCount)
+        val nonNullMatchRatio = roundProbability(matchCount.count.toDouble / nonNullDenominator.toDouble)
         ScanResult(
           dataset_path = datasetPath,
           scan_timestamp = timestamp,
@@ -648,7 +662,9 @@ object PrivySparkApp {
           column_name = matchCount.columnName,
           pii_type = matchCount.piiType,
           match_count = matchCount.count,
+          sampled_row_count = sampledRowCount,
           match_ratio = matchRatio,
+          non_null_match_ratio = nonNullMatchRatio,
           confidence = matchRatio
         )
       }
@@ -1456,8 +1472,9 @@ object PrivySparkApp {
       if (!fs.exists(path)) {
         throw new IllegalArgumentException(s"Input path not found: $inputPath")
       }
+      val inputPathIsFile = fs.getFileStatus(path).isFile
 
-      val files = if (fs.getFileStatus(path).isFile) {
+      val files = if (inputPathIsFile) {
         Seq(path.toString)
       } else {
         val iter = fs.listFiles(path, true)
@@ -1717,10 +1734,12 @@ object PrivySparkApp {
       }
 
       val finalizedGroups = schemaAwareGroups.map { group =>
+        val isInputRootGroup = comparableGroupingPath(group.directoryPath) == comparableGroupingPath(inputPath)
         val directoryIdentifierEligible =
+          !inputPathIsFile &&
           group.allowDirectoryIdentifier &&
             groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 &&
-            group.filePaths.size > 1 &&
+            (group.filePaths.size > 1 || !isInputRootGroup) &&
             !directoriesWithPreScanErrors.contains(group.directoryPath)
         val finalizedGroup = group.copy(
           useDirectoryIdentifier = directoryIdentifierEligible && !group.schemaSampled,
@@ -2426,6 +2445,7 @@ object PrivySparkApp {
                   timestamp,
                   fileMetrics.fileIdentifier,
                   fileMetrics.sampledRowCount,
+                  fileMetrics.nonNullValueCounts,
                   fileMetrics.matchCounts
                 )
                 progressRun.foreach { run =>
@@ -2484,6 +2504,13 @@ object PrivySparkApp {
         timestamp,
         resolveDirectoryIdentifier(datasetPath, group.directoryPath),
         sampledRowCount,
+        successfulFileMetrics
+          .flatMap(_.nonNullValueCounts.toSeq)
+          .groupBy(_._1)
+          .map {
+            case (columnName, counts) => columnName -> counts.map(_._2).sum
+          }
+          .toMap,
         aggregatedMatchCounts
       )
     } else {
@@ -2510,6 +2537,7 @@ object PrivySparkApp {
           timestamp,
           fileMetrics.fileIdentifier,
           fileMetrics.sampledRowCount,
+          fileMetrics.nonNullValueCounts,
           fileMetrics.matchCounts
         )
       }
@@ -2612,94 +2640,94 @@ object PrivySparkApp {
         sourceDf.sample(withReplacement = false, sampleRatio)
       }
 
-      sampledDf.cache()
-      try {
-        fileIdentifierColumn match {
-          case None =>
-            val sampledRowCount = sampledDf.count()
+      fileIdentifierColumn match {
+        case None =>
+          val sampledRowCount = sampledDf.count()
+          logDebug(
+            "group_scan_batch_sampled_rows",
+            "directory" -> group.directoryPath,
+            "sampled_rows" -> sampledRowCount,
+            "mode" -> "directory_identifier"
+          )
+          if (sampledRowCount == 0L) {
             logDebug(
-              "group_scan_batch_sampled_rows",
+              "group_scan_batch_complete",
               "directory" -> group.directoryPath,
-              "sampled_rows" -> sampledRowCount,
+              "result_rows" -> 0,
               "mode" -> "directory_identifier"
             )
-            if (sampledRowCount == 0L) {
-              logDebug(
-                "group_scan_batch_complete",
-                "directory" -> group.directoryPath,
-                "result_rows" -> 0,
-                "mode" -> "directory_identifier"
-              )
-              Seq.empty
-            } else {
-              val results = buildScanResults(
-                datasetPath,
-                timestamp,
-                resolveDirectoryIdentifier(datasetPath, group.directoryPath),
-                sampledRowCount,
-                DetectionAggregator.aggregate(sampledDf, effectiveRules)
-              )
-              logDebug(
-                "group_scan_batch_complete",
-                "directory" -> group.directoryPath,
-                "result_rows" -> results.size,
-                "mode" -> "directory_identifier"
-              )
-              results
-            }
-          case Some(columnName) =>
-            val sampledRowsByFile = sampledDf
-              .groupBy(col(columnName))
-              .count()
-              .collect()
-              .flatMap { row =>
-                val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
-                val rowCount = if (row.isNullAt(1)) 0L else row.getLong(1)
-                if (fileIdentifier == null || fileIdentifier.isEmpty || rowCount <= 0L) {
-                  None
-                } else {
-                  Some(fileIdentifier -> rowCount)
-                }
-              }
-              .toMap
+            Seq.empty
+          } else {
+            val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
+            val results = buildScanResults(
+              datasetPath,
+              timestamp,
+              resolveDirectoryIdentifier(datasetPath, group.directoryPath),
+              sampledRowCount,
+              DetectionAggregator.countNonNull(sampledDf, matchCounts.map(_.columnName).distinct),
+              matchCounts
+            )
             logDebug(
-              "group_scan_batch_sampled_file_rows",
+              "group_scan_batch_complete",
               "directory" -> group.directoryPath,
-              "files_with_rows" -> sampledRowsByFile.size,
+              "result_rows" -> results.size,
+              "mode" -> "directory_identifier"
+            )
+            results
+          }
+        case Some(columnName) =>
+          val sampledRowsByFile = sampledDf
+            .groupBy(col(columnName))
+            .count()
+            .collect()
+            .flatMap { row =>
+              val fileIdentifier = if (row.isNullAt(0)) null else row.getString(0)
+              val rowCount = if (row.isNullAt(1)) 0L else row.getLong(1)
+              if (fileIdentifier == null || fileIdentifier.isEmpty || rowCount <= 0L) {
+                None
+              } else {
+                Some(fileIdentifier -> rowCount)
+              }
+            }
+            .toMap
+          logDebug(
+            "group_scan_batch_sampled_file_rows",
+            "directory" -> group.directoryPath,
+            "files_with_rows" -> sampledRowsByFile.size,
+            "mode" -> "file_identifier"
+          )
+
+          if (sampledRowsByFile.isEmpty) {
+            logDebug(
+              "group_scan_batch_complete",
+              "directory" -> group.directoryPath,
+              "result_rows" -> 0,
               "mode" -> "file_identifier"
             )
-
-            if (sampledRowsByFile.isEmpty) {
-              logDebug(
-                "group_scan_batch_complete",
-                "directory" -> group.directoryPath,
-                "result_rows" -> 0,
-                "mode" -> "file_identifier"
-              )
-              Seq.empty
-            } else {
-              val results = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules).flatMap { matchCount =>
-                sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
-                  buildScanResults(
-                    datasetPath,
-                    timestamp,
-                    resolveLogicalIdentifierForPhysicalPath(group, datasetPath, matchCount.fileIdentifier),
-                    sampledRowCount,
-                    Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count))
-                  ).headOption
-                }
+            Seq.empty
+          } else {
+            val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules)
+            val nonNullCountsByFile = DetectionAggregator.countNonNullByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
+            val results = matchCountsByFile.flatMap { matchCount =>
+              sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
+                buildScanResults(
+                  datasetPath,
+                  timestamp,
+                  resolveLogicalIdentifierForPhysicalPath(group, datasetPath, matchCount.fileIdentifier),
+                  sampledRowCount,
+                  Map(matchCount.columnName -> nonNullCountsByFile.getOrElse((matchCount.fileIdentifier, matchCount.columnName), sampledRowCount)),
+                  Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count))
+                ).headOption
               }
-              logDebug(
-                "group_scan_batch_complete",
-                "directory" -> group.directoryPath,
-                "result_rows" -> results.size,
-                "mode" -> "file_identifier"
-              )
-              results
             }
-        }
-      } finally {
-        sampledDf.unpersist(blocking = false)
+            logDebug(
+              "group_scan_batch_complete",
+              "directory" -> group.directoryPath,
+              "result_rows" -> results.size,
+              "mode" -> "file_identifier"
+            )
+            results
+          }
       }
     }
   }
@@ -2737,31 +2765,30 @@ object PrivySparkApp {
         val sourceDf = readSource(spark, format, Seq(physicalPath), csvHasHeader, readOptions)
         val sampledDf = if (sampleRatio >= 1.0) sourceDf else sourceDf.sample(withReplacement = false, sampleRatio)
 
-        sampledDf.cache()
-        try {
-          val sampledRowCount = sampledDf.count()
+        val sampledRowCount = sampledDf.count()
+        logDebug(
+          "scan_file_sampled_rows",
+          "file" -> physicalPath,
+          "file_identifier" -> fileIdentifier,
+          "sampled_rows" -> sampledRowCount
+        )
+
+        if (sampledRowCount == 0L) {
+          logDebug("scan_file_complete", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "matches" -> 0)
+          Right(FileScanMetrics(fileIdentifier, sampledRowCount, Map.empty, Seq.empty))
+        } else {
+          val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
+          val nonNullValueCounts = DetectionAggregator.countNonNull(
+            sampledDf,
+            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules)
+          )
           logDebug(
-            "scan_file_sampled_rows",
+            "scan_file_complete",
             "file" -> physicalPath,
             "file_identifier" -> fileIdentifier,
-            "sampled_rows" -> sampledRowCount
+            "matches" -> matchCounts.size
           )
-
-          if (sampledRowCount == 0L) {
-            logDebug("scan_file_complete", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "matches" -> 0)
-            Right(FileScanMetrics(fileIdentifier, sampledRowCount, Seq.empty))
-          } else {
-            val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
-            logDebug(
-              "scan_file_complete",
-              "file" -> physicalPath,
-              "file_identifier" -> fileIdentifier,
-              "matches" -> matchCounts.size
-            )
-            Right(FileScanMetrics(fileIdentifier, sampledRowCount, matchCounts))
-          }
-        } finally {
-          sampledDf.unpersist(blocking = false)
+          Right(FileScanMetrics(fileIdentifier, sampledRowCount, nonNullValueCounts, matchCounts))
         }
       }
     } catch {
@@ -2786,6 +2813,7 @@ object PrivySparkApp {
         timestamp,
         fileMetrics.fileIdentifier,
         fileMetrics.sampledRowCount,
+        fileMetrics.nonNullValueCounts,
         fileMetrics.matchCounts
       )
     }
@@ -3019,9 +3047,8 @@ object PrivySparkApp {
     )
     val exactSplitCanUseDirectoryIdentifier =
       group.directoryIdentifierEligible &&
-        splitGroups.size == 1 &&
-        splitErrors.isEmpty &&
-        splitGroups.head.filePaths.size > 1
+      splitGroups.size == 1 &&
+      splitErrors.isEmpty
     val rescannedGroups = splitGroups.map(_.copy(
       useDirectoryIdentifier = exactSplitCanUseDirectoryIdentifier,
       directoryIdentifierEligible = group.directoryIdentifierEligible,
@@ -3094,31 +3121,26 @@ object PrivySparkApp {
   ): Unit = {
     val root = outputRoot.stripSuffix("/")
     logDebug("write_reports_materialize", "output_root" -> root)
-    val resultDf = resultsDf.coalesce(1).cache()
-    val errorDf = errorsDf.coalesce(1).cache()
+    val resultDf = resultsDf.coalesce(1)
+    val errorDf = errorsDf.coalesce(1)
 
     val resultParquetPath = s"$root/parquet/scan_results"
     val errorParquetPath = s"$root/parquet/scan_errors"
     val resultCsvPath = s"$root/csv/scan_results"
     val errorCsvPath = s"$root/csv/scan_errors"
 
-    try {
-      resultDf.write.mode("overwrite").parquet(resultParquetPath)
-      errorDf.write.mode("overwrite").parquet(errorParquetPath)
+    resultDf.write.mode("overwrite").parquet(resultParquetPath)
+    errorDf.write.mode("overwrite").parquet(errorParquetPath)
 
-      resultDf.write
-        .option("header", "true")
-        .mode("overwrite")
-        .csv(resultCsvPath)
+    resultDf.write
+      .option("header", "true")
+      .mode("overwrite")
+      .csv(resultCsvPath)
 
-      errorDf.write
-        .option("header", "true")
-        .mode("overwrite")
-        .csv(errorCsvPath)
-    } finally {
-      resultDf.unpersist(blocking = false)
-      errorDf.unpersist(blocking = false)
-    }
+    errorDf.write
+      .option("header", "true")
+      .mode("overwrite")
+      .csv(errorCsvPath)
 
     logDebug(
       "write_reports_complete",
@@ -3608,7 +3630,7 @@ object PrivySparkApp {
     System.currentTimeMillis() - marker.lastHeartbeatEpochMillis > ActiveRunStaleThresholdMillis
 
   private def scanResultToJson(result: ScanResult): String =
-    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"match_ratio":${result.match_ratio},"confidence":${result.confidence}}"""
+    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"sampled_row_count":${result.sampled_row_count},"match_ratio":${result.match_ratio},"non_null_match_ratio":${result.non_null_match_ratio},"confidence":${result.confidence}}"""
 
   private def scanErrorToJson(error: ScanError): String =
     s"""{"dataset_path":${jsonString(error.dataset_path)},"scan_timestamp":${jsonString(error.scan_timestamp)},"file_identifier":${jsonString(error.file_identifier)},"error_message":${jsonString(error.error_message)}}"""
