@@ -276,23 +276,18 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(samples(("strict_value", "freeform_text")).sampleRawValue == (rawValue.take(50) + "..." + rawValue.takeRight(50)))
   }
 
-  test("sampleMatches warns and drops ambiguous duplicate pii-type samples for the same column") {
+  test("sampleMatches keeps samples when only one duplicate pii-type rule matches for a column") {
     val df = Seq("alpha@example.com").toDF("customer_email")
     val rules = Seq(
-      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
-      PiiRule("email", "alpha@example.com")
+      PiiRule("email", "support@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
     )
 
     val matchCounts = DetectionAggregator.aggregate(df, rules)
-    val logs = captureStderr {
-      val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
-      assert(samples.isEmpty)
-    }
+    val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
 
-    assert(matchCounts.size == 2)
-    assert(logs.contains("detection_sample_conflict"))
-    assert(logs.contains("scope=dataset_sample"))
-    assert(logs.contains("customer_email/email"))
+    assert(matchCounts.size == 1)
+    assert(samples(("customer_email", "email")).sampleMatchedFragment == "alpha@example.com")
   }
 
   test("aggregateByFile matches legacy per-file behavior") {
