@@ -285,6 +285,18 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[MatchCount]
   ): Map[(String, String), SampleValue] = {
+    sampleMatches(sampledDf, rules, matchCounts, AggregationConfig())
+  }
+
+  private[privyspark] def sampleMatches(
+    sampledDf: DataFrame,
+    rules: Seq[PiiRule],
+    matchCounts: Seq[MatchCount],
+    config: AggregationConfig
+  ): Map[(String, String), SampleValue] = {
+    require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
+    require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
+
     if (matchCounts.isEmpty) {
       Map.empty
     } else {
@@ -292,8 +304,28 @@ object DetectionAggregator {
       val metricByKey = buildMetricByKey(sampledDf.columns.toSeq, rules).filter {
         case (key, _) => requestedKeys.contains(key)
       }
+      val metrics = metricByKey.values.toSeq
+      val expressionCount = totalExpressionCount(metrics)
+      val rawValues =
+        if (expressionCount > config.legacyFallbackThreshold) {
+          executeThresholdFallback(
+            "dataset_sample",
+            expressionCount,
+            config.legacyFallbackThreshold,
+            collectSampleRawValues(sampledDf, metrics, LegacyFallbackBatchSize).toSeq,
+            collectSampleRawValuesSafely(sampledDf, metrics).toSeq
+          )._1.toMap
+        } else {
+          try {
+            collectSampleRawValues(sampledDf, metrics, config.maxExpressionsPerAgg)
+          } catch {
+            case NonFatal(e) =>
+              logFallback("dataset_sample", expressionCount, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+              collectSampleRawValuesSafely(sampledDf, metrics)
+          }
+        }
 
-      collectSampleRawValues(sampledDf, metricByKey.values.toSeq, AggregationConfig().maxExpressionsPerAgg).flatMap {
+      rawValues.flatMap {
         case (key, rawValue) =>
           metricByKey.get(key).flatMap(metric => sampleValue(metric, rawValue)).map(key -> _)
       }
@@ -306,6 +338,20 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[FileMatchCount]
   ): Map[(String, String, String), SampleValue] = {
+    sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, AggregationConfig())
+  }
+
+  private[privyspark] def sampleMatchesByFile(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    rules: Seq[PiiRule],
+    matchCounts: Seq[FileMatchCount],
+    config: AggregationConfig
+  ): Map[(String, String, String), SampleValue] = {
+    require(fileIdentifierColumn.nonEmpty, "fileIdentifierColumn must not be empty")
+    require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
+    require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
+
     if (matchCounts.isEmpty) {
       Map.empty
     } else {
@@ -316,13 +362,28 @@ object DetectionAggregator {
       val requestedKeys = matchCounts.map(matchCount =>
         (matchCount.fileIdentifier, matchCount.columnName, matchCount.piiType)
       ).toSet
+      val metrics = metricByKey.values.toSeq
+      val expressionCount = totalExpressionCount(metrics)
+      val rawValues =
+        if (expressionCount > config.legacyFallbackThreshold) {
+          executeThresholdFallback(
+            "file_sample",
+            expressionCount,
+            config.legacyFallbackThreshold,
+            collectSampleRawValuesByFile(sampledDf, fileIdentifierColumn, metrics, LegacyFallbackBatchSize).toSeq,
+            collectSampleRawValuesByFileSafely(sampledDf, fileIdentifierColumn, metrics).toSeq
+          )._1.toMap
+        } else {
+          try {
+            collectSampleRawValuesByFile(sampledDf, fileIdentifierColumn, metrics, config.maxExpressionsPerAgg)
+          } catch {
+            case NonFatal(e) =>
+              logFallback("file_sample", expressionCount, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+              collectSampleRawValuesByFileSafely(sampledDf, fileIdentifierColumn, metrics)
+          }
+        }
 
-      collectSampleRawValuesByFile(
-        sampledDf,
-        fileIdentifierColumn,
-        metricByKey.values.toSeq,
-        AggregationConfig().maxExpressionsPerAgg
-      ).flatMap {
+      rawValues.flatMap {
         case (key @ (_, columnName, piiType), rawValue) if requestedKeys.contains(key) =>
           metricByKey.get((columnName, piiType)).flatMap(metric => sampleValue(metric, rawValue)).map(key -> _)
         case _ => None
@@ -549,6 +610,22 @@ object DetectionAggregator {
     }
   }
 
+  private def collectSampleRawValuesSafely(
+    sampledDf: DataFrame,
+    metrics: Seq[Metric]
+  ): Map[(String, String), String] = {
+    metrics.flatMap { metric =>
+      sampledDf
+        .filter(metric.predicate)
+        .select(col(metric.columnName).cast(StringType))
+        .limit(1)
+        .collect()
+        .headOption
+        .flatMap(row => Option(row.getAs[String](0)))
+        .map(value => (metric.columnName, metric.piiType) -> value)
+    }.toMap
+  }
+
   private def collectSampleRawValuesByFile(
     sampledDf: DataFrame,
     fileIdentifierColumn: String,
@@ -568,6 +645,25 @@ object DetectionAggregator {
       }
       acc ++ batchValues
     }
+  }
+
+  private def collectSampleRawValuesByFileSafely(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    metrics: Seq[Metric]
+  ): Map[(String, String, String), String] = {
+    metrics.flatMap { metric =>
+      sampledDf
+        .filter(metric.predicate)
+        .groupBy(col(fileIdentifierColumn))
+        .agg(first(col(metric.columnName).cast(StringType), ignoreNulls = true).as(metric.alias))
+        .collect()
+        .flatMap { row =>
+          Option(row.getAs[String](0)).filter(_.nonEmpty).flatMap { fileIdentifier =>
+            Option(row.getAs[String](1)).map(value => (fileIdentifier, metric.columnName, metric.piiType) -> value)
+          }
+        }
+    }.toMap
   }
 
   private def sampleValue(

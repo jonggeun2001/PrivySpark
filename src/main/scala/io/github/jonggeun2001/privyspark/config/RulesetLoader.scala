@@ -58,6 +58,17 @@ object RulesetLoader {
         throw new IllegalArgumentException("rules must contain at least one rule")
       }
 
+      val duplicatePiiTypes = parsed
+        .groupBy(_.piiType.toLowerCase)
+        .collect {
+          case (_, rules) if rules.size > 1 => rules.head.piiType
+        }
+        .toSeq
+        .sorted
+      if (duplicatePiiTypes.nonEmpty) {
+        throw new IllegalArgumentException(s"Duplicate pii_type entries are not supported: ${duplicatePiiTypes.mkString(", ")}")
+      }
+
       parsed
     } finally {
       input.close()

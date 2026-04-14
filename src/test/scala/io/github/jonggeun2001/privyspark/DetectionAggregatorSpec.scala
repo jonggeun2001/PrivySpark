@@ -239,6 +239,31 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(samples(("c_phone", "phone")).sampleMatchedFragment == "010-1234-5678")
   }
 
+  test("sampleMatches respects aggregation fallback config") {
+    val df = Seq(
+      ("alpha@example.com", "010-1234-5678"),
+      ("beta@example.com", "noise"),
+      ("noise", "010-9999-8888")
+    ).toDF("c_email", "c_phone")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val config = AggregationConfig(maxExpressionsPerAgg = 1, legacyFallbackThreshold = 1)
+    val matchCounts = DetectionAggregator.aggregate(df, rules, config)
+    val logs = captureStderr {
+      val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts, config)
+      assert(samples(("c_email", "email")).sampleMatchedFragment == "alpha@example.com")
+      assert(samples(("c_phone", "phone")).sampleMatchedFragment == "010-1234-5678")
+    }
+
+    assert(logs.contains("detection_aggregation_fallback"))
+    assert(logs.contains("scope=dataset_sample"))
+    assert(logs.contains("metric_threshold_exceeded(1)"))
+  }
+
   test("aggregateByFile matches legacy per-file behavior") {
     val df = Seq(
       ("alpha.csv", "alpha@example.com", "010-1234-5678"),
@@ -401,6 +426,31 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(jobCount == 2, s"expected two Spark jobs for batched per-file sample extraction, found $jobCount")
     assert(samples(("alpha.csv", "c_email", "email")).sampleMatchedFragment == "alpha@example.com")
     assert(samples(("beta.csv", "c_phone", "phone")).sampleMatchedFragment == "010-9999-8888")
+  }
+
+  test("sampleMatchesByFile respects aggregation fallback config") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("alpha.csv", "noise", "none"),
+      ("beta.csv", "beta@example.com", "010-9999-8888")
+    ).toDF("file_id", "c_email", "c_phone")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val config = AggregationConfig(maxExpressionsPerAgg = 1, legacyFallbackThreshold = 1)
+    val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules, config)
+    val logs = captureStderr {
+      val samples = DetectionAggregator.sampleMatchesByFile(df, "file_id", rules, matchCounts, config)
+      assert(samples(("alpha.csv", "c_email", "email")).sampleMatchedFragment == "alpha@example.com")
+      assert(samples(("beta.csv", "c_phone", "phone")).sampleMatchedFragment == "010-9999-8888")
+    }
+
+    assert(logs.contains("detection_aggregation_fallback"))
+    assert(logs.contains("scope=file_sample"))
+    assert(logs.contains("metric_threshold_exceeded(1)"))
   }
 
   test("counts only full-value matches per file for full-column rules") {

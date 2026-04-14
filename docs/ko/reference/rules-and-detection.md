@@ -23,6 +23,7 @@ ruleset을 로드할 때 regex를 미리 검증하는 이유는 스캔이 한참
 
 ## 커스텀 ruleset 규칙
 - 각 rule은 `pii_type`, `regex`를 포함해야 합니다.
+- 중복된 `pii_type` rule은 ruleset 로드 단계에서 거부합니다.
 - `column_hints`는 선택 항목이며, 지정 시 힌트가 포함된 컬럼에만 적용합니다.
 - `match_type`은 선택 항목이며 기본값은 `value`입니다.
 - 허용 `match_type` 값은 `value`, `full_column`입니다.
