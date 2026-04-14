@@ -45,6 +45,14 @@ object DetectionAggregator {
     )
   }
 
+  private def logSampleConflict(scope: String, keys: Seq[String]): Unit = {
+    DriverLogger.warn(
+      "detection_sample_conflict",
+      "scope" -> scope,
+      "keys" -> keys.mkString(",")
+    )
+  }
+
   def aggregate(sampledDf: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
     aggregate(sampledDf, rules, AggregationConfig())
   }
@@ -301,7 +309,7 @@ object DetectionAggregator {
       Map.empty
     } else {
       val requestedKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
-      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq, rules, requestedKeys)
+      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq, rules, requestedKeys, "dataset_sample")
       val metrics = metricByKey.values.toSeq
       val expressionCount = totalExpressionCount(metrics)
       val rawValues =
@@ -354,7 +362,7 @@ object DetectionAggregator {
       Map.empty
     } else {
       val requestedMetricKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
-      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules, requestedMetricKeys)
+      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules, requestedMetricKeys, "file_sample")
       val requestedKeys = matchCounts.map(matchCount =>
         (matchCount.fileIdentifier, matchCount.columnName, matchCount.piiType)
       ).toSet
@@ -584,7 +592,8 @@ object DetectionAggregator {
   private def buildMetricByKey(
     columns: Seq[String],
     rules: Seq[PiiRule],
-    requestedKeys: Set[(String, String)]
+    requestedKeys: Set[(String, String)],
+    scope: String
   ): Map[(String, String), Metric] = {
     val groupedMetrics = buildMetrics(columns, rules)
       .groupBy(metric => (metric.columnName, metric.piiType))
@@ -595,7 +604,7 @@ object DetectionAggregator {
       case ((columnName, piiType), values) if values.size > 1 => s"$columnName/$piiType"
     }.toSeq.sorted
     if (ambiguousKeys.nonEmpty) {
-      throw new IllegalArgumentException(s"Ambiguous sample metric keys: ${ambiguousKeys.mkString(", ")}")
+      logSampleConflict(scope, ambiguousKeys)
     }
 
     groupedMetrics.collect {
