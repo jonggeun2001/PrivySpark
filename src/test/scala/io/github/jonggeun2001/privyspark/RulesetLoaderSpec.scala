@@ -141,6 +141,7 @@ class RulesetLoaderSpec extends AnyFunSuite {
     val ipFullMatch = new Regex(s"\\A(?:${ipAddressRule.regex})\\z").pattern
     assert(ipFullMatch.matcher("192.168.0.1").matches())
     assert(ipRegex.findFirstIn("server=192.168.0.1").contains("192.168.0.1"))
+    assert(ipRegex.findFirstIn("server=192.168.0.1.").contains("192.168.0.1"))
     assert(!ipFullMatch.matcher("256.168.0.1").matches())
     assert(!ipRegex.findFirstIn("10.0.0.1.5").nonEmpty)
   }

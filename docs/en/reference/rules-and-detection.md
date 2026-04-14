@@ -50,7 +50,7 @@ Rulesets are validated before scanning so long-running jobs do not fail late bec
 - `bank_account_number`: keeps hyphenated account-number detection, but tightens segment lengths to avoid obvious date-like patterns such as `YYYY-MM-DD`.
 - `credit_card_number`: is limited to common 16-digit issuer prefixes, keeps Mastercard 2-series inside the `2221`-`2720` range, and avoids matches inside larger numeric tokens.
 - `passport_number`: only matches the Korean passport format, avoids substrings inside longer alphanumeric tokens, and rejects obviously abnormal `00000000` serials.
-- `ip_address`: keeps IPv4 range checks but avoids substrings inside longer dotted numeric tokens such as `10.0.0.1.5`.
+- `ip_address`: keeps IPv4 range checks, avoids substrings inside longer dotted numeric tokens such as `10.0.0.1.5`, and still matches common sentence-ending forms such as `192.168.0.1.`.
 
 The default-ruleset tightening strategy is intentionally asymmetric. Korean identifiers with a stable public format are constrained more aggressively, while high-variation types are tightened mainly at token boundaries. The goal is to reduce false positives without turning normal field variations into widespread false negatives.
 

@@ -50,7 +50,7 @@ ruleset을 로드할 때 regex를 미리 검증하는 이유는 스캔이 한참
 - `bank_account_number`: 하이픈 포함 계좌번호 형식을 유지하되 `YYYY-MM-DD` 같은 날짜 패턴이 계좌번호로 오탐되는 경우를 줄이도록 세그먼트 길이를 조정했습니다.
 - `credit_card_number`: 흔한 16자리 카드 issuer prefix 중심으로 제한하고, Mastercard 2-series는 `2221`~`2720` 범위만 허용하며, 더 긴 숫자 토큰 내부 substring은 제외합니다.
 - `passport_number`: 한국 여권번호 형식만 검출하며, 영숫자 토큰 내부 substring과 `00000000` 같은 비정상 serial은 제외합니다.
-- `ip_address`: IPv4 범위를 유지하면서 `10.0.0.1.5` 같은 더 긴 dotted token 내부 substring은 제외합니다.
+- `ip_address`: IPv4 범위를 유지하면서 `10.0.0.1.5` 같은 더 긴 dotted token 내부 substring은 제외하되, 문장 끝 `192.168.0.1.` 같은 일반 표기는 계속 검출합니다.
 
 이 기본 ruleset 조정 방향은 모든 타입을 주민등록번호처럼 과도하게 조이는 것이 아니라, 형식 규격이 명확한 한국 식별자는 더 강하게 제한하고, 변형이 많은 타입은 경계 조건 위주로만 보강하는 쪽을 택한 것입니다. 오탐을 줄이되 정상값 누락이 급격히 늘어나는 변화는 피하려는 의도입니다.
 
