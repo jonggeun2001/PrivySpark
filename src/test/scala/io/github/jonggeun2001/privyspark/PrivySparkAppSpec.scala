@@ -1219,6 +1219,29 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules excludes trim-blank values from value-match counts") {
+    val inputDir = Files.createTempDirectory("privyspark-value-match-blank-filter-")
+    val timestamp = "2026-04-14T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("customers.json"),
+        "{\"email\":\"   \"}\n" +
+          "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n")
+
+      val rules = Seq(PiiRule("blank_or_email", "^\\s*$|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result =>
+        (result.column_name, result.pii_type, result.match_count, result.sampled_row_count, result.match_ratio, result.non_empty_match_ratio)
+      ).toSet == Set(("email", "blank_or_email", 1L, 4L, 0.25, 0.5)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules detects Korean passport numbers without matching alphanumeric-adjacent substrings") {
     val inputDir = Files.createTempDirectory("privyspark-passport-number-")
     val timestamp = "2026-03-27T00:00:00Z"
@@ -3380,6 +3403,40 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         ("part-0002.json", "3", "0.67", "1.0")
       ))
       assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors").count() == 0L)
+    } finally {
+      deleteRecursively(inputDir)
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("mergeProgressReports reads legacy non-null match ratio progress records") {
+    val inputDir = Files.createTempDirectory("privyspark-progress-legacy-input-")
+    val outputDir = Files.createTempDirectory("privyspark-progress-legacy-output-")
+
+    try {
+      val progressRun = PrivySparkApp.prepareProgressRun(
+        spark.sparkContext.hadoopConfiguration,
+        outputDir.toString,
+        inputDir.toString,
+        "2026-04-13T00:00:00Z"
+      )
+
+      val legacyProgressFile = outputDir.resolve(s"_progress/${progressRun.runId}/results/legacy-results.jsonl")
+      writeText(
+        legacyProgressFile,
+        """{"dataset_path":"/data/input","scan_timestamp":"2026-04-13T00:00:00Z","file_identifier":"part-0001.json","column_name":"email","pii_type":"email","match_count":1,"sampled_row_count":3,"match_ratio":0.33,"non_null_match_ratio":0.5,"confidence":0.33}""" + "\n"
+      )
+
+      val (mergedResults, mergedErrors) = PrivySparkApp.mergeProgressReports(spark, outputDir.toString, progressRun)
+
+      assert(mergedResults == 1L)
+      assert(mergedErrors == 0L)
+      assert(!Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}")))
+
+      val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
+      assert(resultCsvDf.select("file_identifier", "match_ratio", "non_empty_match_ratio").collect().map { row =>
+        (row.getString(0), row.getString(1), row.getString(2))
+      }.toSet == Set(("part-0001.json", "0.33", "0.5")))
     } finally {
       deleteRecursively(inputDir)
       deleteRecursively(outputDir)

@@ -9,7 +9,7 @@ import org.apache.spark.sql.catalyst.csv.CSVOptions
 import org.apache.spark.sql.execution.datasources.csv.CSVUtils
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, Encoders, Row, SparkSession}
-import org.apache.spark.sql.functions.{col, input_file_name}
+import org.apache.spark.sql.functions.{coalesce, col, input_file_name}
 
 import java.io.{BufferedReader, BufferedWriter, InputStreamReader, OutputStreamWriter}
 import java.nio.ByteBuffer
@@ -3228,7 +3228,7 @@ object PrivySparkApp {
       "results_path" -> progressRun.resultsPath,
       "errors_path" -> progressRun.errorsPath
     )
-    val resultDf = readProgressRecords(spark, progressRun.resultsPath, Encoders.product[ScanResult].schema)
+    val resultDf = readProgressScanResults(spark, progressRun.resultsPath)
     val errorDf = readProgressRecords(spark, progressRun.errorsPath, Encoders.product[ScanError].schema)
     val resultCount = resultDf.count()
     val errorCount = errorDf.count()
@@ -3289,6 +3289,21 @@ object PrivySparkApp {
     } else {
       spark.read.schema(schema).json(jsonPattern.toString)
     }
+  }
+
+  private def readProgressScanResults(
+    spark: SparkSession,
+    directoryPath: String
+  ): DataFrame = {
+    val resultSchema = Encoders.product[ScanResult].schema
+    val legacyCompatibleSchema = resultSchema.add("non_null_match_ratio", "double")
+
+    readProgressRecords(spark, directoryPath, legacyCompatibleSchema)
+      .withColumn(
+        "non_empty_match_ratio",
+        coalesce(col("non_empty_match_ratio"), col("non_null_match_ratio"))
+      )
+      .select(resultSchema.fieldNames.map(col): _*)
   }
 
   private def writeProgressLines(

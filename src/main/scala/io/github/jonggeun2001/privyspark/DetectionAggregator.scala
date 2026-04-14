@@ -300,7 +300,7 @@ object DetectionAggregator {
               }
               val predicate = rule.matchType match {
                 case PiiRuleMatchType.FullColumn => presentValuePredicate && matchPredicate
-                case _ => valueColumn.isNotNull && matchPredicate
+                case _ => presentValuePredicate && matchPredicate
               }
               Some(
                 Metric(
