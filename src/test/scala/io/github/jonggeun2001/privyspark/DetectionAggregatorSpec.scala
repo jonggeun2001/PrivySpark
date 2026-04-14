@@ -264,6 +264,32 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("metric_threshold_exceeded(1)"))
   }
 
+  test("sampleMatches truncates long full-column sample raw values") {
+    val rawValue = ("A" * 80) + ("B" * 80)
+    val df = Seq(rawValue).toDF("strict_value")
+    val rules = Seq(PiiRule("freeform_text", ".+", matchType = PiiRuleMatchType.FullColumn))
+
+    val matchCounts = DetectionAggregator.aggregate(df, rules)
+    val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
+
+    assert(samples(("strict_value", "freeform_text")).sampleMatchedFragment == rawValue)
+    assert(samples(("strict_value", "freeform_text")).sampleRawValue == (rawValue.take(50) + "..." + rawValue.takeRight(50)))
+  }
+
+  test("sampleMatches omits ambiguous duplicate pii-type samples for the same column") {
+    val df = Seq("alpha@example.com").toDF("customer_email")
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("email", "alpha@example.com")
+    )
+
+    val matchCounts = DetectionAggregator.aggregate(df, rules)
+    val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
+
+    assert(matchCounts.size == 2)
+    assert(samples.isEmpty)
+  }
+
   test("aggregateByFile matches legacy per-file behavior") {
     val df = Seq(
       ("alpha.csv", "alpha@example.com", "010-1234-5678"),

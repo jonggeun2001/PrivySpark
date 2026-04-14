@@ -588,8 +588,8 @@ object DetectionAggregator {
   private def buildMetricByKey(columns: Seq[String], rules: Seq[PiiRule]): Map[(String, String), Metric] = {
     buildMetrics(columns, rules)
       .groupBy(metric => (metric.columnName, metric.piiType))
-      .map {
-        case (key, values) => key -> values.head
+      .collect {
+        case (key, values) if values.size == 1 => key -> values.head
       }
       .toMap
   }
@@ -702,6 +702,10 @@ object DetectionAggregator {
   private def buildRawSnippet(rawValue: String, start: Int, end: Int): String = {
     val snippetStart = math.max(0, start - 50)
     val snippetEnd = math.min(rawValue.length, end + 50)
-    rawValue.substring(snippetStart, snippetEnd)
+    if (snippetStart == 0 && snippetEnd == rawValue.length && rawValue.length > 100) {
+      rawValue.take(50) + "..." + rawValue.takeRight(50)
+    } else {
+      rawValue.substring(snippetStart, snippetEnd)
+    }
   }
 }

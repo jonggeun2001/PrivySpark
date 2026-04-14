@@ -23,7 +23,6 @@ Rulesets are validated before scanning so long-running jobs do not fail late bec
 
 ## Custom Ruleset Contract
 - Each rule must include `pii_type` and `regex`.
-- Duplicate `pii_type` entries are rejected during ruleset loading.
 - `column_hints` is optional and limits the rule to matching column names.
 - `match_type` is optional and defaults to `value`.
 - Supported `match_type` values are `value` and `full_column`.

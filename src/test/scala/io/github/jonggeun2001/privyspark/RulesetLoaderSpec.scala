@@ -301,25 +301,4 @@ class RulesetLoaderSpec extends AnyFunSuite {
     }
   }
 
-  test("rejects duplicate pii types in a ruleset") {
-    val rulesetPath = Files.createTempFile("privyspark-ruleset-duplicate-pii", ".yaml")
-    val yaml =
-      """rules:
-        |  - pii_type: email
-        |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
-        |  - pii_type: email
-        |    regex: 'support@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
-        |""".stripMargin
-
-    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
-    try {
-      val error = intercept[IllegalArgumentException] {
-        RulesetLoader.load(rulesetPath.toString)
-      }
-      assert(error.getMessage.contains("Duplicate pii_type"))
-      assert(error.getMessage.contains("email"))
-    } finally {
-      Files.deleteIfExists(rulesetPath)
-    }
-  }
 }
