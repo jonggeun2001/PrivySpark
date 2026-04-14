@@ -41,10 +41,18 @@ Rulesets are validated before scanning so long-running jobs do not fail late bec
 
 ## Type-Specific Constraints
 - `phone_number`: supports domestic `010`/`011`/`016`/`017`/`018`/`019` patterns and `+82 10...`-style international forms.
+- `email`: adds token boundaries and a stricter domain-label shape to reduce suffix-style and malformed-domain false positives.
 - `resident_registration_number`: supports hyphenated and compact forms, including a 1-digit gender/century short form.
 - `resident_registration_number`: the default ruleset only constrains month `01`-`12` and day `01`-`31`, and rejects matches inside longer numeric tokens.
-- `driver_license_number`: supports hyphenated and compact forms, validates only legacy 10-digit and current 12-digit formats, and only allows current region codes `11`-`26`, `28`.
-- `passport_number`: only matches the Korean passport format and avoids substrings inside longer alphanumeric tokens.
+- `foreign_registration_number`: mirrors the resident-registration month/day constraints and only allows foreign-registration codes `5`-`8` in the seventh digit.
+- `driver_license_number`: separates legacy 10-digit and current 12-digit patterns at the regex level, and only allows current region codes `11`-`26`, `28` for the 12-digit format. A strict validator still rechecks the final candidate.
+- `address`: remains relatively conservative because Korean address strings vary heavily in real datasets. Tightening it too aggressively would increase misses faster than it reduces false positives.
+- `bank_account_number`: keeps hyphenated account-number detection, but tightens segment lengths to avoid obvious date-like patterns such as `YYYY-MM-DD`.
+- `credit_card_number`: is limited to common 16-digit issuer prefixes and avoids matches inside larger numeric tokens.
+- `passport_number`: only matches the Korean passport format, avoids substrings inside longer alphanumeric tokens, and rejects obviously abnormal `00000000` serials.
+- `ip_address`: keeps IPv4 range checks but avoids substrings inside longer dotted numeric tokens such as `10.0.0.1.5`.
+
+The default-ruleset tightening strategy is intentionally asymmetric. Korean identifiers with a stable public format are constrained more aggressively, while high-variation types are tightened mainly at token boundaries. The goal is to reduce false positives without turning normal field variations into widespread false negatives.
 
 ## Aggregation Strategy
 - The primary path uses batched aggregation with `agg`.
