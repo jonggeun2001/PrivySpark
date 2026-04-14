@@ -12,7 +12,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 ## 탐지 모델
 - 탐지는 ruleset 기반 regex와 타입별 strict validator 조합으로 수행합니다.
 - invalid regex는 ruleset 로드 단계에서 즉시 거부합니다.
-- 집계 결과는 `match_count`, `sampled_row_count`, `match_ratio`, `non_null_match_ratio`, `confidence`를 포함합니다.
+- 집계 결과는 `match_count`, `sampled_row_count`, `match_ratio`, `non_empty_match_ratio`, `confidence`를 포함합니다.
 - 원문 PII 값은 결과에 저장하지 않습니다.
 
 ## 샘플링과 스캔 단위

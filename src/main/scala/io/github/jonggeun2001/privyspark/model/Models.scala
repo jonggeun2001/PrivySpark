@@ -27,7 +27,7 @@ final case class ScanResult(
   match_count: Long,
   sampled_row_count: Long,
   match_ratio: Double,
-  non_null_match_ratio: Double,
+  non_empty_match_ratio: Double,
   confidence: Double
 )
 

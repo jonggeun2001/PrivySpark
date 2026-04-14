@@ -19,7 +19,7 @@ PrivySpark always writes final outputs in both Parquet and CSV. The `_progress` 
 - `match_count`
 - `sampled_row_count`
 - `match_ratio`
-- `non_null_match_ratio`
+- `non_empty_match_ratio`
 - `confidence`
 
 ## `file_identifier` Rules
@@ -36,7 +36,8 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 ## Ratio Fields
 - `match_ratio` is based on sampled rows.
 - `sampled_row_count` is the post-sampling row count that was actually scanned.
-- `non_null_match_ratio` uses only non-null values in the column as its denominator.
+- `non_empty_match_ratio` uses only non-empty values in the column as its denominator.
+- Empty means `null` or a value whose `trim(column)` is blank.
 - `full_column` only changes how `match_count` is computed. The denominator for `match_ratio` and `confidence` still uses sampled row count.
 - `confidence` currently equals `match_ratio`.
 - Both values are rounded to two decimal places.
