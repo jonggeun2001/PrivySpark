@@ -276,7 +276,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(samples(("strict_value", "freeform_text")).sampleRawValue == (rawValue.take(50) + "..." + rawValue.takeRight(50)))
   }
 
-  test("sampleMatches omits ambiguous duplicate pii-type samples for the same column") {
+  test("sampleMatches rejects ambiguous duplicate pii-type samples for the same column") {
     val df = Seq("alpha@example.com").toDF("customer_email")
     val rules = Seq(
       PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
@@ -284,10 +284,13 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val matchCounts = DetectionAggregator.aggregate(df, rules)
-    val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
+    val error = intercept[IllegalArgumentException] {
+      DetectionAggregator.sampleMatches(df, rules, matchCounts)
+    }
 
     assert(matchCounts.size == 2)
-    assert(samples.isEmpty)
+    assert(error.getMessage.contains("Ambiguous sample metric keys"))
+    assert(error.getMessage.contains("customer_email/email"))
   }
 
   test("aggregateByFile matches legacy per-file behavior") {

@@ -301,9 +301,7 @@ object DetectionAggregator {
       Map.empty
     } else {
       val requestedKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
-      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq, rules).filter {
-        case (key, _) => requestedKeys.contains(key)
-      }
+      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq, rules, requestedKeys)
       val metrics = metricByKey.values.toSeq
       val expressionCount = totalExpressionCount(metrics)
       val rawValues =
@@ -356,9 +354,7 @@ object DetectionAggregator {
       Map.empty
     } else {
       val requestedMetricKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
-      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules).filter {
-        case (key, _) => requestedMetricKeys.contains(key)
-      }
+      val metricByKey = buildMetricByKey(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules, requestedMetricKeys)
       val requestedKeys = matchCounts.map(matchCount =>
         (matchCount.fileIdentifier, matchCount.columnName, matchCount.piiType)
       ).toSet
@@ -585,13 +581,26 @@ object DetectionAggregator {
     batches.toSeq
   }
 
-  private def buildMetricByKey(columns: Seq[String], rules: Seq[PiiRule]): Map[(String, String), Metric] = {
-    buildMetrics(columns, rules)
+  private def buildMetricByKey(
+    columns: Seq[String],
+    rules: Seq[PiiRule],
+    requestedKeys: Set[(String, String)]
+  ): Map[(String, String), Metric] = {
+    val groupedMetrics = buildMetrics(columns, rules)
       .groupBy(metric => (metric.columnName, metric.piiType))
-      .collect {
-        case (key, values) if values.size == 1 => key -> values.head
+      .filter {
+        case (key, _) => requestedKeys.contains(key)
       }
-      .toMap
+    val ambiguousKeys = groupedMetrics.collect {
+      case ((columnName, piiType), values) if values.size > 1 => s"$columnName/$piiType"
+    }.toSeq.sorted
+    if (ambiguousKeys.nonEmpty) {
+      throw new IllegalArgumentException(s"Ambiguous sample metric keys: ${ambiguousKeys.mkString(", ")}")
+    }
+
+    groupedMetrics.collect {
+      case (key, values) if values.size == 1 => key -> values.head
+    }.toMap
   }
 
   private def collectSampleRawValues(
