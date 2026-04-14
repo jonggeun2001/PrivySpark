@@ -1026,7 +1026,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(results.nonEmpty)
       assert(results.map(result =>
-        (result.file_identifier, result.pii_type, result.match_count, result.match_ratio, result.non_null_match_ratio)
+        (result.file_identifier, result.pii_type, result.match_count, result.match_ratio, result.non_empty_match_ratio)
       ).toSet == Set(
         ("part-0001.json", "email", 1L, 0.33, 0.5),
         ("part-0002.json", "email", 2L, 0.67, 1.0)
@@ -1187,20 +1187,21 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(_.match_ratio).toSet == Set(0.67))
-      assert(results.map(_.non_null_match_ratio).toSet == Set(0.67))
+      assert(results.map(_.non_empty_match_ratio).toSet == Set(0.67))
       assert(results.map(_.confidence).toSet == Set(0.67))
     } finally {
       deleteRecursively(inputDir)
     }
   }
 
-  test("scanWithRules reports non-null match ratio separately from sampled-row match ratio") {
-    val inputDir = Files.createTempDirectory("privyspark-non-null-match-ratio-")
+  test("scanWithRules reports non-empty match ratio separately from sampled-row match ratio") {
+    val inputDir = Files.createTempDirectory("privyspark-non-empty-match-ratio-")
     val timestamp = "2026-04-14T00:00:00Z"
 
     try {
       writeText(inputDir.resolve("customers.json"),
         "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":\"   \"}\n" +
           "{\"email\":null}\n" +
           "{\"email\":\"not-an-email\"}\n" +
           "{\"email\":\"carol@example.com\"}\n" +
@@ -1211,8 +1212,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(result =>
-        (result.column_name, result.pii_type, result.match_count, result.sampled_row_count, result.match_ratio, result.non_null_match_ratio, result.confidence)
-      ).toSet == Set(("email", "email", 2L, 5L, 0.4, 0.67, 0.4)))
+        (result.column_name, result.pii_type, result.match_count, result.sampled_row_count, result.match_ratio, result.non_empty_match_ratio, result.confidence)
+      ).toSet == Set(("email", "email", 2L, 6L, 0.33, 0.67, 0.33)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1478,8 +1479,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanGroupByFile keeps directory-level non-null denominator when some files have zero matches") {
-    val inputDir = Files.createTempDirectory("privyspark-directory-fallback-non-null-")
+  test("scanGroupByFile keeps directory-level non-empty denominator when some files have zero matches") {
+    val inputDir = Files.createTempDirectory("privyspark-directory-fallback-non-empty-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
     val timestamp = "2026-04-14T00:00:00Z"
 
@@ -1510,7 +1511,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(result =>
-        (result.file_identifier, result.column_name, result.match_count, result.match_ratio, result.non_null_match_ratio)
+        (result.file_identifier, result.column_name, result.match_count, result.match_ratio, result.non_empty_match_ratio)
       ).toSet == Set(("users", "email", 1L, 0.5, 0.5)))
     } finally {
       deleteRecursively(inputDir)
@@ -2964,7 +2965,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           match_count = 3L,
           sampled_row_count = 5L,
           match_ratio = 0.6,
-          non_null_match_ratio = 0.75,
+          non_empty_match_ratio = 0.75,
           confidence = 0.6
         ),
         ScanResult(
@@ -2976,7 +2977,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           match_count = 1L,
           sampled_row_count = 5L,
           match_ratio = 0.2,
-          non_null_match_ratio = 0.25,
+          non_empty_match_ratio = 0.25,
           confidence = 0.2
         )
       )
@@ -2999,7 +3000,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errorCsvDf.count() == 1L)
       assert(resultCsvDf.columns.toSet.contains("file_identifier"))
       assert(resultCsvDf.columns.toSet.contains("sampled_row_count"))
-      assert(resultCsvDf.columns.toSet.contains("non_null_match_ratio"))
+      assert(resultCsvDf.columns.toSet.contains("non_empty_match_ratio"))
       assert(errorCsvDf.columns.toSet.contains("error_message"))
       assert(countPartFiles(outputDir.resolve("csv/scan_results")) == 1L)
       assert(countPartFiles(outputDir.resolve("csv/scan_errors")) == 1L)
@@ -3024,7 +3025,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           match_count = 1L,
           sampled_row_count = 1L,
           match_ratio = 1.0,
-          non_null_match_ratio = 1.0,
+          non_empty_match_ratio = 1.0,
           confidence = 1.0
         )
       )
@@ -3372,7 +3373,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(!Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}")))
       val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
       assert(resultCsvDf.count() == 2L)
-      assert(resultCsvDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_null_match_ratio").collect().map { row =>
+      assert(resultCsvDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_empty_match_ratio").collect().map { row =>
         (row.getString(0), row.getString(1), row.getString(2), row.getString(3))
       }.toSet == Set(
         ("part-0001.json", "3", "0.33", "0.5"),
@@ -3424,7 +3425,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(results.nonEmpty)
       assert(errors.nonEmpty)
-      assert(results.map(result => (result.file_identifier, result.match_ratio, result.non_null_match_ratio)).toSet ==
+      assert(results.map(result => (result.file_identifier, result.match_ratio, result.non_empty_match_ratio)).toSet ==
         Set(("part-0001.json", 0.33, 0.5)))
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 1L)
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/errors"), ".jsonl") == 1L)
@@ -3803,7 +3804,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           result.match_count,
           result.sampled_row_count,
           result.match_ratio,
-          result.non_null_match_ratio,
+          result.non_empty_match_ratio,
           result.confidence
         )
       )
