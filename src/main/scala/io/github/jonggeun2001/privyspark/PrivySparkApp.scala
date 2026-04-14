@@ -662,6 +662,7 @@ object PrivySparkApp {
           column_name = matchCount.columnName,
           pii_type = matchCount.piiType,
           match_count = matchCount.count,
+          sampled_row_count = sampledRowCount,
           match_ratio = matchRatio,
           non_null_match_ratio = nonNullMatchRatio,
           confidence = matchRatio
@@ -3629,7 +3630,7 @@ object PrivySparkApp {
     System.currentTimeMillis() - marker.lastHeartbeatEpochMillis > ActiveRunStaleThresholdMillis
 
   private def scanResultToJson(result: ScanResult): String =
-    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"match_ratio":${result.match_ratio},"non_null_match_ratio":${result.non_null_match_ratio},"confidence":${result.confidence}}"""
+    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"sampled_row_count":${result.sampled_row_count},"match_ratio":${result.match_ratio},"non_null_match_ratio":${result.non_null_match_ratio},"confidence":${result.confidence}}"""
 
   private def scanErrorToJson(error: ScanError): String =
     s"""{"dataset_path":${jsonString(error.dataset_path)},"scan_timestamp":${jsonString(error.scan_timestamp)},"file_identifier":${jsonString(error.file_identifier)},"error_message":${jsonString(error.error_message)}}"""

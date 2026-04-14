@@ -17,6 +17,7 @@
 - `column_name`
 - `pii_type`
 - `match_count`
+- `sampled_row_count`
 - `match_ratio`
 - `non_null_match_ratio`
 - `confidence`
@@ -34,6 +35,7 @@
 
 ## 비율 필드
 - `match_ratio`는 샘플링된 행 기준 비율입니다.
+- `sampled_row_count`는 실제 탐지에 사용된 샘플링 후 행 수입니다.
 - `non_null_match_ratio`는 해당 컬럼에서 `null`이 아닌 값만 분모로 사용한 비율입니다.
 - `full_column`도 `match_count` 기준만 달라질 뿐, `match_ratio`와 `confidence`의 분모는 동일하게 샘플링된 행 수입니다.
 - `confidence`는 현재 구현에서 `match_ratio`와 동일한 값입니다.
