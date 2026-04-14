@@ -2764,7 +2764,10 @@ object PrivySparkApp {
           Right(FileScanMetrics(fileIdentifier, sampledRowCount, Map.empty, Seq.empty))
         } else {
           val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
-          val nonNullValueCounts = DetectionAggregator.countNonNull(sampledDf, matchCounts.map(_.columnName).distinct)
+          val nonNullValueCounts = DetectionAggregator.countNonNull(
+            sampledDf,
+            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules)
+          )
           logDebug(
             "scan_file_complete",
             "file" -> physicalPath,

@@ -269,6 +269,13 @@ object DetectionAggregator {
     }
   }
 
+  private[privyspark] def columnsCoveredByRules(
+    columns: Seq[String],
+    rules: Seq[PiiRule]
+  ): Seq[String] = {
+    buildMetrics(columns, rules).map(_.columnName).distinct
+  }
+
   private def buildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[Metric] = {
     columns.zipWithIndex.flatMap {
       case (columnName, columnIndex) =>

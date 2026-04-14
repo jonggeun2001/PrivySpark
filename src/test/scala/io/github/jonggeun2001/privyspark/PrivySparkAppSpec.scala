@@ -1469,6 +1469,45 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroupByFile keeps directory-level non-null denominator when some files have zero matches") {
+    val inputDir = Files.createTempDirectory("privyspark-directory-fallback-non-null-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-04-14T00:00:00Z"
+
+    try {
+      val matchingFile = groupedDir.resolve("part-a.json")
+      val invalidFile = groupedDir.resolve("part-b.json")
+
+      writeText(matchingFile, "{\"email\":\"alice@example.com\"}\n")
+      writeText(invalidFile, "{\"email\":\"not-an-email\"}\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "json",
+        schemaSignature = "email",
+        filePaths = Seq(matchingFile.toString, invalidFile.toString),
+        useDirectoryIdentifier = true
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(result =>
+        (result.file_identifier, result.column_name, result.match_count, result.match_ratio, result.non_null_match_ratio)
+      ).toSet == Set(("users", "email", 1L, 0.5, 0.5)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroup exact-splits sampled mixed CSV header modes before batch scan") {
     val inputDir = Files.createTempDirectory("privyspark-sampled-csv-exact-split-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
