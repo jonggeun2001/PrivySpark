@@ -1211,8 +1211,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(result =>
-        (result.column_name, result.pii_type, result.match_count, result.match_ratio, result.non_null_match_ratio, result.confidence)
-      ).toSet == Set(("email", "email", 2L, 0.4, 0.67, 0.4)))
+        (result.column_name, result.pii_type, result.match_count, result.sampled_row_count, result.match_ratio, result.non_null_match_ratio, result.confidence)
+      ).toSet == Set(("email", "email", 2L, 5L, 0.4, 0.67, 0.4)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2962,6 +2962,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           column_name = "email",
           pii_type = "email",
           match_count = 3L,
+          sampled_row_count = 5L,
           match_ratio = 0.6,
           non_null_match_ratio = 0.75,
           confidence = 0.6
@@ -2973,6 +2974,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           column_name = "phone",
           pii_type = "phone",
           match_count = 1L,
+          sampled_row_count = 5L,
           match_ratio = 0.2,
           non_null_match_ratio = 0.25,
           confidence = 0.2
@@ -2996,6 +2998,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(resultCsvDf.count() == 2L)
       assert(errorCsvDf.count() == 1L)
       assert(resultCsvDf.columns.toSet.contains("file_identifier"))
+      assert(resultCsvDf.columns.toSet.contains("sampled_row_count"))
       assert(resultCsvDf.columns.toSet.contains("non_null_match_ratio"))
       assert(errorCsvDf.columns.toSet.contains("error_message"))
       assert(countPartFiles(outputDir.resolve("csv/scan_results")) == 1L)
@@ -3019,6 +3022,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           column_name = "email",
           pii_type = "email",
           match_count = 1L,
+          sampled_row_count = 1L,
           match_ratio = 1.0,
           non_null_match_ratio = 1.0,
           confidence = 1.0
@@ -3368,11 +3372,11 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(!Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}")))
       val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
       assert(resultCsvDf.count() == 2L)
-      assert(resultCsvDf.select("file_identifier", "match_ratio", "non_null_match_ratio").collect().map { row =>
-        (row.getString(0), row.getString(1), row.getString(2))
+      assert(resultCsvDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_null_match_ratio").collect().map { row =>
+        (row.getString(0), row.getString(1), row.getString(2), row.getString(3))
       }.toSet == Set(
-        ("part-0001.json", "0.33", "0.5"),
-        ("part-0002.json", "0.67", "1.0")
+        ("part-0001.json", "3", "0.33", "0.5"),
+        ("part-0002.json", "3", "0.67", "1.0")
       ))
       assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors").count() == 0L)
     } finally {
@@ -3789,7 +3793,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     condition
   }
 
-  private def normalizeResults(results: Seq[ScanResult]): Seq[(String, String, String, Long, Double, Double, Double)] = {
+  private def normalizeResults(results: Seq[ScanResult]): Seq[(String, String, String, Long, Long, Double, Double, Double)] = {
     results
       .map(result =>
         (
@@ -3797,6 +3801,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           result.column_name,
           result.pii_type,
           result.match_count,
+          result.sampled_row_count,
           result.match_ratio,
           result.non_null_match_ratio,
           result.confidence
@@ -3813,7 +3818,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def normalizeOutcomeResults(
     outcomes: Seq[(PrivySparkApp.ScanGroup, Seq[ScanResult], Seq[ScanError])]
-  ): Seq[(String, String, String, Long, Double, Double, Double)] = {
+  ): Seq[(String, String, String, Long, Long, Double, Double, Double)] = {
     normalizeResults(outcomes.flatMap(_._2))
   }
 

@@ -25,6 +25,7 @@ final case class ScanResult(
   column_name: String,
   pii_type: String,
   match_count: Long,
+  sampled_row_count: Long,
   match_ratio: Double,
   non_null_match_ratio: Double,
   confidence: Double
