@@ -1094,7 +1094,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanWithRules uses relative file path for nested single file results") {
+  test("scanWithRules uses directory identifier for nested single file results") {
     val inputDir = Files.createTempDirectory("privyspark-relative-file-id-")
     val nestedDir = Files.createDirectories(inputDir.resolve("daily"))
     val timestamp = "2026-03-12T00:00:00Z"
@@ -1105,10 +1105,19 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "alice,alice@example.com\n")
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        timestamp
+      )
       val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
 
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.useDirectoryIdentifier)
       assert(errors.isEmpty)
-      assert(results.map(_.file_identifier).toSet == Set("daily/customers.csv"))
+      assert(results.map(_.file_identifier).toSet == Set("daily"))
+      assert(!results.exists(_.file_identifier == "daily/customers.csv"))
     } finally {
       deleteRecursively(inputDir)
     }

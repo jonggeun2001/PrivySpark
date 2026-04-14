@@ -255,6 +255,16 @@ object PrivySparkApp {
     }
   }
 
+  private def comparableGroupingPath(path: String): String = {
+    try {
+      val uri = new Path(path).toUri.normalize()
+      stripTrailingSlash(Option(uri.getPath).filter(_.nonEmpty).getOrElse(path))
+    } catch {
+      case NonFatal(_) =>
+        stripTrailingSlash(path)
+    }
+  }
+
   private def canonicalizePath(path: String): String = {
     val uri = new Path(path).toUri.normalize()
     val normalizedPath = stripTrailingSlash(Option(uri.getPath).filter(_.nonEmpty).getOrElse(path))
@@ -1456,8 +1466,9 @@ object PrivySparkApp {
       if (!fs.exists(path)) {
         throw new IllegalArgumentException(s"Input path not found: $inputPath")
       }
+      val inputPathIsFile = fs.getFileStatus(path).isFile
 
-      val files = if (fs.getFileStatus(path).isFile) {
+      val files = if (inputPathIsFile) {
         Seq(path.toString)
       } else {
         val iter = fs.listFiles(path, true)
@@ -1717,10 +1728,12 @@ object PrivySparkApp {
       }
 
       val finalizedGroups = schemaAwareGroups.map { group =>
+        val isInputRootGroup = comparableGroupingPath(group.directoryPath) == comparableGroupingPath(inputPath)
         val directoryIdentifierEligible =
+          !inputPathIsFile &&
           group.allowDirectoryIdentifier &&
             groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 &&
-            group.filePaths.size > 1 &&
+            (group.filePaths.size > 1 || !isInputRootGroup) &&
             !directoriesWithPreScanErrors.contains(group.directoryPath)
         val finalizedGroup = group.copy(
           useDirectoryIdentifier = directoryIdentifierEligible && !group.schemaSampled,
@@ -3009,9 +3022,8 @@ object PrivySparkApp {
     )
     val exactSplitCanUseDirectoryIdentifier =
       group.directoryIdentifierEligible &&
-        splitGroups.size == 1 &&
-        splitErrors.isEmpty &&
-        splitGroups.head.filePaths.size > 1
+      splitGroups.size == 1 &&
+      splitErrors.isEmpty
     val rescannedGroups = splitGroups.map(_.copy(
       useDirectoryIdentifier = exactSplitCanUseDirectoryIdentifier,
       directoryIdentifierEligible = group.directoryIdentifierEligible,
