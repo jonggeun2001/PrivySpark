@@ -67,7 +67,8 @@ object PrivySparkApp {
     fileIdentifier: String,
     sampledRowCount: Long,
     nonNullValueCounts: Map[String, Long],
-    matchCounts: Seq[MatchCount]
+    matchCounts: Seq[MatchCount],
+    sampleValues: Map[(String, String), DetectionAggregator.SampleValue]
   )
   private final case class ProbeSample(bytes: Array[Byte], truncated: Boolean)
   private final case class PreScanFileOutcome(
@@ -646,7 +647,8 @@ object PrivySparkApp {
     fileIdentifier: String,
     sampledRowCount: Long,
     nonNullValueCounts: Map[String, Long],
-    matchCounts: Seq[MatchCount]
+    matchCounts: Seq[MatchCount],
+    sampleValues: Map[(String, String), DetectionAggregator.SampleValue] = Map.empty
   ): Seq[ScanResult] = {
     if (sampledRowCount <= 0L) {
       Seq.empty
@@ -655,6 +657,7 @@ object PrivySparkApp {
         val matchRatio = roundProbability(matchCount.count.toDouble / sampledRowCount.toDouble)
         val nonNullDenominator = nonNullValueCounts.get(matchCount.columnName).filter(_ > 0L).getOrElse(sampledRowCount)
         val nonNullMatchRatio = roundProbability(matchCount.count.toDouble / nonNullDenominator.toDouble)
+        val sampleValue = sampleValues.get((matchCount.columnName, matchCount.piiType))
         ScanResult(
           dataset_path = datasetPath,
           scan_timestamp = timestamp,
@@ -665,7 +668,9 @@ object PrivySparkApp {
           sampled_row_count = sampledRowCount,
           match_ratio = matchRatio,
           non_null_match_ratio = nonNullMatchRatio,
-          confidence = matchRatio
+          confidence = matchRatio,
+          sample_raw_value = sampleValue.map(_.sampleRawValue).getOrElse(""),
+          sample_matched_fragment = sampleValue.map(_.sampleMatchedFragment).getOrElse("")
         )
       }
     }
@@ -2446,7 +2451,8 @@ object PrivySparkApp {
                   fileMetrics.fileIdentifier,
                   fileMetrics.sampledRowCount,
                   fileMetrics.nonNullValueCounts,
-                  fileMetrics.matchCounts
+                  fileMetrics.matchCounts,
+                  fileMetrics.sampleValues
                 )
                 progressRun.foreach { run =>
                   persistProgressRecords(
@@ -2511,7 +2517,14 @@ object PrivySparkApp {
             case (columnName, counts) => columnName -> counts.map(_._2).sum
           }
           .toMap,
-        aggregatedMatchCounts
+        aggregatedMatchCounts,
+        successfulFileMetrics
+          .flatMap(_.sampleValues.toSeq)
+          .groupBy(_._1)
+          .map {
+            case (key, values) => key -> values.head._2
+          }
+          .toMap
       )
     } else {
       if (group.useDirectoryIdentifier && fallbackErrors.nonEmpty) {
@@ -2538,7 +2551,8 @@ object PrivySparkApp {
           fileMetrics.fileIdentifier,
           fileMetrics.sampledRowCount,
           fileMetrics.nonNullValueCounts,
-          fileMetrics.matchCounts
+          fileMetrics.matchCounts,
+          fileMetrics.sampleValues
         )
       }
     }
@@ -2659,13 +2673,15 @@ object PrivySparkApp {
             Seq.empty
           } else {
             val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
+            val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts)
             val results = buildScanResults(
               datasetPath,
               timestamp,
               resolveDirectoryIdentifier(datasetPath, group.directoryPath),
               sampledRowCount,
               DetectionAggregator.countNonNull(sampledDf, matchCounts.map(_.columnName).distinct),
-              matchCounts
+              matchCounts,
+              sampleValues
             )
             logDebug(
               "group_scan_batch_complete",
@@ -2707,6 +2723,7 @@ object PrivySparkApp {
             Seq.empty
           } else {
             val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules)
+            val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(sampledDf, columnName, effectiveRules, matchCountsByFile)
             val nonNullCountsByFile = DetectionAggregator.countNonNullByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
             val results = matchCountsByFile.flatMap { matchCount =>
               sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
@@ -2716,7 +2733,11 @@ object PrivySparkApp {
                   resolveLogicalIdentifierForPhysicalPath(group, datasetPath, matchCount.fileIdentifier),
                   sampledRowCount,
                   Map(matchCount.columnName -> nonNullCountsByFile.getOrElse((matchCount.fileIdentifier, matchCount.columnName), sampledRowCount)),
-                  Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count))
+                  Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count)),
+                  sampleValuesByFile
+                    .get((matchCount.fileIdentifier, matchCount.columnName, matchCount.piiType))
+                    .map(value => Map((matchCount.columnName, matchCount.piiType) -> value))
+                    .getOrElse(Map.empty)
                 ).headOption
               }
             }
@@ -2775,20 +2796,21 @@ object PrivySparkApp {
 
         if (sampledRowCount == 0L) {
           logDebug("scan_file_complete", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "matches" -> 0)
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, Map.empty, Seq.empty))
+          Right(FileScanMetrics(fileIdentifier, sampledRowCount, Map.empty, Seq.empty, Map.empty))
         } else {
           val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
           val nonNullValueCounts = DetectionAggregator.countNonNull(
             sampledDf,
             DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules)
           )
+          val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts)
           logDebug(
             "scan_file_complete",
             "file" -> physicalPath,
             "file_identifier" -> fileIdentifier,
             "matches" -> matchCounts.size
           )
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, nonNullValueCounts, matchCounts))
+          Right(FileScanMetrics(fileIdentifier, sampledRowCount, nonNullValueCounts, matchCounts, sampleValues))
         }
       }
     } catch {
@@ -2814,7 +2836,8 @@ object PrivySparkApp {
         fileMetrics.fileIdentifier,
         fileMetrics.sampledRowCount,
         fileMetrics.nonNullValueCounts,
-        fileMetrics.matchCounts
+        fileMetrics.matchCounts,
+        fileMetrics.sampleValues
       )
     }
   }
@@ -3630,7 +3653,7 @@ object PrivySparkApp {
     System.currentTimeMillis() - marker.lastHeartbeatEpochMillis > ActiveRunStaleThresholdMillis
 
   private def scanResultToJson(result: ScanResult): String =
-    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"sampled_row_count":${result.sampled_row_count},"match_ratio":${result.match_ratio},"non_null_match_ratio":${result.non_null_match_ratio},"confidence":${result.confidence}}"""
+    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"sampled_row_count":${result.sampled_row_count},"match_ratio":${result.match_ratio},"non_null_match_ratio":${result.non_null_match_ratio},"confidence":${result.confidence},"sample_raw_value":${jsonString(result.sample_raw_value)},"sample_matched_fragment":${jsonString(result.sample_matched_fragment)}}"""
 
   private def scanErrorToJson(error: ScanError): String =
     s"""{"dataset_path":${jsonString(error.dataset_path)},"scan_timestamp":${jsonString(error.scan_timestamp)},"file_identifier":${jsonString(error.file_identifier)},"error_message":${jsonString(error.error_message)}}"""

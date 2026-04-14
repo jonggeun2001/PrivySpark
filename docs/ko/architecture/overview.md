@@ -35,7 +35,7 @@
 14. progress JSONL을 최종 `scan_results`/`scan_errors`로 merge 후 `_progress/<run_id>` 삭제
 
 ## 운영 불변 조건
-- 원문 PII는 저장하지 않습니다.
+- `scan_results`에는 해석용 샘플 값 두 개를 저장합니다. `sample_matched_fragment`는 검출된 조각 그대로이고, `sample_raw_value`는 앞뒤 최대 50자 문맥만 저장합니다.
 - `--pre-scan-parallelism`은 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용합니다.
 - pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.

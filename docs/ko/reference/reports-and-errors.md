@@ -21,6 +21,8 @@
 - `match_ratio`
 - `non_null_match_ratio`
 - `confidence`
+- `sample_raw_value`
+- `sample_matched_fragment`
 
 ## `file_identifier` 규칙
 - 기본은 입력 경로 기준 상대경로입니다.
@@ -39,6 +41,8 @@
 - `non_null_match_ratio`는 해당 컬럼에서 `null`이 아닌 값만 분모로 사용한 비율입니다.
 - `full_column`도 `match_count` 기준만 달라질 뿐, `match_ratio`와 `confidence`의 분모는 동일하게 샘플링된 행 수입니다.
 - `confidence`는 현재 구현에서 `match_ratio`와 동일한 값입니다.
+- `sample_matched_fragment`는 실제 regex/validator가 검출한 원문 조각 1건입니다.
+- `sample_raw_value`는 그 조각이 포함된 셀에서 앞뒤 최대 50자 문맥만 잘라 저장한 값입니다.
 - 두 값 모두 소수점 둘째 자리까지 반올림합니다.
 
 ## 오류 리포트
@@ -53,6 +57,8 @@
 
 progress 경로를 별도로 둔 이유는 두 가지입니다. 첫째, 긴 스캔에서 이미 끝난 범위의 결과를 바로 확인할 수 있어야 합니다. 둘째, 최종 리포트 소비자가 부분 결과를 완성본으로 오해하지 않게 해야 합니다.
 
-## 보안 원칙
-- 원문 PII 값은 저장하지 않습니다.
-- 저장 대상은 집계 메타데이터와 오류 메타데이터만입니다.
+## 샘플 값 저장 정책
+- `scan_results`는 결과 해석을 돕기 위해 원문 샘플 1건을 저장합니다.
+- `sample_matched_fragment`는 실제 검출된 조각 그대로 저장합니다.
+- `sample_raw_value`는 셀 전체 원문 대신, 검출 조각 주변 앞뒤 최대 50자 문맥만 저장합니다.
+- 오류 리포트는 계속 메타데이터만 저장합니다.

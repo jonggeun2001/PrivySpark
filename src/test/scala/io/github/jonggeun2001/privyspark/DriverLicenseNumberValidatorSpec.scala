@@ -29,4 +29,16 @@ class DriverLicenseNumberValidatorSpec extends AnyFunSuite {
     assert(DriverLicenseNumberValidator.containsValidCandidate("구형 면허번호 서울 07 - 111111 - 10"))
     assert(!DriverLicenseNumberValidator.containsValidCandidate("이전 번호 27-12-345678-90, 현재 번호 29-12-345678-90"))
   }
+
+  test("extracts the first valid candidate from free-form text") {
+    assert(
+      DriverLicenseNumberValidator.findFirstValidCandidate("이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90")
+        .exists(_.candidate == "11-12-345678-90")
+    )
+    assert(
+      DriverLicenseNumberValidator.findFirstValidCandidate("메모: 서울 07 - 111111 - 10 재발급")
+        .exists(_.candidate == "서울 07 - 111111 - 10")
+    )
+    assert(DriverLicenseNumberValidator.findFirstValidCandidate("면허번호 없음").isEmpty)
+  }
 }

@@ -35,7 +35,7 @@
 14. merge progress JSONL into final `scan_results` and `scan_errors`, then remove `_progress/<run_id>`
 
 ## Operational Invariants
-- Raw PII is never stored.
+- `scan_results` stores two interpretation aids: `sample_matched_fragment` keeps the detected fragment itself, and `sample_raw_value` keeps only up to 50 characters of surrounding context on each side.
 - `--pre-scan-parallelism` applies to input expansion, format probing, and schema split.
 - Effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
 - `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.

@@ -1,6 +1,10 @@
 package io.github.jonggeun2001.privyspark
 
+import java.util.regex.Pattern
+
 object DriverLicenseNumberValidator {
+  final case class CandidateMatch(candidate: String, start: Int, end: Int)
+
   private val KoreanRegionNames = Seq(
     "서울",
     "부산",
@@ -20,8 +24,9 @@ object DriverLicenseNumberValidator {
     "울산"
   )
   private val KoreanRegionAlternation = KoreanRegionNames.mkString("(?:", "|", ")")
-  private val CandidatePattern =
-    s"(?:(?<![0-9])(?:[0-9]{10}|[0-9]{12}|[0-9]{2}-[0-9]{6}-[0-9]{2}|[0-9]{2}-[0-9]{2}-[0-9]{6}-[0-9]{2})(?![0-9])|(?<![가-힣A-Za-z0-9])$KoreanRegionAlternation\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))".r
+  private val CandidatePattern = Pattern.compile(
+    s"(?:(?<![0-9])(?:[0-9]{10}|[0-9]{12}|[0-9]{2}-[0-9]{6}-[0-9]{2}|[0-9]{2}-[0-9]{2}-[0-9]{6}-[0-9]{2})(?![0-9])|(?<![가-힣A-Za-z0-9])$KoreanRegionAlternation\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
+  )
   private val CurrentRegionCodes: Set[String] =
     ((11 to 26).map(code => f"$code%02d") :+ "28").toSet
 
@@ -58,7 +63,20 @@ object DriverLicenseNumberValidator {
     }
   }
 
+  def findFirstValidCandidate(raw: String): Option[CandidateMatch] = {
+    Option(raw).flatMap { value =>
+      val matcher = CandidatePattern.matcher(value)
+      while (matcher.find()) {
+        val candidate = matcher.group()
+        if (isValid(candidate)) {
+          return Some(CandidateMatch(candidate, matcher.start(), matcher.end()))
+        }
+      }
+      None
+    }
+  }
+
   def containsValidCandidate(raw: String): Boolean = {
-    Option(raw).exists(value => CandidatePattern.findAllIn(value).exists(isValid))
+    findFirstValidCandidate(raw).nonEmpty
   }
 }
