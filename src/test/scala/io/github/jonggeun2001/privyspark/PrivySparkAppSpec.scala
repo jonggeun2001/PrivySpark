@@ -436,6 +436,61 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure lists sibling directories in parallel before descending to the next level") {
+    val rootPath = "trackingfs:///dataset"
+    val rootKey = TrackingListingFileSystem.normalize(rootPath)
+    val leftKey = TrackingListingFileSystem.normalize(s"$rootPath/left")
+    val rightKey = TrackingListingFileSystem.normalize(s"$rootPath/right")
+    val nestedKey = TrackingListingFileSystem.normalize(s"$rootPath/left/nested")
+
+    spark.sparkContext.hadoopConfiguration.set("fs.trackingfs.impl", classOf[TrackingListingFileSystem].getName)
+    TrackingListingFileSystem.clear()
+
+    try {
+      TrackingListingFileSystem.registerDirectory(rootPath)
+      TrackingListingFileSystem.registerDirectory(s"$rootPath/left", delayMs = 150L, trackConcurrency = true)
+      TrackingListingFileSystem.registerDirectory(s"$rootPath/right", delayMs = 150L, trackConcurrency = true)
+      TrackingListingFileSystem.registerDirectory(s"$rootPath/left/nested")
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/left/a.csv",
+        "name,email\nalice,alice@example.com\n"
+      )
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/right/b.csv",
+        "name,email\nbob,bob@example.com\n"
+      )
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/left/nested/c.csv",
+        "name,email\ncarol,carol@example.com\n"
+      )
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        rootPath,
+        rootPath,
+        "2026-04-15T00:00:00Z",
+        preScanParallelism = 4
+      )
+
+      val listedPaths = TrackingListingFileSystem.listedPaths()
+      val rootIndex = listedPaths.indexOf(rootKey)
+      val leftIndex = listedPaths.indexOf(leftKey)
+      val rightIndex = listedPaths.indexOf(rightKey)
+      val nestedIndex = listedPaths.indexOf(nestedKey)
+
+      assert(rootIndex >= 0)
+      assert(leftIndex > rootIndex)
+      assert(rightIndex > rootIndex)
+      assert(nestedIndex > math.max(leftIndex, rightIndex))
+      assert(TrackingListingFileSystem.maxTrackedConcurrentListings() >= 2)
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 3)
+      assert(plan.groups.flatMap(_.filePaths).map(path => new java.io.File(path).getName).sorted == Seq("a.csv", "b.csv", "c.csv"))
+    } finally {
+      TrackingListingFileSystem.clear()
+    }
+  }
+
   test("resolveConfiguredPreScanParallelism caps large explicit values to the fixed safety ceiling") {
     val key = "spark.privyspark.preScanParallelism"
     assert(PrivySparkApp.resolveConfiguredPreScanParallelism(128, 128, key) == PrivySparkApp.maxSafePreScanParallelism)
@@ -4418,5 +4473,238 @@ class PartialReadFileSystem extends org.apache.hadoop.fs.FileSystem {
       0L,
       path.makeQualified(fsUri, workingDirectory)
     )
+  }
+}
+
+object TrackingListingFileSystem {
+  case class Child(path: String, isDirectory: Boolean)
+
+  private val directoryChildren = TrieMap.empty[String, Vector[Child]]
+  private val fileContents = TrieMap.empty[String, Array[Byte]]
+  private val delayedDirectories = TrieMap.empty[String, Long]
+  private val trackedDirectories = TrieMap.empty[String, Boolean]
+  private val listedStatusPaths = new ConcurrentLinkedQueue[String]()
+  private val currentTrackedListings = new AtomicInteger(0)
+  private val maxTrackedListings = new AtomicInteger(0)
+  private val lock = new AnyRef
+
+  private def key(path: String): String = key(new org.apache.hadoop.fs.Path(path))
+  private def key(path: org.apache.hadoop.fs.Path): String = path.toUri.getPath
+
+  private def addChild(parentKey: String, child: Child): Unit = lock.synchronized {
+    val existing = directoryChildren.getOrElse(parentKey, Vector.empty)
+    if (!existing.exists(_.path == child.path)) {
+      directoryChildren.put(parentKey, (existing :+ child).sortBy(_.path))
+    }
+  }
+
+  def normalize(path: String): String = key(path)
+
+  def registerDirectory(path: String, delayMs: Long = 0L, trackConcurrency: Boolean = false): Unit = {
+    val normalized = key(path)
+    directoryChildren.putIfAbsent(normalized, Vector.empty)
+    if (delayMs > 0L) {
+      delayedDirectories.put(normalized, delayMs)
+    } else {
+      delayedDirectories.remove(normalized)
+    }
+    if (trackConcurrency) {
+      trackedDirectories.put(normalized, true)
+    } else {
+      trackedDirectories.remove(normalized)
+    }
+    Option(new org.apache.hadoop.fs.Path(path).getParent)
+      .map(key)
+      .filter(directoryChildren.contains)
+      .foreach(parentKey => addChild(parentKey, Child(normalized, isDirectory = true)))
+  }
+
+  def registerFile(path: String, contents: String): Unit = {
+    val normalized = key(path)
+    fileContents.put(normalized, contents.getBytes(StandardCharsets.UTF_8))
+    Option(new org.apache.hadoop.fs.Path(path).getParent)
+      .map(key)
+      .foreach(parentKey => addChild(parentKey, Child(normalized, isDirectory = false)))
+  }
+
+  def clear(): Unit = {
+    directoryChildren.clear()
+    fileContents.clear()
+    delayedDirectories.clear()
+    trackedDirectories.clear()
+    listedStatusPaths.clear()
+    currentTrackedListings.set(0)
+    maxTrackedListings.set(0)
+  }
+
+  def listedPaths(): Seq[String] = listedStatusPaths.toArray(new Array[String](0)).toSeq
+
+  def maxTrackedConcurrentListings(): Int = maxTrackedListings.get()
+
+  private def updateMax(value: Int): Unit = {
+    var updated = false
+    while (!updated) {
+      val current = maxTrackedListings.get()
+      if (value <= current) {
+        updated = true
+      } else {
+        updated = maxTrackedListings.compareAndSet(current, value)
+      }
+    }
+  }
+
+  private[privyspark] def contents(path: org.apache.hadoop.fs.Path): Array[Byte] = {
+    fileContents.getOrElse(key(path), throw new java.io.FileNotFoundException(path.toString))
+  }
+
+  private[privyspark] def children(path: org.apache.hadoop.fs.Path): Vector[Child] = {
+    directoryChildren.getOrElse(key(path), throw new java.io.FileNotFoundException(path.toString))
+  }
+
+  private[privyspark] def isDirectory(path: org.apache.hadoop.fs.Path): Boolean = {
+    directoryChildren.contains(key(path))
+  }
+
+  private[privyspark] def isFile(path: org.apache.hadoop.fs.Path): Boolean = {
+    fileContents.contains(key(path))
+  }
+
+  private[privyspark] def delayMillis(path: org.apache.hadoop.fs.Path): Long = {
+    delayedDirectories.getOrElse(key(path), 0L)
+  }
+
+  private[privyspark] def shouldTrack(path: org.apache.hadoop.fs.Path): Boolean = {
+    trackedDirectories.contains(key(path))
+  }
+
+  private[privyspark] def recordListStatus(path: org.apache.hadoop.fs.Path): Unit = {
+    listedStatusPaths.add(key(path))
+  }
+
+  private[privyspark] def beginTrackedListing(path: org.apache.hadoop.fs.Path): Boolean = {
+    if (shouldTrack(path)) {
+      val running = currentTrackedListings.incrementAndGet()
+      updateMax(running)
+      true
+    } else {
+      false
+    }
+  }
+
+  private[privyspark] def endTrackedListing(tracked: Boolean): Unit = {
+    if (tracked) {
+      currentTrackedListings.decrementAndGet()
+    }
+  }
+}
+
+class TrackingListingFileSystem extends org.apache.hadoop.fs.FileSystem {
+  private val fsUri = URI.create("trackingfs:///")
+  private var workingDirectory: org.apache.hadoop.fs.Path = new org.apache.hadoop.fs.Path("/")
+
+  override def getUri: URI = fsUri
+
+  override def open(path: org.apache.hadoop.fs.Path, bufferSize: Int): org.apache.hadoop.fs.FSDataInputStream = {
+    val bytes = TrackingListingFileSystem.contents(path)
+    new org.apache.hadoop.fs.FSDataInputStream(new org.apache.hadoop.fs.FSInputStream {
+      private var position = 0
+
+      override def read(): Int = {
+        if (position >= bytes.length) -1
+        else {
+          val value = bytes(position) & 0xFF
+          position += 1
+          value
+        }
+      }
+
+      override def read(buffer: Array[Byte], offset: Int, length: Int): Int = {
+        if (position >= bytes.length) {
+          -1
+        } else {
+          val chunkSize = math.min(length, bytes.length - position)
+          System.arraycopy(bytes, position, buffer, offset, chunkSize)
+          position += chunkSize
+          chunkSize
+        }
+      }
+
+      override def seek(targetPos: Long): Unit = {
+        position = targetPos.toInt
+      }
+
+      override def getPos: Long = position.toLong
+
+      override def seekToNewSource(targetPos: Long): Boolean = false
+    })
+  }
+
+  override def create(
+    path: org.apache.hadoop.fs.Path,
+    permission: org.apache.hadoop.fs.permission.FsPermission,
+    overwrite: Boolean,
+    bufferSize: Int,
+    replication: Short,
+    blockSize: Long,
+    progress: org.apache.hadoop.util.Progressable
+  ): org.apache.hadoop.fs.FSDataOutputStream = {
+    throw new UnsupportedOperationException("create is not supported")
+  }
+
+  override def append(
+    path: org.apache.hadoop.fs.Path,
+    bufferSize: Int,
+    progress: org.apache.hadoop.util.Progressable
+  ): org.apache.hadoop.fs.FSDataOutputStream = {
+    throw new UnsupportedOperationException("append is not supported")
+  }
+
+  override def rename(src: org.apache.hadoop.fs.Path, dst: org.apache.hadoop.fs.Path): Boolean = false
+
+  override def delete(path: org.apache.hadoop.fs.Path, recursive: Boolean): Boolean = false
+
+  override def listStatus(path: org.apache.hadoop.fs.Path): Array[org.apache.hadoop.fs.FileStatus] = {
+    TrackingListingFileSystem.recordListStatus(path)
+    val tracked = TrackingListingFileSystem.beginTrackedListing(path)
+    try {
+      val delayMs = TrackingListingFileSystem.delayMillis(path)
+      if (delayMs > 0L) {
+        Thread.sleep(delayMs)
+      }
+      TrackingListingFileSystem.children(path).map { child =>
+        val qualifiedPath = new org.apache.hadoop.fs.Path(child.path).makeQualified(fsUri, workingDirectory)
+        if (child.isDirectory) {
+          new org.apache.hadoop.fs.FileStatus(0L, true, 1, 4096L, 0L, qualifiedPath)
+        } else {
+          val bytes = TrackingListingFileSystem.contents(new org.apache.hadoop.fs.Path(child.path))
+          new org.apache.hadoop.fs.FileStatus(bytes.length.toLong, false, 1, 4096L, 0L, qualifiedPath)
+        }
+      }.toArray
+    } finally {
+      TrackingListingFileSystem.endTrackedListing(tracked)
+    }
+  }
+
+  override def setWorkingDirectory(path: org.apache.hadoop.fs.Path): Unit = {
+    workingDirectory = path
+  }
+
+  override def getWorkingDirectory: org.apache.hadoop.fs.Path = workingDirectory
+
+  override def mkdirs(
+    path: org.apache.hadoop.fs.Path,
+    permission: org.apache.hadoop.fs.permission.FsPermission
+  ): Boolean = false
+
+  override def getFileStatus(path: org.apache.hadoop.fs.Path): org.apache.hadoop.fs.FileStatus = {
+    val qualifiedPath = path.makeQualified(fsUri, workingDirectory)
+    if (TrackingListingFileSystem.isDirectory(path)) {
+      new org.apache.hadoop.fs.FileStatus(0L, true, 1, 4096L, 0L, qualifiedPath)
+    } else if (TrackingListingFileSystem.isFile(path)) {
+      val bytes = TrackingListingFileSystem.contents(path)
+      new org.apache.hadoop.fs.FileStatus(bytes.length.toLong, false, 1, 4096L, 0L, qualifiedPath)
+    } else {
+      throw new java.io.FileNotFoundException(path.toString)
+    }
   }
 }

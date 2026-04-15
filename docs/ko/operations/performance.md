@@ -11,7 +11,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 실제 병목은 입력 분포에 따라 달라집니다. 작은 파일이 매우 많으면 pre-scan과 파티션 fan-out이, 넓은 스키마 테이블에서는 탐지 집계 표현식 수가 더 크게 작용합니다.
 
 ## 현재 구현이 이미 적용하는 최적화
-- pre-scan 병렬도는 파일 확장, 포맷 판별, 그룹별 schema split에 재사용됩니다.
+- pre-scan 병렬도는 BFS 디렉터리 discovery, 파일 확장, 포맷 판별, 그룹별 schema split에 재사용됩니다.
 - CSV 본문 읽기는 `inferSchema=false`로 동작합니다.
 - `DetectionAggregator`는 메트릭별 개별 job 대신 batched aggregation을 기본 경로로 사용합니다.
 - `driver_license_number` 집계는 Scala UDF 대신 `regexp_extract_all` + SQL 조건식으로 내려가 Catalyst/codegen 경로를 유지합니다.
@@ -20,7 +20,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - sampled scan과 최종 리포트 저장 경로는 Spark storage cache를 사용하지 않습니다. dynamic allocation 환경에서 cached executor가 YARN 자원을 오래 점유하지 않게 하기 위한 선택입니다.
 
 ## 작은 파일이 많은 입력
-- `--pre-scan-parallelism`은 파일 probe와 schema split 대기 시간을 줄이는 1차 옵션입니다.
+- `--pre-scan-parallelism`은 디렉터리 discovery, 파일 probe, schema split 대기 시간을 줄이는 1차 옵션입니다.
 - `--group-parallelism`과 `--file-parallelism`은 driver 제출 동시성을 늘리지만, executor 분산을 직접 보장하지는 않습니다.
 - `--file-sample-ratio`는 batch-capable group에서 읽는 파일 수 자체를 줄이므로, 작은 파일이 매우 많을 때 `--sample-ratio`보다 직접적인 효과가 날 수 있습니다.
 

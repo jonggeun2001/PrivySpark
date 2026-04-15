@@ -36,9 +36,10 @@
 
 ## Operational Invariants
 - `scan_results` stores two interpretation aids: `sample_matched_fragment` keeps the detected fragment itself, and `sample_raw_value` keeps only up to 50 characters of surrounding context on each side.
-- `--pre-scan-parallelism` applies to input expansion, format probing, and schema split.
+- `--pre-scan-parallelism` applies to directory discovery, input expansion, format probing, and schema split.
 - `--ignore` and `--ignore-file` apply immediately after physical file discovery and again during archive entry expansion.
-- Effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
+- Directory discovery uses breadth-first traversal and parallelizes `listStatus` per BFS level, capped by the safety ceiling `64`.
+- After file discovery, effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
 - `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.
 - `--file-sample-ratio` only applies to batch-capable group scans and uniformly samples at least one file using `ceil(fileCount * ratio)`.
 - When `--file-sample-ratio` is active, `--sample-ratio < 1.0` is ignored for that batch-capable group and a warning is logged.
