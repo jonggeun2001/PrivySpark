@@ -1,28 +1,33 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
-import org.apache.spark.sql.functions.{col, lit, sum => sparkSum, trim, udf, when}
+import org.apache.spark.sql.functions.{col, first, lit, sum => sparkSum, trim, udf, when}
 import org.apache.spark.sql.types.StringType
-import org.apache.spark.sql.{Column, DataFrame, Row}
+import org.apache.spark.sql.{Column, DataFrame}
 
+import java.util.regex.Pattern
 import scala.util.control.NonFatal
 
 object DetectionAggregator {
-  final case class MatchCount(columnName: String, piiType: String, count: Long)
-  final case class FileMatchCount(fileIdentifier: String, columnName: String, piiType: String, count: Long)
+  final case class MatchCount(columnName: String, piiType: String, count: Long, metricAlias: String = "")
+  final case class FileMatchCount(fileIdentifier: String, columnName: String, piiType: String, count: Long, metricAlias: String = "")
+  final case class SampleValue(sampleRawValue: String, sampleMatchedFragment: String)
   final case class AggregationConfig(maxExpressionsPerAgg: Int = 400, legacyFallbackThreshold: Int = 50000)
 
   private final case class Metric(
     alias: String,
+    metricKey: String,
     columnName: String,
     piiType: String,
+    regex: String,
     matchType: String,
+    pattern: Pattern,
     predicate: Column
   ) {
     val expressionCount: Int = 1
   }
+  private final case class ExtractedMatch(fragment: String, start: Int, end: Int)
   private val LegacyFallbackBatchSize = 50
-  private val DriverLicenseValidatorUdf = udf((value: String) => DriverLicenseNumberValidator.containsValidCandidate(value))
 
   private[privyspark] def resetDebugCache(): Unit = {
     DriverLogger.resetCache()
@@ -38,6 +43,14 @@ object DetectionAggregator {
       "scope" -> scope,
       "expressions" -> expressionCount,
       "reason" -> reason
+    )
+  }
+
+  private def logSampleConflict(scope: String, keys: Seq[String]): Unit = {
+    DriverLogger.warn(
+      "detection_sample_conflict",
+      "scope" -> scope,
+      "keys" -> keys.mkString(",")
     )
   }
 
@@ -280,6 +293,120 @@ object DetectionAggregator {
     buildMetrics(columns, rules).map(_.columnName).distinct
   }
 
+  def sampleMatches(
+    sampledDf: DataFrame,
+    rules: Seq[PiiRule],
+    matchCounts: Seq[MatchCount]
+  ): Map[String, SampleValue] = {
+    sampleMatches(sampledDf, rules, matchCounts, AggregationConfig())
+  }
+
+  private[privyspark] def sampleMatches(
+    sampledDf: DataFrame,
+    rules: Seq[PiiRule],
+    matchCounts: Seq[MatchCount],
+    config: AggregationConfig
+  ): Map[String, SampleValue] = {
+    require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
+    require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
+
+    if (matchCounts.isEmpty) {
+      Map.empty
+    } else {
+      val requestedKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
+      val requestedAliases = matchCounts.map(_.metricAlias).filter(_.nonEmpty).toSet
+      val metrics = buildMetrics(sampledDf.columns.toSeq, rules).filter { metric =>
+        if (requestedAliases.nonEmpty) {
+          requestedAliases.contains(metric.metricKey)
+        } else {
+          requestedKeys.contains((metric.columnName, metric.piiType))
+        }
+      }
+      val expressionCount = totalExpressionCount(metrics)
+      val rawValues =
+        if (expressionCount > config.legacyFallbackThreshold) {
+          executeThresholdFallback(
+            "dataset_sample",
+            expressionCount,
+            config.legacyFallbackThreshold,
+            collectSampleRawValues(sampledDf, metrics, LegacyFallbackBatchSize).toSeq,
+            collectSampleRawValuesSafely(sampledDf, metrics).toSeq
+          )._1.toMap
+        } else {
+          try {
+            collectSampleRawValues(sampledDf, metrics, config.maxExpressionsPerAgg)
+          } catch {
+            case NonFatal(e) =>
+              logFallback("dataset_sample", expressionCount, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+            collectSampleRawValuesSafely(sampledDf, metrics)
+          }
+        }
+
+      buildSampleValuesByAlias(metrics, rawValues)
+    }
+  }
+
+  def sampleMatchesByFile(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    rules: Seq[PiiRule],
+    matchCounts: Seq[FileMatchCount]
+  ): Map[(String, String), SampleValue] = {
+    sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, AggregationConfig())
+  }
+
+  private[privyspark] def sampleMatchesByFile(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    rules: Seq[PiiRule],
+    matchCounts: Seq[FileMatchCount],
+    config: AggregationConfig
+  ): Map[(String, String), SampleValue] = {
+    require(fileIdentifierColumn.nonEmpty, "fileIdentifierColumn must not be empty")
+    require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
+    require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
+
+    if (matchCounts.isEmpty) {
+      Map.empty
+    } else {
+      val requestedAliases = matchCounts
+        .map(matchCount => (matchCount.fileIdentifier, matchCount.metricAlias))
+        .filter(_._2.nonEmpty)
+        .toSet
+      val requestedMetricKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
+      val requestedMetricAliases = requestedAliases.map(_._2)
+      val metrics = buildMetrics(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules)
+        .filter { metric =>
+          if (requestedMetricAliases.nonEmpty) {
+            requestedMetricAliases.contains(metric.metricKey)
+          } else {
+            requestedMetricKeys.contains((metric.columnName, metric.piiType))
+          }
+        }
+      val expressionCount = totalExpressionCount(metrics)
+      val rawValues =
+        if (expressionCount > config.legacyFallbackThreshold) {
+          executeThresholdFallback(
+            "file_sample",
+            expressionCount,
+            config.legacyFallbackThreshold,
+            collectSampleRawValuesByFile(sampledDf, fileIdentifierColumn, metrics, LegacyFallbackBatchSize).toSeq,
+            collectSampleRawValuesByFileSafely(sampledDf, fileIdentifierColumn, metrics).toSeq
+          )._1.toMap
+        } else {
+          try {
+            collectSampleRawValuesByFile(sampledDf, fileIdentifierColumn, metrics, config.maxExpressionsPerAgg)
+          } catch {
+            case NonFatal(e) =>
+              logFallback("file_sample", expressionCount, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
+            collectSampleRawValuesByFileSafely(sampledDf, fileIdentifierColumn, metrics)
+          }
+        }
+
+      buildSampleValuesByFileAlias(metrics, rawValues, requestedAliases)
+    }
+  }
+
   private def buildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[Metric] = {
     columns.zipWithIndex.flatMap {
       case (columnName, columnIndex) =>
@@ -293,10 +420,18 @@ object DetectionAggregator {
               val alias = s"m_${columnIndex}_${ruleIndex}"
               val valueColumn = col(columnName).cast(StringType)
               val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
-              val validatorPredicate = builtInValidatorPredicate(rule, valueColumn)
-              val matchPredicate = rule.matchType match {
-                case PiiRuleMatchType.FullColumn => valueColumn.rlike(fullMatchRegex(rule.regex)) && validatorPredicate
-                case _ => valueColumn.rlike(rule.regex) && validatorPredicate
+              val pattern = compiledPattern(rule.regex, rule.matchType)
+              val matchPredicate = rule.piiType match {
+                case "driver_license_number" =>
+                  val driverLicenseMatchUdf = udf((value: String) =>
+                    extractDriverLicenseMatch(value, pattern, rule.matchType).nonEmpty
+                  )
+                  driverLicenseMatchUdf(valueColumn)
+                case _ =>
+                  rule.matchType match {
+                    case PiiRuleMatchType.FullColumn => valueColumn.rlike(fullMatchRegex(rule.regex))
+                    case _ => valueColumn.rlike(rule.regex)
+                  }
               }
               val predicate = rule.matchType match {
                 case PiiRuleMatchType.FullColumn => presentValuePredicate && matchPredicate
@@ -305,9 +440,12 @@ object DetectionAggregator {
               Some(
                 Metric(
                   alias = alias,
+                  metricKey = stableMetricKey(columnName, ruleIndex),
                   columnName = columnName,
                   piiType = rule.piiType,
+                  regex = rule.regex,
                   matchType = rule.matchType,
+                  pattern = pattern,
                   predicate = predicate
                 )
               )
@@ -324,6 +462,12 @@ object DetectionAggregator {
     }
   }
 
+  private def buildSampleExpressions(batch: Seq[Metric]): Seq[Column] = {
+    batch.map { metric =>
+      first(when(metric.predicate, col(metric.columnName).cast(StringType)), ignoreNulls = true).as(metric.alias)
+    }
+  }
+
   private def aggregateInBatches(
     sampledDf: DataFrame,
     metrics: Seq[Metric],
@@ -337,7 +481,7 @@ object DetectionAggregator {
       batch.zipWithIndex.flatMap {
         case (metric, index) =>
           val count = if (row.isNullAt(index)) 0L else row.getLong(index)
-          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count, metric.metricKey)) else None
       }
     }
   }
@@ -366,7 +510,7 @@ object DetectionAggregator {
   private def aggregateSafeLegacy(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
     metrics.flatMap { metric =>
       val count = sampledDf.filter(metric.predicate).count()
-      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count, metric.metricKey)) else None
     }
   }
 
@@ -389,7 +533,7 @@ object DetectionAggregator {
             case (metric, batchIndex) =>
               val rowIndex = batchIndex + 1
               val count = if (row.isNullAt(rowIndex)) 0L else row.getLong(rowIndex)
-              if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count)) else None
+              if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count, metric.metricKey)) else None
           }
         }
       }
@@ -422,7 +566,7 @@ object DetectionAggregator {
         if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
           None
         } else {
-          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
+          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count, metric.metricKey))
         }
       }
     }
@@ -434,13 +578,6 @@ object DetectionAggregator {
 
   private def fullMatchRegex(regex: String): String = {
     s"\\A(?:$regex)\\z"
-  }
-
-  private def builtInValidatorPredicate(rule: PiiRule, valueColumn: Column): Column = {
-    rule.piiType match {
-      case "driver_license_number" => DriverLicenseValidatorUdf(valueColumn)
-      case _ => lit(true)
-    }
   }
 
   private def groupMetricsByExpressionBudget(metrics: Seq[Metric], maxExpressionsPerAgg: Int): Seq[Seq[Metric]] = {
@@ -465,5 +602,181 @@ object DetectionAggregator {
     }
 
     batches.toSeq
+  }
+
+  private def collectSampleRawValues(
+    sampledDf: DataFrame,
+    metrics: Seq[Metric],
+    maxExpressionsPerAgg: Int
+  ): Map[String, String] = {
+    groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).foldLeft(Map.empty[String, String]) { (acc, batch) =>
+      val expressions = buildSampleExpressions(batch)
+      val row = sampledDf.agg(expressions.head, expressions.tail: _*).head()
+      val batchValues = batch.zipWithIndex.flatMap {
+        case (metric, index) =>
+          Option(row.getAs[String](index)).map(value => metric.alias -> value)
+      }
+      acc ++ batchValues
+    }
+  }
+
+  private def collectSampleRawValuesSafely(
+    sampledDf: DataFrame,
+    metrics: Seq[Metric]
+  ): Map[String, String] = {
+    metrics.flatMap { metric =>
+      sampledDf
+        .filter(metric.predicate)
+        .select(col(metric.columnName).cast(StringType))
+        .limit(1)
+        .collect()
+        .headOption
+        .flatMap(row => Option(row.getAs[String](0)))
+        .map(value => metric.alias -> value)
+    }.toMap
+  }
+
+  private def collectSampleRawValuesByFile(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    metrics: Seq[Metric],
+    maxExpressionsPerAgg: Int
+  ): Map[(String, String), String] = {
+    groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).foldLeft(Map.empty[(String, String), String]) { (acc, batch) =>
+      val expressions = buildSampleExpressions(batch)
+      val groupedRows = sampledDf.groupBy(col(fileIdentifierColumn)).agg(expressions.head, expressions.tail: _*).collect()
+      val batchValues = groupedRows.flatMap { row =>
+        Option(row.getAs[String](0)).filter(_.nonEmpty).toSeq.flatMap { fileIdentifier =>
+          batch.zipWithIndex.flatMap {
+            case (metric, batchIndex) =>
+              Option(row.getAs[String](batchIndex + 1)).map(value => (fileIdentifier, metric.alias) -> value)
+          }
+        }
+      }
+      acc ++ batchValues
+    }
+  }
+
+  private def collectSampleRawValuesByFileSafely(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    metrics: Seq[Metric]
+  ): Map[(String, String), String] = {
+    metrics.flatMap { metric =>
+      sampledDf
+        .filter(metric.predicate)
+        .groupBy(col(fileIdentifierColumn))
+        .agg(first(col(metric.columnName).cast(StringType), ignoreNulls = true).as(metric.alias))
+        .collect()
+        .flatMap { row =>
+          Option(row.getAs[String](0)).filter(_.nonEmpty).flatMap { fileIdentifier =>
+            Option(row.getAs[String](1)).map(value => (fileIdentifier, metric.alias) -> value)
+          }
+        }
+    }.toMap
+  }
+
+  private def buildSampleValuesByAlias(
+    metrics: Seq[Metric],
+    rawValuesByAlias: Map[String, String]
+  ): Map[String, SampleValue] = {
+    metrics.flatMap { metric =>
+      rawValuesByAlias
+        .get(metric.alias)
+        .flatMap(rawValue => sampleValue(metric, rawValue).map(metric.metricKey -> _))
+    }.toMap
+  }
+
+  private def buildSampleValuesByFileAlias(
+    metrics: Seq[Metric],
+    rawValuesByFileAlias: Map[(String, String), String],
+    requestedKeys: Set[(String, String)]
+  ): Map[(String, String), SampleValue] = {
+    val metricsByAlias = metrics.map(metric => metric.alias -> metric).toMap
+
+    rawValuesByFileAlias.flatMap {
+      case ((fileIdentifier, alias), rawValue) =>
+        metricsByAlias
+          .get(alias)
+          .flatMap { metric =>
+            val key = (fileIdentifier, metric.metricKey)
+            if (requestedKeys.isEmpty || requestedKeys.contains(key)) {
+              sampleValue(metric, rawValue).map(key -> _)
+            } else {
+              None
+            }
+          }
+    }
+  }
+
+  private def stableMetricKey(columnName: String, ruleIndex: Int): String = {
+    s"$columnName#$ruleIndex"
+  }
+
+  private def sampleValue(
+    metric: Metric,
+    rawValue: String
+  ): Option[SampleValue] = {
+    extractMatch(rawValue, metric).map { extracted =>
+      SampleValue(
+        sampleRawValue = buildRawSnippet(rawValue, extracted.start, extracted.end),
+        sampleMatchedFragment = extracted.fragment
+      )
+    }
+  }
+
+  private def extractMatch(rawValue: String, metric: Metric): Option[ExtractedMatch] = {
+    if (metric.piiType == "driver_license_number") {
+      extractDriverLicenseMatch(rawValue, metric)
+    } else {
+      val matcher = metric.pattern.matcher(rawValue)
+      if (metric.matchType == PiiRuleMatchType.FullColumn) {
+        if (matcher.matches()) Some(ExtractedMatch(matcher.group(), 0, rawValue.length)) else None
+      } else if (matcher.find()) {
+        Some(ExtractedMatch(matcher.group(), matcher.start(), matcher.end()))
+      } else {
+        None
+      }
+    }
+  }
+
+  private def extractDriverLicenseMatch(rawValue: String, metric: Metric): Option[ExtractedMatch] = {
+    extractDriverLicenseMatch(rawValue, metric.pattern, metric.matchType)
+  }
+
+  private def extractDriverLicenseMatch(rawValue: String, pattern: Pattern, matchType: String): Option[ExtractedMatch] = {
+    val matcher = pattern.matcher(Option(rawValue).getOrElse(""))
+    if (matchType == PiiRuleMatchType.FullColumn) {
+      if (matcher.matches() && DriverLicenseNumberValidator.isValid(matcher.group())) {
+        Some(ExtractedMatch(matcher.group(), 0, Option(rawValue).map(_.length).getOrElse(0)))
+      } else {
+        None
+      }
+    } else {
+      while (matcher.find()) {
+        val fragment = matcher.group()
+        if (DriverLicenseNumberValidator.isValid(fragment)) {
+          return Some(ExtractedMatch(fragment, matcher.start(), matcher.end()))
+        }
+      }
+      None
+    }
+  }
+
+  private def compiledPattern(regex: String, matchType: String): Pattern = {
+    Pattern.compile(
+      if (matchType == PiiRuleMatchType.FullColumn) fullMatchRegex(regex)
+      else regex
+    )
+  }
+
+  private def buildRawSnippet(rawValue: String, start: Int, end: Int): String = {
+    val snippetStart = math.max(0, start - 50)
+    val snippetEnd = math.min(rawValue.length, end + 50)
+    if (snippetStart == 0 && snippetEnd == rawValue.length && rawValue.length > 100) {
+      rawValue.take(50) + "..." + rawValue.takeRight(50)
+    } else {
+      rawValue.substring(snippetStart, snippetEnd)
+    }
   }
 }

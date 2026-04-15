@@ -300,4 +300,5 @@ class RulesetLoaderSpec extends AnyFunSuite {
       RulesetLoader.load("/tmp/does-not-exist-ruleset.yaml")
     }
   }
+
 }

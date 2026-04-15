@@ -14,6 +14,7 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - 0바이트 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 건너뜁니다.
 - row sampling(`--sample-ratio`)과 batch group용 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있습니다.
 - 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress를 남기고, 정상 종료 시 최종 Parquet/CSV 리포트로 merge한 뒤 정리합니다.
+- `scan_results`에는 집계 지표와 함께 `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
 
 ## 빠른 시작
 빌드:

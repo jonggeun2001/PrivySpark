@@ -11,7 +11,7 @@ This directory contains the public English documentation for PrivySpark. The Kor
 - [reference/overview.md](reference/overview.md): scope and feature summary
 - [reference/input-formats.md](reference/input-formats.md): input formats, archive/xlsx handling, grouping, fallback behavior
 - [reference/rules-and-detection.md](reference/rules-and-detection.md): rulesets, `match_type`, built-in detection constraints, aggregation
-- [reference/reports-and-errors.md](reference/reports-and-errors.md): result reports, error reports, security guarantees
+- [reference/reports-and-errors.md](reference/reports-and-errors.md): result reports, error reports, sample-value storage policy
 
 ## Architecture
 - [architecture/overview.md](architecture/overview.md): component map, processing flow, operational invariants

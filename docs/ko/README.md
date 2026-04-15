@@ -11,7 +11,7 @@
 - [reference/overview.md](reference/overview.md): 지원 범위와 핵심 동작 요약
 - [reference/input-formats.md](reference/input-formats.md): 입력 포맷, archive/xlsx 처리, 그룹화, fallback
 - [reference/rules-and-detection.md](reference/rules-and-detection.md): ruleset 규칙, `match_type`, 탐지 타입, 집계 전략
-- [reference/reports-and-errors.md](reference/reports-and-errors.md): 최종 출력, 오류 리포트, 보안 원칙
+- [reference/reports-and-errors.md](reference/reports-and-errors.md): 최종 출력, 오류 리포트, 샘플 값 저장 정책
 
 ## 아키텍처
 - [architecture/overview.md](architecture/overview.md): 컴포넌트 맵, 처리 플로우, 운영 불변 조건
