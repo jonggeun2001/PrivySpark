@@ -1537,34 +1537,40 @@ object PrivySparkApp {
 
     var currentLevelDirectories = Seq(rootPath)
     while (currentLevelDirectories.nonEmpty) {
-      val listedDirectories = executeInParallel(
-        parallelism,
-        currentLevelDirectories.sortBy(_.toString).map { directory =>
-          () => Option(fs.listStatus(directory)).getOrElse(Array.empty).sortBy(_.getPath.toString)
-        }
-      )
       val nextLevelDirectories = ArrayBuffer.empty[Path]
 
-      listedDirectories.foreach { children =>
-        children.foreach { status =>
-          val childPath = status.getPath.toString
-          if (status.isDirectory) {
-            ignoreMatcher.matched(childPath, inputPath, isDirectory = true) match {
-              case Some(pattern) =>
-                ignoredPaths += ((childPath, pattern))
-              case None =>
-                nextLevelDirectories += status.getPath
+      currentLevelDirectories
+        .sortBy(_.toString)
+        .grouped(math.max(1, parallelism))
+        .foreach { directoryBatch =>
+          val listedDirectories = executeInParallel(
+            parallelism,
+            directoryBatch.map { directory =>
+              () => Option(fs.listStatus(directory)).getOrElse(Array.empty).sortBy(_.getPath.toString)
             }
-          } else if (status.isFile) {
-            ignoreMatcher.matched(childPath, inputPath) match {
-              case Some(pattern) =>
-                ignoredPaths += ((childPath, pattern))
-              case None =>
-                discoveredFiles += childPath
+          )
+
+          listedDirectories.foreach { children =>
+            children.foreach { status =>
+              val childPath = status.getPath.toString
+              if (status.isDirectory) {
+                ignoreMatcher.matched(childPath, inputPath, isDirectory = true) match {
+                  case Some(pattern) =>
+                    ignoredPaths += ((childPath, pattern))
+                  case None =>
+                    nextLevelDirectories += status.getPath
+                }
+              } else if (status.isFile) {
+                ignoreMatcher.matched(childPath, inputPath) match {
+                  case Some(pattern) =>
+                    ignoredPaths += ((childPath, pattern))
+                  case None =>
+                    discoveredFiles += childPath
+                }
+              }
             }
           }
         }
-      }
 
       currentLevelDirectories = nextLevelDirectories.toSeq
     }

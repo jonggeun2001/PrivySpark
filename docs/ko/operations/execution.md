@@ -12,7 +12,7 @@
 - `--ruleset <default|path>`: 규칙셋 경로 또는 `default`
 - `--sample-ratio <(0.0, 1.0]>`: row sampling 비율, 기본 `0.2`
 - `--file-sample-ratio <(0.0, 1.0]>`: batch group scan 파일 샘플링 비율, 기본 미설정
-- `--pre-scan-parallelism <INT>`: 파일 pre-scan 확장과 schema split 병렬도, `> 0`
+- `--pre-scan-parallelism <INT>`: 디렉터리 discovery, 파일 pre-scan 확장, schema split 병렬도, `> 0`
 - `--group-parallelism <INT>`: 그룹 스캔 병렬도, `> 0`
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴

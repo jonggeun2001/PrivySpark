@@ -12,7 +12,7 @@
 - `--ruleset <default|path>`: built-in ruleset or external path
 - `--sample-ratio <(0.0, 1.0]>`: row sampling ratio, default `0.2`
 - `--file-sample-ratio <(0.0, 1.0]>`: batch group file sampling ratio, unset by default
-- `--pre-scan-parallelism <INT>`: parallelism for file pre-scan expansion and schema split, `> 0`
+- `--pre-scan-parallelism <INT>`: parallelism for directory discovery, file pre-scan expansion, and schema split, `> 0`
 - `--group-parallelism <INT>`: group scan parallelism, `> 0`
 - `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
