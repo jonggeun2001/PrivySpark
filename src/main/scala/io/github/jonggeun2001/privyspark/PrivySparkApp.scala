@@ -436,7 +436,7 @@ object PrivySparkApp {
     if (looksLikeText(bytes, allowIncompleteTrailingSequence)) Some(TextFormat) else None
   }
 
-  private def looksLikeText(bytes: Array[Byte], allowIncompleteTrailingSequence: Boolean): Boolean = {
+  private[privyspark] def looksLikeText(bytes: Array[Byte], allowIncompleteTrailingSequence: Boolean): Boolean = {
     if (bytes.isEmpty) {
       true
     } else if (bytes.contains(0.toByte)) {
@@ -446,7 +446,14 @@ object PrivySparkApp {
     } else {
       val suspiciousControlBytes = bytes.count { rawByte =>
         val byte = rawByte & 0xff
-        byte < 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D
+        byte < 0x20 &&
+          byte != 0x09 &&
+          byte != 0x0A &&
+          byte != 0x0D &&
+          byte != 0x1C &&
+          byte != 0x1D &&
+          byte != 0x1E &&
+          byte != 0x1F
       }
       suspiciousControlBytes * 10 <= bytes.length
     }
