@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.charset.{CharacterCodingException, CodingErrorAction}
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.{Executors, ScheduledExecutorService, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, Executors, ScheduledExecutorService, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipInputStream
 import java.nio.file.NoSuchFileException
@@ -72,6 +72,64 @@ object PrivySparkApp {
     matchCounts: Seq[MatchCount],
     sampleValues: Map[String, DetectionAggregator.SampleValue]
   )
+  private[privyspark] final class CsvHeadCache {
+    private val cachedLinesByFile = new ConcurrentHashMap[String, Seq[String]]()
+    private val cachedCharactersByFile = new ConcurrentHashMap[String, Int]()
+    private val insertionOrder = new ConcurrentLinkedQueue[String]()
+    private val totalCachedCharacters = new AtomicInteger(0)
+
+    def getOrRead(filePath: String)(loader: => Seq[String]): Seq[String] = {
+      Option(cachedLinesByFile.get(filePath)).getOrElse {
+        val loaded = loader
+        cacheLoaded(filePath, loaded)
+        Option(cachedLinesByFile.get(filePath)).getOrElse(loaded)
+      }
+    }
+
+    def clear(): Unit = this.synchronized {
+      cachedLinesByFile.clear()
+      cachedCharactersByFile.clear()
+      insertionOrder.clear()
+      totalCachedCharacters.set(0)
+    }
+
+    private def cacheLoaded(filePath: String, lines: Seq[String]): Unit = this.synchronized {
+      if (cachedLinesByFile.containsKey(filePath)) {
+        return
+      }
+
+      val characterCount = lines.iterator.map(_.length).sum
+      if (characterCount > CsvHeadCache.MaxCharacters) {
+        return
+      }
+
+      cachedLinesByFile.put(filePath, lines)
+      cachedCharactersByFile.put(filePath, characterCount)
+      insertionOrder.add(filePath)
+      totalCachedCharacters.addAndGet(characterCount)
+      evictToBounds()
+    }
+
+    private def evictToBounds(): Unit = {
+      while (cachedLinesByFile.size() > CsvHeadCache.MaxEntries || totalCachedCharacters.get() > CsvHeadCache.MaxCharacters) {
+        val oldestPath = insertionOrder.poll()
+        if (oldestPath == null) {
+          return
+        }
+
+        val removed = cachedLinesByFile.remove(oldestPath)
+        if (removed != null) {
+          val removedCharacterCount = Option(cachedCharactersByFile.remove(oldestPath)).map(_.toInt).getOrElse(removed.iterator.map(_.length).sum)
+          totalCachedCharacters.addAndGet(-removedCharacterCount)
+        }
+      }
+    }
+  }
+  private object CsvHeadCache {
+    val CachedLineLimit = 2
+    val MaxEntries = 4096
+    val MaxCharacters = 1024 * 1024
+  }
   private final case class ProbeSample(bytes: Array[Byte], truncated: Boolean)
   private final case class PreScanFileOutcome(
     filePath: String,
@@ -952,6 +1010,7 @@ object PrivySparkApp {
 
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
     val (preScanParallelism, groupParallelism, fileParallelism) = resolveCliParallelism(config)
+    val csvHeadCache = new CsvHeadCache()
     val ignoreMatcher = IgnoreMatcher.fromSources(spark.sparkContext.hadoopConfiguration, config.ignorePatterns, config.ignoreFile)
     logInfo(
       "scan_start",
@@ -976,7 +1035,8 @@ object PrivySparkApp {
       config.inputPath,
       timestamp,
       preScanParallelism,
-      ignoreMatcher = ignoreMatcher
+      ignoreMatcher = ignoreMatcher,
+      csvHeadCache = csvHeadCache
     )
     var progressRun: Option[ProgressRun] = None
     var heartbeatExecutor: Option[ScheduledExecutorService] = None
@@ -1019,7 +1079,8 @@ object PrivySparkApp {
         fileParallelism,
         config.fileSampleRatio,
         Some(preparedProgressRun),
-        retainPayloads = false
+        retainPayloads = false,
+        csvHeadCache = csvHeadCache
       )
 
       logDebug("report_write_start", "output_root" -> config.outputPath, "progress_run" -> preparedProgressRun.runId)
@@ -1048,6 +1109,7 @@ object PrivySparkApp {
         throw e
     } finally {
       heartbeatExecutor.foreach(stopProgressHeartbeat)
+      csvHeadCache.clear()
       cleanupStagingPaths(spark.sparkContext.hadoopConfiguration, scanPlan.stagingPaths)
     }
   }
@@ -1063,7 +1125,8 @@ object PrivySparkApp {
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
     progressRun: Option[ProgressRun] = None,
-    retainPayloads: Boolean = true
+    retainPayloads: Boolean = true,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] = {
     if (groups.isEmpty) {
       return Seq.empty
@@ -1088,7 +1151,7 @@ object PrivySparkApp {
           "parallelism" -> parallelism
         )
         val (groupResults, groupErrors) =
-          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, fileSampleRatio, progressRun)
+          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, fileSampleRatio, progressRun, csvHeadCache)
         logDebug(
           "group_scan_recorded",
           "directory" -> group.directoryPath,
@@ -1586,7 +1649,8 @@ object PrivySparkApp {
     datasetPath: String,
     timestamp: String,
     preScanParallelism: Int = -1,
-    ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty
+    ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): DirectoryScanPlan = {
     logDebug("scan_directory_structure_start", "input_path" -> inputPath, "dataset_path" -> datasetPath)
     val conf = spark.sparkContext.hadoopConfiguration
@@ -1868,7 +1932,7 @@ object PrivySparkApp {
       )
       val schemaSplitOutcomes = executeInParallel(schemaSplitParallelism, groupedByDirectoryAndFormat.map { group =>
         () =>
-          val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group)
+          val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group, csvHeadCache)
           (group, splitGroups, splitErrors)
       })
 
@@ -1956,10 +2020,11 @@ object PrivySparkApp {
     spark: SparkSession,
     datasetPath: String,
     timestamp: String,
-    group: ScanGroup
+    group: ScanGroup,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): (Seq[ScanGroup], Seq[ScanError]) = {
     if (group.filePaths.size <= 1) {
-      splitGroupBySchema(spark, datasetPath, timestamp, group)
+      splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache)
     } else {
       logDebug(
         "scan_group_schema_sample_start",
@@ -1972,7 +2037,7 @@ object PrivySparkApp {
       val sampledPhysicalPath = resolvePhysicalPath(group, sampledSourceKey)
       val sampledReadOptions = resolveReadOptions(group, sampledSourceKey)
       val sampledSchemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, sampledPhysicalPath)
+        inferCsvSchemaSignature(spark, sampledPhysicalPath, csvHeadCache)
       } else {
         inferSchemaSignature(spark, group.format, sampledPhysicalPath, sampledReadOptions).map(signature => (signature, true))
       }
@@ -2014,7 +2079,7 @@ object PrivySparkApp {
             "files" -> group.filePaths.size,
             "reason" -> errorMessage
           )
-          splitGroupBySchema(spark, datasetPath, timestamp, group)
+          splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache)
       }
     }
   }
@@ -2063,7 +2128,8 @@ object PrivySparkApp {
     spark: SparkSession,
     datasetPath: String,
     timestamp: String,
-    group: ScanGroup
+    group: ScanGroup,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): (Seq[ScanGroup], Seq[ScanError]) = {
     logDebug(
       "scan_group_schema_split_start",
@@ -2078,7 +2144,7 @@ object PrivySparkApp {
       val physicalPath = resolvePhysicalPath(group, sourceKey)
       val readOptions = resolveReadOptions(group, sourceKey)
       val schemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, physicalPath)
+        inferCsvSchemaSignature(spark, physicalPath, csvHeadCache)
       } else {
         inferSchemaSignature(spark, group.format, physicalPath, readOptions).map(signature => (signature, true))
       }
@@ -2166,21 +2232,12 @@ object PrivySparkApp {
 
   private[privyspark] def inferCsvHeaderSignature(
     spark: SparkSession,
-    filePath: String
+    filePath: String,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Either[String, String] = {
     try {
-      val signature = withFileReadRetry(spark, Seq(filePath), "csv_header_signature") {
-        val csvOptions = createCsvOptions(spark)
-        val headerLine = readFirstNonBlankCsvLines(spark, filePath, maxLines = 1).headOption
-          .getOrElse(throw new IllegalArgumentException("Empty or missing CSV header"))
-        val headerColumns = CSVUtils.makeSafeHeader(
-          parseCsvLine(spark, headerLine),
-          spark.sessionState.conf.caseSensitiveAnalysis,
-          csvOptions
-        )
-        headerColumns.map(_.toLowerCase).mkString("|")
-      }
-      Right(signature)
+      val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = CsvHeadCache.CachedLineLimit, csvHeadCache)
+      Right(inferCsvHeaderSignatureFromLines(spark, lines))
     } catch {
       case NonFatal(e) =>
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
@@ -2189,9 +2246,17 @@ object PrivySparkApp {
 
   private[privyspark] def detectCsvHasHeader(
     spark: SparkSession,
-    filePath: String
+    filePath: String,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Boolean = {
-    val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = 2)
+    val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = CsvHeadCache.CachedLineLimit, csvHeadCache)
+    detectCsvHasHeaderFromLines(spark, lines)
+  }
+
+  private def detectCsvHasHeaderFromLines(
+    spark: SparkSession,
+    lines: Seq[String]
+  ): Boolean = {
     val firstRowFields = lines.headOption.map(parseCsvLine(spark, _).toSeq).getOrElse(Seq.empty)
     if (firstRowFields.isEmpty) {
       false
@@ -2229,14 +2294,16 @@ object PrivySparkApp {
 
   private[privyspark] def inferCsvSchemaSignature(
     spark: SparkSession,
-    filePath: String
+    filePath: String,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Either[String, (String, Boolean)] = {
     try {
-      val csvHasHeader = detectCsvHasHeader(spark, filePath)
+      val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = CsvHeadCache.CachedLineLimit, csvHeadCache)
+      val csvHasHeader = detectCsvHasHeaderFromLines(spark, lines)
       if (csvHasHeader) {
-        inferCsvHeaderSignature(spark, filePath).map(signature => (signature, true))
+        Right((inferCsvHeaderSignatureFromLines(spark, lines), true))
       } else {
-        val firstDataLine = readFirstNonBlankCsvLines(spark, filePath, maxLines = 1).headOption
+        val firstDataLine = lines.headOption
           .getOrElse(throw new IllegalArgumentException("Empty CSV file"))
         val columnCount = parseCsvLine(spark, firstDataLine).length
         Right((s"cols:$columnCount", false))
@@ -2378,7 +2445,8 @@ object PrivySparkApp {
     timestamp: String,
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
-    progressRun: Option[ProgressRun] = None
+    progressRun: Option[ProgressRun] = None,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logDebug(
       "group_scan_start",
@@ -2403,7 +2471,8 @@ object PrivySparkApp {
         "sampled_exact_split",
         fileParallelism,
         fileSampleRatio,
-        progressRun
+        progressRun,
+        csvHeadCache
       )
       logDebug(
         "group_scan_complete",
@@ -2418,7 +2487,7 @@ object PrivySparkApp {
     }
 
     if (!supportsBatchScan(group)) {
-      val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, progressRun)
+      val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, progressRun, csvHeadCache)
       logDebug(
         "group_scan_complete",
         "directory" -> group.directoryPath,
@@ -2491,7 +2560,8 @@ object PrivySparkApp {
             "fallback_schema_resplit",
             fileParallelism,
             fileSampleRatio,
-            progressRun
+            progressRun,
+            csvHeadCache
           )
 
           logDebug(
@@ -2513,7 +2583,8 @@ object PrivySparkApp {
             sampleRatio,
             timestamp,
             fileParallelism,
-            progressRun
+            progressRun,
+            csvHeadCache
           )
           logDebug(
             "group_scan_complete",
@@ -2537,7 +2608,8 @@ object PrivySparkApp {
     sampleRatio: Double,
     timestamp: String,
     fileParallelism: Int = -1,
-    progressRun: Option[ProgressRun] = None
+    progressRun: Option[ProgressRun] = None,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logWarn(
       "group_scan_fallback_execute",
@@ -2582,7 +2654,8 @@ object PrivySparkApp {
           formatOverride = Some(group.format),
           logicalIdentifierOverride = Some(logicalIdentifier),
           physicalPathOverride = Some(physicalPath),
-          readOptions = readOptions
+          readOptions = readOptions,
+          csvHeadCache = csvHeadCache
         )
           .fold(
             error => {
@@ -2921,7 +2994,8 @@ object PrivySparkApp {
     formatOverride: Option[String] = None,
     logicalIdentifierOverride: Option[String] = None,
     physicalPathOverride: Option[String] = None,
-    readOptions: ScanReadOptions = ScanReadOptions()
+    readOptions: ScanReadOptions = ScanReadOptions(),
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Either[ScanError, FileScanMetrics] = {
     val physicalPath = physicalPathOverride.getOrElse(filePath)
     val fileIdentifier = logicalIdentifierOverride.getOrElse(resolveRelativeIdentifier(datasetPath, physicalPath))
@@ -2936,7 +3010,7 @@ object PrivySparkApp {
         val effectiveRules = effectiveRulesForFormat(format, rules)
 
         val csvHasHeader = if (format == "csv") {
-          csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, physicalPath))
+          csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, physicalPath, csvHeadCache))
         } else {
           true
         }
@@ -3069,7 +3143,7 @@ object PrivySparkApp {
     Option(parser.parseLine(Option(line).getOrElse("").stripPrefix("\uFEFF"))).getOrElse(Array.empty[String])
   }
 
-  private def readFirstNonBlankCsvLines(
+  private def loadFirstNonBlankCsvLines(
     spark: SparkSession,
     filePath: String,
     maxLines: Int
@@ -3092,6 +3166,35 @@ object PrivySparkApp {
         reader.close()
       }
     }
+  }
+
+  private def readFirstNonBlankCsvLines(
+    spark: SparkSession,
+    filePath: String,
+    maxLines: Int,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
+  ): Seq[String] = {
+    if (maxLines <= CsvHeadCache.CachedLineLimit) {
+      csvHeadCache.getOrRead(filePath) {
+        loadFirstNonBlankCsvLines(spark, filePath, CsvHeadCache.CachedLineLimit)
+      }.take(maxLines)
+    } else {
+      loadFirstNonBlankCsvLines(spark, filePath, maxLines)
+    }
+  }
+
+  private def inferCsvHeaderSignatureFromLines(
+    spark: SparkSession,
+    lines: Seq[String]
+  ): String = {
+    val csvOptions = createCsvOptions(spark)
+    val headerLine = lines.headOption.getOrElse(throw new IllegalArgumentException("Empty or missing CSV header"))
+    val headerColumns = CSVUtils.makeSafeHeader(
+      parseCsvLine(spark, headerLine),
+      spark.sessionState.conf.caseSensitiveAnalysis,
+      csvOptions
+    )
+    headerColumns.map(_.toLowerCase).mkString("|")
   }
 
   private def isNumericLikeField(value: String): Boolean = {
@@ -3217,13 +3320,15 @@ object PrivySparkApp {
     mode: String,
     fileParallelism: Int,
     fileSampleRatio: Option[Double],
-    progressRun: Option[ProgressRun]
+    progressRun: Option[ProgressRun],
+    csvHeadCache: CsvHeadCache
   ): (Seq[ScanResult], Seq[ScanError]) = {
     val (splitGroups, splitErrors) = splitGroupBySchema(
       spark,
       datasetPath,
       timestamp,
-      group.copy(schemaSampled = false)
+      group.copy(schemaSampled = false),
+      csvHeadCache
     )
     val exactSplitCanUseDirectoryIdentifier =
       group.directoryIdentifierEligible &&
@@ -3259,7 +3364,8 @@ object PrivySparkApp {
         timestamp,
         fileParallelism,
         fileSampleRatio,
-        progressRun
+        progressRun,
+        csvHeadCache
       )
       rescannedResults ++= groupResults
       rescannedErrors ++= groupErrors
