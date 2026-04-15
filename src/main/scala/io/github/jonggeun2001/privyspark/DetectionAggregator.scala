@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
-import org.apache.spark.sql.functions.{col, first, lit, sum => sparkSum, trim, udf, when}
+import org.apache.spark.sql.functions.{col, exists, first, length, lit, regexp_extract_all, regexp_replace, substring, sum => sparkSum, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{Column, DataFrame}
 
@@ -28,6 +28,14 @@ object DetectionAggregator {
   }
   private final case class ExtractedMatch(fragment: String, start: Int, end: Int)
   private val LegacyFallbackBatchSize = 50
+  private val DriverLicenseNamedRegionSqlRegex =
+    s"^(?:${DriverLicenseNumberValidator.KoreanRegionAlternation})(?:[0-9]{10}|[0-9]{2}-[0-9]{6}-[0-9]{2})$$"
+  private val DriverLicenseSupportedNumericSqlRegex =
+    DriverLicenseNumberValidator.SupportedNumericFormats
+      .map(_.stripPrefix("^").stripSuffix("$"))
+      .mkString("^(?:", "|", ")$$")
+  private val DriverLicenseDigitsOnlySqlRegex = "^[0-9]+$"
+  private val DriverLicenseCurrentRegionCodeInts = DriverLicenseNumberValidator.CurrentRegionCodes.toSeq.map(_.toInt)
 
   private[privyspark] def resetDebugCache(): Unit = {
     DriverLogger.resetCache()
@@ -422,11 +430,7 @@ object DetectionAggregator {
               val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
               val pattern = compiledPattern(rule.regex, rule.matchType)
               val matchPredicate = rule.piiType match {
-                case "driver_license_number" =>
-                  val driverLicenseMatchUdf = udf((value: String) =>
-                    extractDriverLicenseMatch(value, pattern, rule.matchType).nonEmpty
-                  )
-                  driverLicenseMatchUdf(valueColumn)
+                case "driver_license_number" => driverLicenseMatchPredicate(valueColumn, rule)
                 case _ =>
                   rule.matchType match {
                     case PiiRuleMatchType.FullColumn => valueColumn.rlike(fullMatchRegex(rule.regex))
@@ -454,6 +458,30 @@ object DetectionAggregator {
             }
         }
     }
+  }
+
+  private def driverLicenseMatchPredicate(valueColumn: Column, rule: PiiRule): Column = {
+    val ruleRegex =
+      if (rule.matchType == PiiRuleMatchType.FullColumn) fullMatchRegex(rule.regex)
+      else rule.regex
+    val matchedCandidates = regexp_extract_all(valueColumn, lit(ruleRegex), lit(0))
+    exists(matchedCandidates, candidate => driverLicenseCandidateValid(candidate))
+  }
+
+  private def driverLicenseCandidateValid(candidate: Column): Column = {
+    val trimmedCandidate = trim(candidate)
+    val whitespaceStrippedCandidate = regexp_replace(trimmedCandidate, "\\s+", "")
+    val normalizedNumericCandidate = regexp_replace(trimmedCandidate, "-", "")
+    val numericPrefix = substring(normalizedNumericCandidate, 1, 2).cast("int")
+    val digitsOnly = normalizedNumericCandidate.rlike(DriverLicenseDigitsOnlySqlRegex)
+    val validCurrentRegionCode = numericPrefix.isin(DriverLicenseCurrentRegionCodeInts.map(Int.box): _*)
+    val supportedNumericFormat = trimmedCandidate.rlike(DriverLicenseSupportedNumericSqlRegex)
+    val validNormalizedNumeric =
+      (length(normalizedNumericCandidate) === 10 && digitsOnly) ||
+        (length(normalizedNumericCandidate) === 12 && digitsOnly && validCurrentRegionCode)
+
+    whitespaceStrippedCandidate.rlike(DriverLicenseNamedRegionSqlRegex) ||
+      (supportedNumericFormat && validNormalizedNumeric)
   }
 
   private def buildExpressions(batch: Seq[Metric]): Seq[Column] = {
