@@ -5,7 +5,8 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
+import java.nio.file.{Files, Paths}
+import org.apache.hadoop.conf.Configuration
 
 @RunWith(classOf[JUnitRunner])
 class IgnoreMatcherSpec extends AnyFunSuite {
@@ -48,5 +49,23 @@ class IgnoreMatcherSpec extends AnyFunSuite {
 
     assert(matcher.matched("/data/input/backup/old.csv", "/data/input").contains("/backup/**"))
     assert(matcher.matched("/data/input/logs", "/data/input", isDirectory = true).contains("/logs/"))
+    assert(matcher.matched("/data/input/nested/logs", "/data/input", isDirectory = true).isEmpty)
+    assert(matcher.matched("/data/input/nested/_SUCCESS", "/data/input").isEmpty)
+  }
+
+  test("prefers SparkFiles-style local aliases before Hadoop default filesystem lookups") {
+    val aliasPath = Files.createTempFile(Paths.get("."), "privyspark-ignore-alias-", ".txt")
+    val conf = new Configuration(false)
+    conf.set("fs.defaultFS", "mock://ignore")
+
+    try {
+      Files.write(aliasPath, "backup/**\n".getBytes(StandardCharsets.UTF_8))
+
+      val matcher = IgnoreMatcher.fromSources(conf, Seq.empty, Some(aliasPath.getFileName.toString))
+
+      assert(matcher.matched("/data/input/backup/file.csv", "/data/input").contains("backup/**"))
+    } finally {
+      Files.deleteIfExists(aliasPath)
+    }
   }
 }

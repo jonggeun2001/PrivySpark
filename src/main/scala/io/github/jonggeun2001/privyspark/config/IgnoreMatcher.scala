@@ -2,9 +2,12 @@ package io.github.jonggeun2001.privyspark.config
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
+import org.apache.spark.SparkEnv
+import org.apache.spark.SparkFiles
 
 import java.io.{BufferedReader, InputStreamReader}
 import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Paths}
 import java.util.regex.Pattern
 import scala.collection.mutable.ArrayBuffer
 
@@ -63,9 +66,36 @@ object IgnoreMatcher {
   }
 
   private def loadIgnoreFile(conf: Configuration, path: String): Seq[String] = {
-    val hadoopPath = new Path(Option(path).map(_.trim).getOrElse(""))
-    val fs = hadoopPath.getFileSystem(conf)
-    val reader = new BufferedReader(new InputStreamReader(fs.open(hadoopPath), StandardCharsets.UTF_8))
+    val normalizedPath = Option(path).map(_.trim).getOrElse("")
+    resolveLocalIgnoreFile(normalizedPath) match {
+      case Some(localPath) =>
+        val reader = Files.newBufferedReader(localPath, StandardCharsets.UTF_8)
+        readPatterns(reader)
+      case None =>
+        val hadoopPath = new Path(normalizedPath)
+        val fs = hadoopPath.getFileSystem(conf)
+        val reader = new BufferedReader(new InputStreamReader(fs.open(hadoopPath), StandardCharsets.UTF_8))
+        readPatterns(reader)
+    }
+  }
+
+  private def resolveLocalIgnoreFile(path: String): Option[java.nio.file.Path] = {
+    val hadoopPath = new Path(path)
+    val uri = hadoopPath.toUri
+
+    if (uri.getScheme != null || uri.getAuthority != null) {
+      None
+    } else {
+      val sparkFilesCandidate = Option(SparkEnv.get).map(_ => Paths.get(SparkFiles.get(path)))
+      val workingDirectoryCandidate = Paths.get(path)
+
+      Seq(sparkFilesCandidate, Some(workingDirectoryCandidate)).flatten.collectFirst {
+        case candidate if Files.exists(candidate) => candidate.toAbsolutePath.normalize()
+      }
+    }
+  }
+
+  private def readPatterns(reader: BufferedReader): Seq[String] = {
     val lines = ArrayBuffer.empty[String]
 
     try {
@@ -87,12 +117,25 @@ object IgnoreMatcher {
   }
 
   private def compilePattern(pattern: String): CompiledPattern = {
-    val anchoredPattern = if (pattern.startsWith("/")) pattern.drop(1) else pattern
+    val rootAnchored = pattern.startsWith("/")
+    val anchoredPattern = if (rootAnchored) pattern.drop(1) else pattern
     val directoryPattern = anchoredPattern.endsWith("/")
     val corePattern = if (directoryPattern) anchoredPattern.dropRight(1) else anchoredPattern
     val hasSlash = corePattern.contains("/")
 
-    if (directoryPattern && !hasSlash) {
+    if (rootAnchored && directoryPattern) {
+      CompiledPattern(
+        original = pattern,
+        mode = DirectoryMode,
+        regex = Pattern.compile(s"^${globToRegex(corePattern)}/$$")
+      )
+    } else if (rootAnchored) {
+      CompiledPattern(
+        original = pattern,
+        mode = PathMode,
+        regex = Pattern.compile(s"^${globToRegex(corePattern)}$$")
+      )
+    } else if (directoryPattern && !hasSlash) {
       CompiledPattern(
         original = pattern,
         mode = DirectoryMode,
