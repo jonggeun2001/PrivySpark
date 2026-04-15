@@ -868,7 +868,8 @@ object PrivySparkApp {
     } else if (parallelism <= 1 || tasks.size <= 1) {
       tasks.map(task => task())
     } else {
-      val pool = Executors.newFixedThreadPool(parallelism)
+      val workerCount = math.max(1, math.min(parallelism, tasks.size))
+      val pool = Executors.newFixedThreadPool(workerCount)
       implicit val ec: ExecutionContext = ExecutionContext.fromExecutorService(pool)
       try {
         Await.result(Future.sequence(tasks.map(task => Future(task()))), Duration.Inf)
