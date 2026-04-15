@@ -1,13 +1,12 @@
 package io.github.jonggeun2001.privyspark.config
 
+import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 
+import java.io.{BufferedReader, InputStreamReader}
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Paths}
 import java.util.regex.Pattern
-import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
-import scala.util.Try
 
 final class IgnoreMatcher private (patterns: Seq[IgnoreMatcher.CompiledPattern]) {
   import IgnoreMatcher._
@@ -55,18 +54,31 @@ object IgnoreMatcher {
   private case object DirectoryMode extends MatchMode
 
   def fromSources(inline: Seq[String], file: Option[String]): IgnoreMatcher = {
-    val mergedPatterns = inline.flatMap(normalizePattern) ++ file.toSeq.flatMap(loadIgnoreFile)
+    fromSources(new Configuration(), inline, file)
+  }
+
+  def fromSources(conf: Configuration, inline: Seq[String], file: Option[String]): IgnoreMatcher = {
+    val mergedPatterns = inline.flatMap(normalizePattern) ++ file.toSeq.flatMap(loadIgnoreFile(conf, _))
     new IgnoreMatcher(mergedPatterns.map(compilePattern))
   }
 
-  private def loadIgnoreFile(path: String): Seq[String] = {
-    val nioPath = resolveIgnoreFilePath(path)
-    Files.readAllLines(nioPath, StandardCharsets.UTF_8).asScala.toSeq.flatMap(normalizePattern)
-  }
+  private def loadIgnoreFile(conf: Configuration, path: String): Seq[String] = {
+    val hadoopPath = new Path(Option(path).map(_.trim).getOrElse(""))
+    val fs = hadoopPath.getFileSystem(conf)
+    val reader = new BufferedReader(new InputStreamReader(fs.open(hadoopPath), StandardCharsets.UTF_8))
+    val lines = ArrayBuffer.empty[String]
 
-  private def resolveIgnoreFilePath(path: String): java.nio.file.Path = {
-    val normalized = Option(path).map(_.trim).getOrElse("")
-    Try(Paths.get(new java.net.URI(normalized))).getOrElse(Paths.get(normalized))
+    try {
+      var line = reader.readLine()
+      while (line != null) {
+        lines += line
+        line = reader.readLine()
+      }
+    } finally {
+      reader.close()
+    }
+
+    lines.toSeq.flatMap(normalizePattern)
   }
 
   private def normalizePattern(rawPattern: String): Option[String] = {
@@ -75,8 +87,9 @@ object IgnoreMatcher {
   }
 
   private def compilePattern(pattern: String): CompiledPattern = {
-    val directoryPattern = pattern.endsWith("/")
-    val corePattern = if (directoryPattern) pattern.dropRight(1) else pattern
+    val anchoredPattern = if (pattern.startsWith("/")) pattern.drop(1) else pattern
+    val directoryPattern = anchoredPattern.endsWith("/")
+    val corePattern = if (directoryPattern) anchoredPattern.dropRight(1) else anchoredPattern
     val hasSlash = corePattern.contains("/")
 
     if (directoryPattern && !hasSlash) {

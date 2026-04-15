@@ -21,9 +21,11 @@
 ## Ignore 패턴
 - `/`가 없는 패턴은 basename 기준으로 매칭합니다. 예: `_SUCCESS`, `*.crc`
 - `/`가 있는 패턴은 입력 루트 기준 상대 경로로 매칭합니다. 예: `backup/**`, `logs/2025/*.gz`
+- 선행 `/`는 입력 루트 anchor로 해석합니다. 예: `/backup/**`, `/logs/`
 - `/`로 끝나는 패턴은 디렉터리 매칭으로 간주하고 하위 전체를 제외합니다. 예: `logs/`
 - archive entry도 `<archive>!<entry>` 논리 식별자에서 entry 상대 경로 기준으로 같은 ignore 규칙을 적용합니다.
 - v1 범위에서는 `!pattern` negate 문법을 지원하지 않습니다.
+- `--ignore-file`은 Hadoop `FileSystem`으로 읽습니다. YARN cluster에서 client 로컬 파일을 쓰려면 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 먼저 배포한 뒤 alias 경로를 `--ignore-file`에 넘겨야 합니다.
 
 ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로그, 백업 파일처럼 스캔 가치가 낮은 입력 때문에 불필요한 I/O, 오류 리포트, 결과 노이즈가 늘어나는 것을 막기 위해서입니다.
 

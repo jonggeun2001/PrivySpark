@@ -72,11 +72,22 @@ bin/privyspark-submit \
   --output /abs/output \
   --ignore "_SUCCESS" \
   --ignore "*.crc" \
-  --ignore "backup/**" \
-  --ignore-file /abs/path/scan.ignore
+  --ignore "/backup/**" \
+  --ignore-file scan.ignore
 ```
 
-`--ignore-file` is a UTF-8 text file. Blank lines and `#` comments are ignored.
+For YARN cluster runs, distribute a client-local ignore file first.
+
+```bash
+PRIVYSPARK_SPARK_FILES=/abs/path/scan.ignore#scan.ignore \
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ignore-file scan.ignore
+```
+
+`--ignore-file` is a UTF-8 text file. Blank lines and `#` comments are ignored. HDFS and object-store URIs can also be passed directly.
 
 ## Distributing a Custom Ruleset
 

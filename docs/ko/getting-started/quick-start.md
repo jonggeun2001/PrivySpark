@@ -72,11 +72,22 @@ bin/privyspark-submit \
   --output /abs/output \
   --ignore "_SUCCESS" \
   --ignore "*.crc" \
-  --ignore "backup/**" \
-  --ignore-file /abs/path/scan.ignore
+  --ignore "/backup/**" \
+  --ignore-file scan.ignore
 ```
 
-`--ignore-file`은 UTF-8 텍스트 파일이며, 빈 줄과 `#` 주석을 무시합니다.
+YARN cluster에서 client 로컬 ignore 파일을 쓰려면 먼저 배포해야 합니다.
+
+```bash
+PRIVYSPARK_SPARK_FILES=/abs/path/scan.ignore#scan.ignore \
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ignore-file scan.ignore
+```
+
+`--ignore-file`은 UTF-8 텍스트 파일이며, 빈 줄과 `#` 주석을 무시합니다. HDFS나 object-store URI를 직접 넘기는 것도 가능합니다.
 
 ## 커스텀 ruleset 배포
 

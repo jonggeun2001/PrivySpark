@@ -21,9 +21,11 @@
 ## Ignore Patterns
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`
 - Patterns with `/` match input-root-relative paths. Example: `backup/**`, `logs/2025/*.gz`
+- A leading `/` is treated as an input-root anchor. Example: `/backup/**`, `/logs/`
 - Patterns ending with `/` are treated as directory patterns and exclude the full subtree. Example: `logs/`
 - Archive entries also apply the same rules against the entry-relative logical path under `<archive>!<entry>`.
 - v1 does not support negate patterns such as `!pattern`.
+- `--ignore-file` is read through Hadoop `FileSystem`. In YARN cluster mode, client-local files must be distributed first with `--files` or `PRIVYSPARK_SPARK_FILES`, then referenced through the distributed alias.
 
 The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `.crc`, log dumps, or backup directories do not inflate I/O, error rows, or report noise.
 

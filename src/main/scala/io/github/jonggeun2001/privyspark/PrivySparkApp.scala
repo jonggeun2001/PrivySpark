@@ -918,7 +918,7 @@ object PrivySparkApp {
 
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
     val (preScanParallelism, groupParallelism, fileParallelism) = resolveCliParallelism(config)
-    val ignoreMatcher = IgnoreMatcher.fromSources(config.ignorePatterns, config.ignoreFile)
+    val ignoreMatcher = IgnoreMatcher.fromSources(spark.sparkContext.hadoopConfiguration, config.ignorePatterns, config.ignoreFile)
     logInfo(
       "scan_start",
       "input_path" -> config.inputPath,

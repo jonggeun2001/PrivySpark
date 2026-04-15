@@ -42,4 +42,11 @@ class IgnoreMatcherSpec extends AnyFunSuite {
     assert(matcher.matched("/data/input/logs", "/data/input").isEmpty)
     assert(matcher.matched("/data/input/logs", "/data/input", isDirectory = true).contains("logs/"))
   }
+
+  test("supports root-anchored patterns with a leading slash") {
+    val matcher = IgnoreMatcher.fromSources(Seq("/backup/**", "/logs/"), None)
+
+    assert(matcher.matched("/data/input/backup/old.csv", "/data/input").contains("/backup/**"))
+    assert(matcher.matched("/data/input/logs", "/data/input", isDirectory = true).contains("/logs/"))
+  }
 }
