@@ -6,6 +6,7 @@ import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
 import org.apache.spark.sql.functions.{col, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.catalyst.trees.TreeNode
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
@@ -611,6 +612,82 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(actual == expected)
   }
 
+  test("buildMetrics uses codegen-friendly SQL predicates for driver license detection") {
+    val df = Seq(
+      ("11-12-345678-90"),
+      ("noise")
+    ).toDF("driver_license")
+    val rules = Seq(
+      PiiRule(
+        "driver_license_number",
+        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
+      )
+    )
+
+    val metrics = invokeBuildMetrics(df.columns.toSeq, rules)
+    val predicate = extractMetricPredicate(metrics.head)
+    val expressionClassNames = df
+      .filter(predicate)
+      .queryExecution
+      .analyzed
+      .expressions
+      .toSeq
+      .flatMap(expression => treeNodeClassNames(expression.asInstanceOf[TreeNode[_]]))
+
+    assert(!expressionClassNames.contains("ScalaUDF"), expressionClassNames.mkString(","))
+  }
+
+  test("batched driver license aggregation matches safe legacy fallback") {
+    val df = Seq(
+      ("11-12-345678-90", "서울 07 - 111111 - 10"),
+      ("27-12-345678-90", "부산0711111110"),
+      ("271234567890", "면허번호 서울 07 - 111111 - 10"),
+      ("이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90", "세종 07 - 111111 - 10"),
+      ("noise", "noise")
+    ).toDF("driver_license_partial", "driver_license_full")
+
+    val rules = Seq(
+      PiiRule(
+        "driver_license_number",
+        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
+      ),
+      PiiRule(
+        "driver_license_number",
+        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))",
+        matchType = PiiRuleMatchType.FullColumn,
+        columnHints = Seq("full")
+      )
+    )
+
+    val batched = DetectionAggregator.aggregate(
+      df,
+      rules,
+      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1000)
+    )
+    val fallback = DetectionAggregator.aggregate(
+      df,
+      rules,
+      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
+    )
+
+    assert(sortByKey(batched) == sortByKey(fallback))
+  }
+
+  test("driver license aggregation accepts a later valid regex match after an earlier invalid one") {
+    val df = Seq(
+      "이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90"
+    ).toDF("driver_license")
+
+    val rules = Seq(
+      PiiRule("driver_license_number", "(?:27|11)-[0-9]{2}-[0-9]{6}-[0-9]{2}")
+    )
+
+    val actual = DetectionAggregator.aggregate(df, rules)
+    val expected = Seq(MatchCount("driver_license", "driver_license_number", 1L))
+
+    assert(sortByKey(actual) == sortByKey(expected))
+  }
+
   test("counts Korean region-name driver license numbers for full-column rules") {
     val df = Seq(
       ("서울 07 - 111111 - 10"),
@@ -788,5 +865,19 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       case PiiRuleMatchType.FullColumn => s"\\A(?:${rule.regex})\\z"
       case _ => rule.regex
     }
+  }
+
+  private def invokeBuildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[AnyRef] = {
+    val method = DetectionAggregator.getClass.getDeclaredMethods.find(_.getName == "buildMetrics").get
+    method.setAccessible(true)
+    method.invoke(DetectionAggregator, columns, rules).asInstanceOf[Seq[AnyRef]]
+  }
+
+  private def extractMetricPredicate(metric: AnyRef): org.apache.spark.sql.Column = {
+    metric.getClass.getMethod("predicate").invoke(metric).asInstanceOf[org.apache.spark.sql.Column]
+  }
+
+  private def treeNodeClassNames(node: TreeNode[_]): Seq[String] = {
+    node.getClass.getSimpleName +: node.children.toSeq.flatMap(child => treeNodeClassNames(child.asInstanceOf[TreeNode[_]]))
   }
 }

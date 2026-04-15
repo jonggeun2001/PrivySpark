@@ -5,7 +5,7 @@ import java.util.regex.Pattern
 object DriverLicenseNumberValidator {
   final case class CandidateMatch(candidate: String, start: Int, end: Int)
 
-  private val KoreanRegionNames = Seq(
+  private[privyspark] val KoreanRegionNames = Seq(
     "서울",
     "부산",
     "경기",
@@ -23,14 +23,14 @@ object DriverLicenseNumberValidator {
     "대전",
     "울산"
   )
-  private val KoreanRegionAlternation = KoreanRegionNames.mkString("(?:", "|", ")")
+  private[privyspark] val KoreanRegionAlternation = KoreanRegionNames.mkString("(?:", "|", ")")
   private val CandidatePattern = Pattern.compile(
     s"(?:(?<![0-9])(?:[0-9]{10}|[0-9]{12}|[0-9]{2}-[0-9]{6}-[0-9]{2}|[0-9]{2}-[0-9]{2}-[0-9]{6}-[0-9]{2})(?![0-9])|(?<![가-힣A-Za-z0-9])$KoreanRegionAlternation\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
   )
-  private val CurrentRegionCodes: Set[String] =
+  private[privyspark] val CurrentRegionCodes: Set[String] =
     ((11 to 26).map(code => f"$code%02d") :+ "28").toSet
 
-  private val SupportedNumericFormats = Seq(
+  private[privyspark] val SupportedNumericFormats = Seq(
     "^[0-9]{10}$",
     "^[0-9]{12}$",
     "^[0-9]{2}-[0-9]{6}-[0-9]{2}$",
