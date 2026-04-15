@@ -21,8 +21,8 @@
 ## 처리 플로우
 1. 입력 경로 검증
 2. ruleset 로드와 regex 사전 검증
-3. 물리 파일 수집
-4. archive 엔트리 확장, workbook 시트 확장, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화
+3. 물리 파일 수집과 ignore 패턴 필터
+4. archive 엔트리 확장, workbook 시트 확장, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화, archive entry ignore 필터
 5. `(directory, format)` 기준 1차 그룹화
 6. 대표 파일 기준 스키마 샘플링
 7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
@@ -35,8 +35,9 @@
 14. progress JSONL을 최종 `scan_results`/`scan_errors`로 merge 후 `_progress/<run_id>` 삭제
 
 ## 운영 불변 조건
-- 원문 PII는 저장하지 않습니다.
+- `scan_results`에는 해석용 샘플 값 두 개를 저장합니다. `sample_matched_fragment`는 검출된 조각 그대로이고, `sample_raw_value`는 앞뒤 최대 50자 문맥만 저장합니다.
 - `--pre-scan-parallelism`은 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용합니다.
+- `--ignore`, `--ignore-file`은 물리 파일 수집 직후와 archive entry 확장 단계에서 적용합니다.
 - pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.
 - `--file-sample-ratio`는 batch-capable group scan에만 적용하고, `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.

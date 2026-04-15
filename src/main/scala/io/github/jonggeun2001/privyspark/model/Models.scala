@@ -27,8 +27,10 @@ final case class ScanResult(
   match_count: Long,
   sampled_row_count: Long,
   match_ratio: Double,
-  non_null_match_ratio: Double,
-  confidence: Double
+  non_empty_match_ratio: Double,
+  confidence: Double,
+  sample_raw_value: String,
+  sample_matched_fragment: String
 )
 
 final case class ScanError(

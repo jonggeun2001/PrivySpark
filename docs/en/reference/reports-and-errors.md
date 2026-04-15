@@ -19,8 +19,10 @@ PrivySpark always writes final outputs in both Parquet and CSV. The `_progress` 
 - `match_count`
 - `sampled_row_count`
 - `match_ratio`
-- `non_null_match_ratio`
+- `non_empty_match_ratio`
 - `confidence`
+- `sample_raw_value`
+- `sample_matched_fragment`
 
 ## `file_identifier` Rules
 - The default is the input-relative path.
@@ -36,9 +38,12 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 ## Ratio Fields
 - `match_ratio` is based on sampled rows.
 - `sampled_row_count` is the post-sampling row count that was actually scanned.
-- `non_null_match_ratio` uses only non-null values in the column as its denominator.
+- `non_empty_match_ratio` uses only non-empty values in the column as its denominator.
+- Empty means `null` or a value whose `trim(column)` is blank.
 - `full_column` only changes how `match_count` is computed. The denominator for `match_ratio` and `confidence` still uses sampled row count.
 - `confidence` currently equals `match_ratio`.
+- `sample_matched_fragment` stores one raw fragment that actually matched the regex and validator path.
+- `sample_raw_value` stores only the matched fragment plus up to 50 characters of surrounding context on each side.
 - Both values are rounded to two decimal places.
 
 ## Error Reports
@@ -53,6 +58,8 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 
 The separate progress path serves two purposes: it exposes already completed work during long scans, and it keeps partial results away from the final consumer-facing report locations.
 
-## Security Guarantees
-- Raw PII values are never stored.
-- Only aggregated metadata and error metadata are written.
+## Sample Value Storage Policy
+- `scan_results` stores one raw sample to make each result row easier to interpret.
+- `sample_matched_fragment` keeps the exact detected fragment.
+- `sample_raw_value` keeps only bounded context around that fragment instead of the entire cell.
+- Error reports still contain metadata only.

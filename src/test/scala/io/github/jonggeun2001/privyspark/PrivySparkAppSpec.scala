@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
@@ -201,6 +202,110 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(csvGroups.size == 1)
       assert(csvGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("users_a.csv", "users_b.csv"))
     } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure ignores matching discovered files before pre-scan grouping") {
+    val inputDir = Files.createTempDirectory("privyspark-ignore-plan-")
+    val backupDir = Files.createDirectories(inputDir.resolve("backup"))
+    var plan: PrivySparkApp.DirectoryScanPlan = null
+
+    try {
+      writeText(inputDir.resolve("data.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(inputDir.resolve("_SUCCESS"), "done\n")
+      writeText(backupDir.resolve("old.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          plan = PrivySparkApp.scanDirectoryStructure(
+            spark,
+            inputDir.toString,
+            inputDir.toString,
+            "2026-04-15T00:00:00Z",
+            ignoreMatcher = IgnoreMatcher.fromSources(Seq("_SUCCESS", "backup/**"), None)
+          )
+        }
+      }
+
+      val csvGroups = plan.groups.filter(_.format == "csv")
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 1)
+      assert(csvGroups.size == 1)
+      assert(csvGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("data.csv"))
+      assert(logs.linesIterator.exists(line => line.contains("scan_directory_files_discovered") && line.contains("ignored_files=2")))
+      assert(logs.linesIterator.exists(line => line.contains("scan_directory_file_ignored") && line.contains("pattern=_SUCCESS")))
+      assert(logs.linesIterator.exists(line =>
+        line.contains("scan_directory_file_ignored") &&
+          line.contains("pattern=") &&
+          line.contains("backup/**")
+      ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure ignores a matching single input file before pre-scan") {
+    val inputDir = Files.createTempDirectory("privyspark-ignore-single-file-")
+    val inputFile = inputDir.resolve("_SUCCESS")
+    var plan: PrivySparkApp.DirectoryScanPlan = null
+
+    try {
+      writeText(inputFile, "done\n")
+
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          plan = PrivySparkApp.scanDirectoryStructure(
+            spark,
+            inputFile.toString,
+            inputFile.toString,
+            "2026-04-15T00:00:00Z",
+            ignoreMatcher = IgnoreMatcher.fromSources(Seq("_SUCCESS"), None)
+          )
+        }
+      }
+
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 0)
+      assert(plan.groups.isEmpty)
+      assert(plan.ignoredFiles == 1)
+      assert(logs.linesIterator.exists(line => line.contains("scan_directory_files_discovered") && line.contains("ignored_files=1")))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure prunes ignored directories before descending into them") {
+    val inputDir = Files.createTempDirectory("privyspark-ignore-pruned-directory-")
+    val inputFile = inputDir.resolve("data.csv")
+    val ignoredDir = Files.createDirectories(inputDir.resolve("backup"))
+
+    try {
+      writeText(inputFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      Files.setPosixFilePermissions(ignoredDir, PosixFilePermissions.fromString("---------"))
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-15T00:00:00Z",
+        ignoreMatcher = IgnoreMatcher.fromSources(Seq("backup/"), None)
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 1)
+      assert(plan.ignoredFiles == 1)
+      assert(plan.groups.flatMap(_.filePaths).map(path => new java.io.File(path).getName) == Seq("data.csv"))
+    } finally {
+      if (Files.exists(ignoredDir)) {
+        Files.setPosixFilePermissions(ignoredDir, PosixFilePermissions.fromString("rwx------"))
+      }
       deleteRecursively(inputDir)
     }
   }
@@ -1026,7 +1131,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(results.nonEmpty)
       assert(results.map(result =>
-        (result.file_identifier, result.pii_type, result.match_count, result.match_ratio, result.non_null_match_ratio)
+        (result.file_identifier, result.pii_type, result.match_count, result.match_ratio, result.non_empty_match_ratio)
       ).toSet == Set(
         ("part-0001.json", "email", 1L, 0.33, 0.5),
         ("part-0002.json", "email", 2L, 0.67, 1.0)
@@ -1187,20 +1292,21 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(_.match_ratio).toSet == Set(0.67))
-      assert(results.map(_.non_null_match_ratio).toSet == Set(0.67))
+      assert(results.map(_.non_empty_match_ratio).toSet == Set(0.67))
       assert(results.map(_.confidence).toSet == Set(0.67))
     } finally {
       deleteRecursively(inputDir)
     }
   }
 
-  test("scanWithRules reports non-null match ratio separately from sampled-row match ratio") {
-    val inputDir = Files.createTempDirectory("privyspark-non-null-match-ratio-")
+  test("scanWithRules reports non-empty match ratio separately from sampled-row match ratio") {
+    val inputDir = Files.createTempDirectory("privyspark-non-empty-match-ratio-")
     val timestamp = "2026-04-14T00:00:00Z"
 
     try {
       writeText(inputDir.resolve("customers.json"),
         "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":\"   \"}\n" +
           "{\"email\":null}\n" +
           "{\"email\":\"not-an-email\"}\n" +
           "{\"email\":\"carol@example.com\"}\n" +
@@ -1211,8 +1317,195 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(result =>
-        (result.column_name, result.pii_type, result.match_count, result.sampled_row_count, result.match_ratio, result.non_null_match_ratio, result.confidence)
-      ).toSet == Set(("email", "email", 2L, 5L, 0.4, 0.67, 0.4)))
+        (
+          result.column_name,
+          result.pii_type,
+          result.match_count,
+          result.sampled_row_count,
+          result.match_ratio,
+          result.non_empty_match_ratio,
+          result.confidence,
+          result.sample_raw_value,
+          result.sample_matched_fragment
+        )
+      ).toSet == Set(("email", "email", 2L, 6L, 0.33, 0.67, 0.33, "alice@example.com", "alice@example.com")))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules excludes trim-blank values from value-match counts") {
+    val inputDir = Files.createTempDirectory("privyspark-value-match-blank-filter-")
+    val timestamp = "2026-04-14T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("customers.json"),
+        "{\"email\":\"   \"}\n" +
+          "{\"email\":\"alice@example.com\"}\n" +
+          "{\"email\":null}\n" +
+          "{\"email\":\"not-an-email\"}\n")
+
+      val rules = Seq(PiiRule("blank_or_email", "^\\s*$|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result =>
+        (result.column_name, result.pii_type, result.match_count, result.sampled_row_count, result.match_ratio, result.non_empty_match_ratio)
+      ).toSet == Set(("email", "blank_or_email", 1L, 4L, 0.25, 0.5)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules stores a raw-value snippet and matched fragment for free-form text") {
+    val inputDir = Files.createTempDirectory("privyspark-sample-fragment-")
+    val timestamp = "2026-04-14T00:00:00Z"
+    val prefix = ("A" * 60) + " | "
+    val suffix = " | " + ("B" * 60)
+    val email = "alice@example.com"
+
+    try {
+      writeText(
+        inputDir.resolve("messages.json"),
+        s"""{"note":"$prefix$email$suffix"}""" + "\n"
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.size == 1)
+      assert(results.head.sample_matched_fragment == email)
+      assert(results.head.sample_raw_value == (("A" * 47) + " | " + email + " | " + ("B" * 47)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules stores the validated driver license fragment instead of the whole free-form text") {
+    val inputDir = Files.createTempDirectory("privyspark-driver-license-fragment-")
+    val timestamp = "2026-04-14T00:00:00Z"
+    val value = "면허번호는 서울 07 - 111111 - 10 입니다"
+
+    try {
+      writeText(
+        inputDir.resolve("licenses.json"),
+        s"""{"note":"$value"}""" + "\n"
+      )
+
+      val rules = Seq(PiiRule("driver_license_number", RulesetLoader.load("default").find(_.piiType == "driver_license_number").get.regex))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.size == 1)
+      assert(results.head.sample_matched_fragment == "서울 07 - 111111 - 10")
+      assert(results.head.sample_raw_value == value)
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules keeps distinct samples for duplicate pii-type rules on the same column") {
+    val inputDir = Files.createTempDirectory("privyspark-duplicate-pii-samples-")
+    val timestamp = "2026-04-15T00:00:00Z"
+
+    try {
+      writeText(
+        inputDir.resolve("customers.json"),
+        "{\"email\":\"support@example.com\"}\n" +
+          "{\"email\":\"sales@example.com\"}\n"
+      )
+
+      val rules = Seq(
+        PiiRule("email", "support@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("email", "sales@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+      )
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.size == 2)
+      assert(results.forall(result => result.column_name == "email" && result.pii_type == "email" && result.match_count == 1L))
+      assert(results.map(_.sample_raw_value).toSet == Set("support@example.com", "sales@example.com"))
+      assert(results.map(_.sample_matched_fragment).toSet == Set("support@example.com", "sales@example.com"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile truncates sample_raw_value around the matched fragment") {
+    val inputDir = Files.createTempDirectory("privyspark-file-sample-fragment-")
+    val timestamp = "2026-04-14T00:00:00Z"
+    val prefix = ("A" * 60) + " | "
+    val suffix = " | " + ("B" * 60)
+    val email = "alice@example.com"
+
+    try {
+      val file = inputDir.resolve("messages.json")
+      writeText(file, s"""{"note":"$prefix$email$suffix"}""" + "\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "json",
+        schemaSignature = "note",
+        filePaths = Seq(file.toString)
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 1)
+      assert(results.head.sample_matched_fragment == email)
+      assert(results.head.sample_raw_value == (("A" * 47) + " | " + email + " | " + ("B" * 47)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile keeps distinct samples for duplicate pii-type rules on the same column") {
+    val inputDir = Files.createTempDirectory("privyspark-file-duplicate-pii-samples-")
+    val timestamp = "2026-04-15T00:00:00Z"
+
+    try {
+      val file = inputDir.resolve("customers.json")
+      writeText(
+        file,
+        "{\"email\":\"support@example.com\"}\n" +
+          "{\"email\":\"sales@example.com\"}\n"
+      )
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "json",
+        schemaSignature = "email",
+        filePaths = Seq(file.toString)
+      )
+      val rules = Seq(
+        PiiRule("email", "support@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("email", "sales@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+      )
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 2)
+      assert(results.forall(result => result.column_name == "email" && result.pii_type == "email" && result.match_count == 1L))
+      assert(results.map(_.sample_raw_value).toSet == Set("support@example.com", "sales@example.com"))
+      assert(results.map(_.sample_matched_fragment).toSet == Set("support@example.com", "sales@example.com"))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1478,8 +1771,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanGroupByFile keeps directory-level non-null denominator when some files have zero matches") {
-    val inputDir = Files.createTempDirectory("privyspark-directory-fallback-non-null-")
+  test("scanGroupByFile keeps directory-level non-empty denominator when some files have zero matches") {
+    val inputDir = Files.createTempDirectory("privyspark-directory-fallback-non-empty-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
     val timestamp = "2026-04-14T00:00:00Z"
 
@@ -1510,7 +1803,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(errors.isEmpty)
       assert(results.map(result =>
-        (result.file_identifier, result.column_name, result.match_count, result.match_ratio, result.non_null_match_ratio)
+        (result.file_identifier, result.column_name, result.match_count, result.match_ratio, result.non_empty_match_ratio)
       ).toSet == Set(("users", "email", 1L, 0.5, 0.5)))
     } finally {
       deleteRecursively(inputDir)
@@ -1806,6 +2099,68 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(results.map(_.file_identifier).toSet == Set("users"))
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
         Set(("users", "email", 2L), ("users", "phone", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile merges fallback metrics for reordered parquet columns under one directory identifier") {
+    val inputDir = Files.createTempDirectory("privyspark-fallback-reordered-parquet-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-04-15T00:00:00Z"
+
+    try {
+      import spark.implicits._
+
+      Seq(("alice@example.com", "010-1234-5678"))
+        .toDF("email", "phone")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq(("031-555-7777", "bob@example.com"))
+        .toDF("phone", "email")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      val parquetFileA = findDataFile(leftWriteDir, ".parquet").get
+      val parquetFileB = findDataFile(rightWriteDir, ".parquet").get
+      Files.move(parquetFileA, groupedDir.resolve("part-a.parquet"))
+      Files.move(parquetFileB, groupedDir.resolve("part-b.parquet"))
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "parquet",
+        schemaSignature = "email|phone",
+        filePaths = Seq(
+          groupedDir.resolve("part-a.parquet").toString,
+          groupedDir.resolve("part-b.parquet").toString
+        ),
+        useDirectoryIdentifier = true
+      )
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+      )
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 2)
+      assert(results.map(_.file_identifier).toSet == Set("users"))
+      assert(results.map(result => (result.column_name, result.pii_type, result.match_count)).toSet ==
+        Set(("email", "email", 2L), ("phone", "phone", 2L)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2407,6 +2762,80 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure ignores archive entries under ignored archive subdirectories") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-ignore-entry-")
+    var plan: PrivySparkApp.DirectoryScanPlan = null
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "logs/app.log" -> "ignore me\n",
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n")
+        )
+      )
+
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          plan = PrivySparkApp.scanDirectoryStructure(
+            spark,
+            inputDir.toString,
+            inputDir.toString,
+            "2026-04-15T00:00:00Z",
+            ignoreMatcher = IgnoreMatcher.fromSources(Seq("logs/"), None)
+          )
+        }
+      }
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.ignoredFiles == 1)
+      assert(plan.groups.head.logicalIdentifiersByKey.values.toSeq == Seq("bundle.zip!nested/customers.csv"))
+      assert(logs.linesIterator.exists(line =>
+        line.contains("archive_entry_skipped") &&
+          line.contains("reason=ignored") &&
+          line.contains("entry=") &&
+          line.contains("bundle.zip!logs/app.log")
+      ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure still reports unsafe archive entry paths even when ignore patterns are broad") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-unsafe-ignore-entry-")
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "../secret.csv" ->
+            ("name,email\n" +
+              "mallory,mallory@example.com\n"),
+          "good.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n")
+        )
+      )
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-15T00:00:00Z",
+        ignoreMatcher = IgnoreMatcher.fromSources(Seq("*.csv"), None)
+      )
+
+      assert(plan.groups.isEmpty)
+      assert(plan.errors.map(_.file_identifier) == Seq("bundle.zip!../secret.csv"))
+      assert(plan.errors.head.error_message.contains("Unsafe archive entry path"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules expands archive entries without extensions when parquet magic bytes match") {
     val inputDir = Files.createTempDirectory("privyspark-zip-parquet-magic-fixture-")
     val payloadDir = Files.createTempDirectory("privyspark-zip-parquet-payload-")
@@ -2964,8 +3393,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           match_count = 3L,
           sampled_row_count = 5L,
           match_ratio = 0.6,
-          non_null_match_ratio = 0.75,
-          confidence = 0.6
+          non_empty_match_ratio = 0.75,
+          confidence = 0.6,
+          sample_raw_value = "alice@example.com",
+          sample_matched_fragment = "alice@example.com"
         ),
         ScanResult(
           dataset_path = "/data/input",
@@ -2976,8 +3407,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           match_count = 1L,
           sampled_row_count = 5L,
           match_ratio = 0.2,
-          non_null_match_ratio = 0.25,
-          confidence = 0.2
+          non_empty_match_ratio = 0.25,
+          confidence = 0.2,
+          sample_raw_value = "010-1234-5678",
+          sample_matched_fragment = "010-1234-5678"
         )
       )
 
@@ -2999,7 +3432,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errorCsvDf.count() == 1L)
       assert(resultCsvDf.columns.toSet.contains("file_identifier"))
       assert(resultCsvDf.columns.toSet.contains("sampled_row_count"))
-      assert(resultCsvDf.columns.toSet.contains("non_null_match_ratio"))
+      assert(resultCsvDf.columns.toSet.contains("non_empty_match_ratio"))
+      assert(resultCsvDf.columns.toSet.contains("sample_raw_value"))
+      assert(resultCsvDf.columns.toSet.contains("sample_matched_fragment"))
       assert(errorCsvDf.columns.toSet.contains("error_message"))
       assert(countPartFiles(outputDir.resolve("csv/scan_results")) == 1L)
       assert(countPartFiles(outputDir.resolve("csv/scan_errors")) == 1L)
@@ -3024,8 +3459,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           match_count = 1L,
           sampled_row_count = 1L,
           match_ratio = 1.0,
-          non_null_match_ratio = 1.0,
-          confidence = 1.0
+          non_empty_match_ratio = 1.0,
+          confidence = 1.0,
+          sample_raw_value = "alice@example.com",
+          sample_matched_fragment = "alice@example.com"
         )
       )
 
@@ -3372,12 +3809,19 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(!Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}")))
       val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
       assert(resultCsvDf.count() == 2L)
-      assert(resultCsvDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_null_match_ratio").collect().map { row =>
+      assert(resultCsvDf.columns.toSet.contains("sample_raw_value"))
+      assert(resultCsvDf.columns.toSet.contains("sample_matched_fragment"))
+      assert(resultCsvDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_empty_match_ratio").collect().map { row =>
         (row.getString(0), row.getString(1), row.getString(2), row.getString(3))
       }.toSet == Set(
         ("part-0001.json", "3", "0.33", "0.5"),
         ("part-0002.json", "3", "0.67", "1.0")
       ))
+      assert(resultCsvDf.select("sample_raw_value", "sample_matched_fragment").collect().forall { row =>
+        val rawValue = row.getString(0)
+        val fragment = row.getString(1)
+        rawValue == fragment && fragment.endsWith("@example.com")
+      })
       assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors").count() == 0L)
     } finally {
       deleteRecursively(inputDir)
@@ -3424,8 +3868,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       assert(results.nonEmpty)
       assert(errors.nonEmpty)
-      assert(results.map(result => (result.file_identifier, result.match_ratio, result.non_null_match_ratio)).toSet ==
+      assert(results.map(result => (result.file_identifier, result.match_ratio, result.non_empty_match_ratio)).toSet ==
         Set(("part-0001.json", 0.33, 0.5)))
+      assert(results.forall(result => result.sample_raw_value == "alice@example.com" && result.sample_matched_fragment == "alice@example.com"))
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 1L)
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/errors"), ".jsonl") == 1L)
     } finally {
@@ -3803,7 +4248,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           result.match_count,
           result.sampled_row_count,
           result.match_ratio,
-          result.non_null_match_ratio,
+          result.non_empty_match_ratio,
           result.confidence
         )
       )

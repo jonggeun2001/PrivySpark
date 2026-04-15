@@ -20,7 +20,7 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(rules.exists(_.piiType == "email"))
     assert(rules.exists(_.piiType == "passport_number"))
     assert(driverLicenseRule.nonEmpty)
-    assert(driverLicenseRule.get.regex == "(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|[0-9]{10}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])")
+    assert(driverLicenseRule.get.regex == "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))")
     assert(foreignRegistrationNumberRule.nonEmpty)
     assert(foreignRegistrationNumberRule.get.regex == "(?<![0-9])[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])(?:-[5-8][0-9]{6}|[5-8][0-9]{6})(?![0-9])")
     assert(passportRule.nonEmpty)
@@ -81,7 +81,7 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(!regex.findFirstIn("20251027").nonEmpty)
   }
 
-  test("default driver license rule keeps legacy formats and constrains current regional prefixes") {
+  test("default driver license rule keeps legacy formats, supports Korean region names, and constrains current regional prefixes") {
     val driverLicenseRule = RulesetLoader.load("default").find(_.piiType == "driver_license_number")
     assert(driverLicenseRule.nonEmpty)
 
@@ -89,11 +89,14 @@ class RulesetLoaderSpec extends AnyFunSuite {
     val fullMatchRegex = new Regex(s"\\A(?:${driverLicenseRule.get.regex})\\z").pattern
 
     assert(fullMatchRegex.matcher("12-345678-90").matches())
-    assert(fullMatchRegex.matcher("1234567890").matches())
+    assert(!fullMatchRegex.matcher("1234567890").matches())
     assert(fullMatchRegex.matcher("11-12-345678-90").matches())
     assert(fullMatchRegex.matcher("111234567890").matches())
+    assert(fullMatchRegex.matcher("서울 07 - 111111 - 10").matches())
+    assert(fullMatchRegex.matcher("부산0711111110").matches())
     assert(!fullMatchRegex.matcher("27-12-345678-90").matches())
     assert(!fullMatchRegex.matcher("271234567890").matches())
+    assert(!fullMatchRegex.matcher("세종 07 - 111111 - 10").matches())
     assert(!regex.findFirstIn("1112345678901").nonEmpty)
   }
 
@@ -297,4 +300,5 @@ class RulesetLoaderSpec extends AnyFunSuite {
       RulesetLoader.load("/tmp/does-not-exist-ruleset.yaml")
     }
   }
+
 }
