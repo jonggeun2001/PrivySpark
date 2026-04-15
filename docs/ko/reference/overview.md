@@ -8,6 +8,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 - 지원 포맷은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`입니다.
 - 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 검사하고, 텍스트처럼 보이면 내부 `text` 포맷으로 정규화해 스캔합니다.
 - 바이너리처럼 보이는 미지원 입력만 `Unsupported file format` 오류로 기록합니다.
+- `--ignore`, `--ignore-file`은 파일명 또는 입력 루트 기준 상대 경로로 스캔 제외 대상을 정의합니다.
 
 ## 탐지 모델
 - 탐지는 ruleset 기반 regex와 타입별 strict validator 조합으로 수행합니다.

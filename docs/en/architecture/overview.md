@@ -21,8 +21,8 @@
 ## Processing Flow
 1. validate input path
 2. load ruleset and pre-validate regexes
-3. collect physical files
-4. expand archive entries and workbook sheets, probe magic bytes, normalize text fallback
+3. collect physical files and apply ignore-pattern filtering
+4. expand archive entries and workbook sheets, probe magic bytes, normalize text fallback, and filter ignored archive entries
 5. build first-pass groups by `(directory, format)`
 6. sample a representative file for schema detection
 7. perform schema-aware split and determine whether directory identifiers are safe
@@ -37,6 +37,7 @@
 ## Operational Invariants
 - `scan_results` stores two interpretation aids: `sample_matched_fragment` keeps the detected fragment itself, and `sample_raw_value` keeps only up to 50 characters of surrounding context on each side.
 - `--pre-scan-parallelism` applies to input expansion, format probing, and schema split.
+- `--ignore` and `--ignore-file` apply immediately after physical file discovery and again during archive entry expansion.
 - Effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
 - `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.
 - `--file-sample-ratio` only applies to batch-capable group scans and uniformly samples at least one file using `ceil(fileCount * ratio)`.

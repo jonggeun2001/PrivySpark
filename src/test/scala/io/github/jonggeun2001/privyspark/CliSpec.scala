@@ -18,9 +18,11 @@ class CliSpec extends AnyFunSuite {
     assert(parsed.get.preScanParallelism.isEmpty)
     assert(parsed.get.groupParallelism.isEmpty)
     assert(parsed.get.fileParallelism.isEmpty)
+    assert(parsed.get.ignorePatterns.isEmpty)
+    assert(parsed.get.ignoreFile.isEmpty)
   }
 
-  test("parses optional ruleset, sampling, and parallelism options") {
+  test("parses optional ruleset, sampling, parallelism, and ignore options") {
     val parsed = Cli.parse(
       Array(
         "--path",
@@ -38,7 +40,13 @@ class CliSpec extends AnyFunSuite {
         "--group-parallelism",
         "8",
         "--file-parallelism",
-        "6"
+        "6",
+        "--ignore",
+        "_SUCCESS",
+        "--ignore",
+        "backup/**",
+        "--ignore-file",
+        "/etc/privyspark/ignore.txt"
       )
     )
 
@@ -49,6 +57,8 @@ class CliSpec extends AnyFunSuite {
     assert(parsed.get.preScanParallelism.contains(3))
     assert(parsed.get.groupParallelism.contains(8))
     assert(parsed.get.fileParallelism.contains(6))
+    assert(parsed.get.ignorePatterns == Seq("_SUCCESS", "backup/**"))
+    assert(parsed.get.ignoreFile.contains("/etc/privyspark/ignore.txt"))
   }
 
   test("rejects invalid sampling and parallelism values") {

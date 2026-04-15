@@ -56,10 +56,38 @@ bin/privyspark-submit \
   --file-sample-ratio 0.1 \
   --pre-scan-parallelism 6 \
   --group-parallelism 8 \
-  --file-parallelism 4
+  --file-parallelism 4 \
+  --ignore "_SUCCESS" \
+  --ignore "backup/**"
 ```
 
 When `--file-sample-ratio` is active for a batch-capable group, `--sample-ratio < 1.0` is ignored for that group and a warning is logged. This avoids changing the sampling basis twice.
+
+## Ignore Pattern Example
+
+```bash
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ignore "_SUCCESS" \
+  --ignore "*.crc" \
+  --ignore "/backup/**" \
+  --ignore-file scan.ignore
+```
+
+For YARN cluster runs, distribute a client-local ignore file first.
+
+```bash
+PRIVYSPARK_SPARK_FILES=/abs/path/scan.ignore#scan.ignore \
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ignore-file scan.ignore
+```
+
+`--ignore-file` is a UTF-8 text file. Blank lines and `#` comments are ignored. HDFS and object-store URIs can also be passed directly.
 
 ## Distributing a Custom Ruleset
 

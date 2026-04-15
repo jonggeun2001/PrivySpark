@@ -7,6 +7,7 @@
 - UTF-8 텍스트 안에서 ASCII 정보 구분자(`0x1C`-`0x1F`, 예: RS 구분 파일)가 자주 등장해도 text fallback 입력으로 처리합니다.
 - 바이너리처럼 보이는 입력만 `Unsupported file format`으로 오류 리포트에 기록합니다.
 - 0바이트 physical file은 pre-scan에서 즉시 건너뜁니다.
+- `--ignore`, `--ignore-file` 패턴에 매칭된 physical file은 pre-scan 전에 제외합니다.
 
 이 text fallback을 둔 이유는 확장자만으로 텍스트 로그나 덤프를 배제하면 실제 운영 입력을 지나치게 많이 놓치기 때문입니다. 반대로 아무 바이너리나 텍스트로 강제 처리하면 노이즈가 커지므로, 매직바이트와 UTF-8 probe를 함께 사용해 경계를 분리합니다.
 
@@ -15,6 +16,7 @@
 - archive 확장은 1단계까지만 허용합니다.
 - nested `zip`/`jar` 엔트리는 재귀 처리하지 않고 오류로 남깁니다.
 - 0바이트 archive entry는 staging이나 오류 리포트 없이 건너뜁니다.
+- ignore 패턴에 매칭된 archive entry는 `archive_entry_skipped reason=ignored` 로그만 남기고 staging하지 않습니다.
 - archive 내부 식별자는 `<archive>!<entry>` 형식을 사용합니다.
 
 ## Excel 처리

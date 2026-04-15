@@ -13,7 +13,9 @@ final case class CliConfig(
   fileSampleRatio: Option[Double] = None,
   preScanParallelism: Option[Int] = None,
   groupParallelism: Option[Int] = None,
-  fileParallelism: Option[Int] = None
+  fileParallelism: Option[Int] = None,
+  ignorePatterns: Seq[String] = Seq.empty,
+  ignoreFile: Option[String] = None
 )
 
 private[privyspark] final case class CliParseResult(config: Option[CliConfig], errors: Seq[String])
@@ -81,7 +83,16 @@ object Cli {
           if (value > 0) success
           else failure("file-parallelism must be > 0")
         }
-        .text("파일 폴백 스캔 병렬도(정수 > 0)")
+        .text("파일 폴백 스캔 병렬도(정수 > 0)"),
+      opt[String]("ignore")
+        .unbounded()
+        .optional()
+        .action((value, config) => config.copy(ignorePatterns = config.ignorePatterns :+ value))
+        .text("gitignore 스타일 glob 패턴으로 스캔 대상을 제외"),
+      opt[String]("ignore-file")
+        .optional()
+        .action((value, config) => config.copy(ignoreFile = Some(value)))
+        .text("줄 단위 ignore 패턴 파일 경로")
     )
   }
 

@@ -8,6 +8,7 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 - Supported formats are `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, and `jar`.
 - Files without extensions and unsupported extensions are probed for `parquet`/`orc` magic bytes first. Text-like inputs are normalized into the internal `text` format.
 - Only binary-looking unsupported inputs are recorded as `Unsupported file format`.
+- `--ignore` and `--ignore-file` define scan exclusions by basename or input-root-relative path.
 
 ## Detection Model
 - Detection uses ruleset-based regexes plus strict validators for selected PII types.

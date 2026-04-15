@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
@@ -201,6 +202,110 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(csvGroups.size == 1)
       assert(csvGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("users_a.csv", "users_b.csv"))
     } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure ignores matching discovered files before pre-scan grouping") {
+    val inputDir = Files.createTempDirectory("privyspark-ignore-plan-")
+    val backupDir = Files.createDirectories(inputDir.resolve("backup"))
+    var plan: PrivySparkApp.DirectoryScanPlan = null
+
+    try {
+      writeText(inputDir.resolve("data.csv"),
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(inputDir.resolve("_SUCCESS"), "done\n")
+      writeText(backupDir.resolve("old.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          plan = PrivySparkApp.scanDirectoryStructure(
+            spark,
+            inputDir.toString,
+            inputDir.toString,
+            "2026-04-15T00:00:00Z",
+            ignoreMatcher = IgnoreMatcher.fromSources(Seq("_SUCCESS", "backup/**"), None)
+          )
+        }
+      }
+
+      val csvGroups = plan.groups.filter(_.format == "csv")
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 1)
+      assert(csvGroups.size == 1)
+      assert(csvGroups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("data.csv"))
+      assert(logs.linesIterator.exists(line => line.contains("scan_directory_files_discovered") && line.contains("ignored_files=2")))
+      assert(logs.linesIterator.exists(line => line.contains("scan_directory_file_ignored") && line.contains("pattern=_SUCCESS")))
+      assert(logs.linesIterator.exists(line =>
+        line.contains("scan_directory_file_ignored") &&
+          line.contains("pattern=") &&
+          line.contains("backup/**")
+      ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure ignores a matching single input file before pre-scan") {
+    val inputDir = Files.createTempDirectory("privyspark-ignore-single-file-")
+    val inputFile = inputDir.resolve("_SUCCESS")
+    var plan: PrivySparkApp.DirectoryScanPlan = null
+
+    try {
+      writeText(inputFile, "done\n")
+
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          plan = PrivySparkApp.scanDirectoryStructure(
+            spark,
+            inputFile.toString,
+            inputFile.toString,
+            "2026-04-15T00:00:00Z",
+            ignoreMatcher = IgnoreMatcher.fromSources(Seq("_SUCCESS"), None)
+          )
+        }
+      }
+
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 0)
+      assert(plan.groups.isEmpty)
+      assert(plan.ignoredFiles == 1)
+      assert(logs.linesIterator.exists(line => line.contains("scan_directory_files_discovered") && line.contains("ignored_files=1")))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure prunes ignored directories before descending into them") {
+    val inputDir = Files.createTempDirectory("privyspark-ignore-pruned-directory-")
+    val inputFile = inputDir.resolve("data.csv")
+    val ignoredDir = Files.createDirectories(inputDir.resolve("backup"))
+
+    try {
+      writeText(inputFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      Files.setPosixFilePermissions(ignoredDir, PosixFilePermissions.fromString("---------"))
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-15T00:00:00Z",
+        ignoreMatcher = IgnoreMatcher.fromSources(Seq("backup/"), None)
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 1)
+      assert(plan.ignoredFiles == 1)
+      assert(plan.groups.flatMap(_.filePaths).map(path => new java.io.File(path).getName) == Seq("data.csv"))
+    } finally {
+      if (Files.exists(ignoredDir)) {
+        Files.setPosixFilePermissions(ignoredDir, PosixFilePermissions.fromString("rwx------"))
+      }
       deleteRecursively(inputDir)
     }
   }
@@ -2652,6 +2757,80 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         Set(("bundle.zip!nested/customers.csv", "email", 2L)))
       assert(results.forall(_.dataset_path == inputDir.toString))
       assert(archivePath.endsWith(".zip"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure ignores archive entries under ignored archive subdirectories") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-ignore-entry-")
+    var plan: PrivySparkApp.DirectoryScanPlan = null
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "logs/app.log" -> "ignore me\n",
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n")
+        )
+      )
+
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          plan = PrivySparkApp.scanDirectoryStructure(
+            spark,
+            inputDir.toString,
+            inputDir.toString,
+            "2026-04-15T00:00:00Z",
+            ignoreMatcher = IgnoreMatcher.fromSources(Seq("logs/"), None)
+          )
+        }
+      }
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.ignoredFiles == 1)
+      assert(plan.groups.head.logicalIdentifiersByKey.values.toSeq == Seq("bundle.zip!nested/customers.csv"))
+      assert(logs.linesIterator.exists(line =>
+        line.contains("archive_entry_skipped") &&
+          line.contains("reason=ignored") &&
+          line.contains("entry=") &&
+          line.contains("bundle.zip!logs/app.log")
+      ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure still reports unsafe archive entry paths even when ignore patterns are broad") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-unsafe-ignore-entry-")
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "../secret.csv" ->
+            ("name,email\n" +
+              "mallory,mallory@example.com\n"),
+          "good.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n")
+        )
+      )
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-15T00:00:00Z",
+        ignoreMatcher = IgnoreMatcher.fromSources(Seq("*.csv"), None)
+      )
+
+      assert(plan.groups.isEmpty)
+      assert(plan.errors.map(_.file_identifier) == Seq("bundle.zip!../secret.csv"))
+      assert(plan.errors.head.error_message.contains("Unsafe archive entry path"))
     } finally {
       deleteRecursively(inputDir)
     }
