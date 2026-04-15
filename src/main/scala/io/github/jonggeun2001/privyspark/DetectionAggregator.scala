@@ -36,6 +36,7 @@ object DetectionAggregator {
       .mkString("^(?:", "|", ")$$")
   private val DriverLicenseDigitsOnlySqlRegex = "^[0-9]+$"
   private val DriverLicenseCurrentRegionCodeInts = DriverLicenseNumberValidator.CurrentRegionCodes.toSeq.map(_.toInt)
+  private val SafeSampleFallbackBatchSize = 32
 
   private[privyspark] def resetDebugCache(): Unit = {
     DriverLogger.resetCache()
@@ -496,6 +497,12 @@ object DetectionAggregator {
     }
   }
 
+  private def buildSampleProjectionExpressions(batch: Seq[Metric]): Seq[Column] = {
+    batch.map { metric =>
+      when(metric.predicate, col(metric.columnName).cast(StringType)).as(metric.alias)
+    }
+  }
+
   private def aggregateInBatches(
     sampledDf: DataFrame,
     metrics: Seq[Metric],
@@ -652,16 +659,33 @@ object DetectionAggregator {
     sampledDf: DataFrame,
     metrics: Seq[Metric]
   ): Map[String, String] = {
-    metrics.flatMap { metric =>
-      sampledDf
-        .filter(metric.predicate)
-        .select(col(metric.columnName).cast(StringType))
-        .limit(1)
+    groupMetricsByExpressionBudget(metrics, SafeSampleFallbackBatchSize).foldLeft(Map.empty[String, String]) { (acc, batch) =>
+      val expressions = buildSampleProjectionExpressions(batch)
+      val aliases = batch.map(_.alias).toArray
+      val batchValues = sampledDf
+        .select(expressions: _*)
+        .rdd
+        .mapPartitions { rows =>
+          val partitionValues = scala.collection.mutable.LinkedHashMap.empty[String, String]
+
+          while (rows.hasNext && partitionValues.size < aliases.length) {
+            val row = rows.next()
+            var index = 0
+            while (index < aliases.length && partitionValues.size < aliases.length) {
+              val alias = aliases(index)
+              if (!partitionValues.contains(alias) && !row.isNullAt(index)) {
+                partitionValues += alias -> row.getString(index)
+              }
+              index += 1
+            }
+          }
+
+          Iterator.single(partitionValues.toMap)
+        }
         .collect()
-        .headOption
-        .flatMap(row => Option(row.getAs[String](0)))
-        .map(value => metric.alias -> value)
-    }.toMap
+
+      acc ++ mergeFirstSeenValues(batchValues)
+    }
   }
 
   private def collectSampleRawValuesByFile(
@@ -690,18 +714,16 @@ object DetectionAggregator {
     fileIdentifierColumn: String,
     metrics: Seq[Metric]
   ): Map[(String, String), String] = {
-    metrics.flatMap { metric =>
-      sampledDf
-        .filter(metric.predicate)
-        .groupBy(col(fileIdentifierColumn))
-        .agg(first(col(metric.columnName).cast(StringType), ignoreNulls = true).as(metric.alias))
-        .collect()
-        .flatMap { row =>
-          Option(row.getAs[String](0)).filter(_.nonEmpty).flatMap { fileIdentifier =>
-            Option(row.getAs[String](1)).map(value => (fileIdentifier, metric.alias) -> value)
-          }
-        }
-    }.toMap
+    collectSampleRawValuesByFile(sampledDf, fileIdentifierColumn, metrics, SafeSampleFallbackBatchSize)
+  }
+
+  private def mergeFirstSeenValues[K](batchValues: Seq[Map[K, String]]): Map[K, String] = {
+    batchValues.foldLeft(Map.empty[K, String]) { (acc, current) =>
+      current.foldLeft(acc) {
+        case (innerAcc, (key, value)) =>
+          if (innerAcc.contains(key)) innerAcc else innerAcc + (key -> value)
+      }
+    }
   }
 
   private def buildSampleValuesByAlias(

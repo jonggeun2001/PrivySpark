@@ -16,6 +16,7 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 - `DetectionAggregator` uses batched aggregation instead of one Spark job per metric.
 - `driver_license_number` aggregation stays on Catalyst/codegen-friendly SQL expressions by using `regexp_extract_all` plus SQL validation predicates instead of a Scala UDF.
 - The legacy fallback threshold is raised to `50,000` expressions, and the fallback still uses smaller aggregation batches rather than per-metric counts.
+- Sample raw-value fallback is also batched: dataset-level fallback projects `when(...)` columns in chunks, and file-level fallback groups `first(when(...))` per file in chunks instead of launching one Spark job per metric.
 - `_progress` acts as the final merge source so long scans do not require the driver to retain all result row payloads in memory.
 - Sampled scan paths and final report writes do not use Spark storage caching. This is an intentional trade-off so dynamic allocation can release cached executors more aggressively on YARN.
 
