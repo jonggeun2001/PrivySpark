@@ -1226,25 +1226,26 @@ object PrivySparkApp {
         if (!entry.isDirectory) {
           val normalizedEntryName = normalizeArchiveEntryName(entry.getName)
           val childLogicalIdentifier = s"$logicalIdentifier!$normalizedEntryName"
-          ignoreMatcher.matched(childLogicalIdentifier, datasetPath) match {
-            case Some(pattern) =>
-              logDebug(
-                "archive_entry_skipped",
-                "archive" -> logicalIdentifier,
-                "entry" -> childLogicalIdentifier,
-                "reason" -> "ignored",
-                "pattern" -> pattern
-              )
-            case None if entry.getSize == 0L =>
-              logDebug(
-                "archive_entry_skipped",
-                "archive" -> logicalIdentifier,
-                "entry" -> normalizedEntryName,
-                "reason" -> "zero_byte"
-              )
-            case None =>
-              safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
-                case Some(targetPath) =>
+          if (entry.getSize == 0L) {
+            logDebug(
+              "archive_entry_skipped",
+              "archive" -> logicalIdentifier,
+              "entry" -> normalizedEntryName,
+              "reason" -> "zero_byte"
+            )
+          } else {
+            safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
+              case Some(targetPath) =>
+                ignoreMatcher.matched(childLogicalIdentifier, datasetPath) match {
+                  case Some(pattern) =>
+                    logDebug(
+                      "archive_entry_skipped",
+                      "archive" -> logicalIdentifier,
+                      "entry" -> childLogicalIdentifier,
+                      "reason" -> "ignored",
+                      "pattern" -> pattern
+                    )
+                  case None =>
                   try {
                     FormatDetector.infer(normalizedEntryName) match {
                       case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth >= MaxArchiveExpansionDepth =>
@@ -1443,23 +1444,24 @@ object PrivySparkApp {
                         s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
                       )
                   }
-                case None =>
-                  if (zipInputStream.read() >= 0) {
-                    archiveErrors += ScanError(
-                      datasetPath,
-                      timestamp,
-                      childLogicalIdentifier,
-                      s"Unsafe archive entry path: $normalizedEntryName"
-                    )
-                  } else {
-                    logDebug(
-                      "archive_entry_skipped",
-                      "archive" -> logicalIdentifier,
-                      "entry" -> childLogicalIdentifier,
-                      "reason" -> "zero_byte"
-                    )
-                  }
-              }
+                }
+              case None =>
+                if (zipInputStream.read() >= 0) {
+                  archiveErrors += ScanError(
+                    datasetPath,
+                    timestamp,
+                    childLogicalIdentifier,
+                    s"Unsafe archive entry path: $normalizedEntryName"
+                  )
+                } else {
+                  logDebug(
+                    "archive_entry_skipped",
+                    "archive" -> logicalIdentifier,
+                    "entry" -> childLogicalIdentifier,
+                    "reason" -> "zero_byte"
+                  )
+                }
+            }
           }
         }
         zipInputStream.closeEntry()
@@ -1479,6 +1481,43 @@ object PrivySparkApp {
     }
 
     (extractedEntries.toSeq, archiveErrors.toSeq)
+  }
+
+  private def discoverPhysicalFiles(
+    fs: org.apache.hadoop.fs.FileSystem,
+    rootPath: Path,
+    inputPath: String,
+    ignoreMatcher: IgnoreMatcher
+  ): (Seq[String], Seq[(String, String)]) = {
+    val discoveredFiles = ArrayBuffer.empty[String]
+    val ignoredPaths = ArrayBuffer.empty[(String, String)]
+    val pendingDirectories = scala.collection.mutable.Stack[Path](rootPath)
+
+    while (pendingDirectories.nonEmpty) {
+      val currentDirectory = pendingDirectories.pop()
+      val children = Option(fs.listStatus(currentDirectory)).getOrElse(Array.empty).sortBy(_.getPath.toString)
+
+      children.reverse.foreach { status =>
+        val childPath = status.getPath.toString
+        if (status.isDirectory) {
+          ignoreMatcher.matched(childPath, inputPath, isDirectory = true) match {
+            case Some(pattern) =>
+              ignoredPaths += ((childPath, pattern))
+            case None =>
+              pendingDirectories.push(status.getPath)
+          }
+        } else if (status.isFile) {
+          ignoreMatcher.matched(childPath, inputPath) match {
+            case Some(pattern) =>
+              ignoredPaths += ((childPath, pattern))
+            case None =>
+              discoveredFiles += childPath
+          }
+        }
+      }
+    }
+
+    (discoveredFiles.toSeq.sorted, ignoredPaths.toSeq)
   }
 
   private[privyspark] def scanDirectoryStructure(
@@ -1502,33 +1541,15 @@ object PrivySparkApp {
       }
       val inputPathIsFile = fs.getFileStatus(path).isFile
 
-      val ignoredFiles = ArrayBuffer.empty[(String, String)]
-      val files = if (inputPathIsFile) {
+      val (files, ignoredFiles) = if (inputPathIsFile) {
         ignoreMatcher.matched(path.toString, inputPath) match {
           case Some(pattern) =>
-            ignoredFiles += ((path.toString, pattern))
-            Seq.empty
+            (Seq.empty[String], Seq(path.toString -> pattern))
           case None =>
-            Seq(path.toString)
+            (Seq(path.toString), Seq.empty[(String, String)])
         }
       } else {
-        val iter = fs.listFiles(path, true)
-        val discoveredFiles = ArrayBuffer.empty[String]
-        while (iter.hasNext) {
-          val status = iter.next()
-          if (status.isFile) {
-            discoveredFiles += status.getPath.toString
-          }
-        }
-        discoveredFiles.toSeq.sorted.filter { filePath =>
-          ignoreMatcher.matched(filePath, inputPath) match {
-            case Some(pattern) =>
-              ignoredFiles += ((filePath, pattern))
-              false
-            case None =>
-              true
-          }
-        }
+        discoverPhysicalFiles(fs, path, inputPath, ignoreMatcher)
       }
       ignoredFiles.foreach {
         case (filePath, pattern) =>

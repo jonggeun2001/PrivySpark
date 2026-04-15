@@ -22,7 +22,7 @@ class IgnoreMatcherSpec extends AnyFunSuite {
 
       assert(matcher.matched("/data/input/_SUCCESS", "/data/input").contains("_SUCCESS"))
       assert(matcher.matched("/data/input/backup/old.csv", "/data/input").contains("backup/**"))
-      assert(matcher.matched("/data/input/logs/app.log", "/data/input").contains("logs/"))
+      assert(matcher.matched("/data/input/logs", "/data/input", isDirectory = true).contains("logs/"))
       assert(matcher.matched("/data/input/data.csv", "/data/input").isEmpty)
     } finally {
       Files.deleteIfExists(ignoreFile)
@@ -34,5 +34,12 @@ class IgnoreMatcherSpec extends AnyFunSuite {
 
     assert(matcher.matched("""C:\data\input\backup\old.csv""", """C:\data\input""").contains("backup/**"))
     assert(matcher.matched("bundle.zip!__MACOSX/metadata.txt", "/data/input").contains("__MACOSX/**"))
+  }
+
+  test("directory patterns only match directories") {
+    val matcher = IgnoreMatcher.fromSources(Seq("logs/"), None)
+
+    assert(matcher.matched("/data/input/logs", "/data/input").isEmpty)
+    assert(matcher.matched("/data/input/logs", "/data/input", isDirectory = true).contains("logs/"))
   }
 }
