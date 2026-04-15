@@ -1975,6 +1975,68 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroupByFile merges fallback metrics for reordered parquet columns under one directory identifier") {
+    val inputDir = Files.createTempDirectory("privyspark-fallback-reordered-parquet-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+    val timestamp = "2026-04-15T00:00:00Z"
+
+    try {
+      import spark.implicits._
+
+      Seq(("alice@example.com", "010-1234-5678"))
+        .toDF("email", "phone")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq(("031-555-7777", "bob@example.com"))
+        .toDF("phone", "email")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      val parquetFileA = findDataFile(leftWriteDir, ".parquet").get
+      val parquetFileB = findDataFile(rightWriteDir, ".parquet").get
+      Files.move(parquetFileA, groupedDir.resolve("part-a.parquet"))
+      Files.move(parquetFileB, groupedDir.resolve("part-b.parquet"))
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "parquet",
+        schemaSignature = "email|phone",
+        filePaths = Seq(
+          groupedDir.resolve("part-a.parquet").toString,
+          groupedDir.resolve("part-b.parquet").toString
+        ),
+        useDirectoryIdentifier = true
+      )
+      val rules = Seq(
+        PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+      )
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 2)
+      assert(results.map(_.file_identifier).toSet == Set("users"))
+      assert(results.map(result => (result.column_name, result.pii_type, result.match_count)).toSet ==
+        Set(("email", "email", 2L), ("phone", "phone", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroup resplit preserves file identifiers when directory aggregation was already disabled") {
     val inputDir = Files.createTempDirectory("privyspark-sampled-resplit-no-dir-id-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))

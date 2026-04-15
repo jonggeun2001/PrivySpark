@@ -16,6 +16,7 @@ object DetectionAggregator {
 
   private final case class Metric(
     alias: String,
+    metricKey: String,
     columnName: String,
     piiType: String,
     regex: String,
@@ -312,7 +313,7 @@ object DetectionAggregator {
       val requestedAliases = matchCounts.map(_.metricAlias).filter(_.nonEmpty).toSet
       val metrics = buildMetrics(sampledDf.columns.toSeq, rules).filter { metric =>
         if (requestedAliases.nonEmpty) {
-          requestedAliases.contains(metric.alias)
+          requestedAliases.contains(metric.metricKey)
         } else {
           requestedKeys.contains((metric.columnName, metric.piiType))
         }
@@ -373,7 +374,7 @@ object DetectionAggregator {
       val metrics = buildMetrics(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules)
         .filter { metric =>
           if (requestedMetricAliases.nonEmpty) {
-            requestedMetricAliases.contains(metric.alias)
+            requestedMetricAliases.contains(metric.metricKey)
           } else {
             requestedMetricKeys.contains((metric.columnName, metric.piiType))
           }
@@ -427,6 +428,7 @@ object DetectionAggregator {
               Some(
                 Metric(
                   alias = alias,
+                  metricKey = stableMetricKey(columnName, ruleIndex),
                   columnName = columnName,
                   piiType = rule.piiType,
                   regex = rule.regex,
@@ -466,7 +468,7 @@ object DetectionAggregator {
       batch.zipWithIndex.flatMap {
         case (metric, index) =>
           val count = if (row.isNullAt(index)) 0L else row.getLong(index)
-          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count, metric.alias)) else None
+          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count, metric.metricKey)) else None
       }
     }
   }
@@ -495,7 +497,7 @@ object DetectionAggregator {
   private def aggregateSafeLegacy(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
     metrics.flatMap { metric =>
       val count = sampledDf.filter(metric.predicate).count()
-      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count, metric.alias)) else None
+      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count, metric.metricKey)) else None
     }
   }
 
@@ -518,7 +520,7 @@ object DetectionAggregator {
             case (metric, batchIndex) =>
               val rowIndex = batchIndex + 1
               val count = if (row.isNullAt(rowIndex)) 0L else row.getLong(rowIndex)
-              if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count, metric.alias)) else None
+              if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count, metric.metricKey)) else None
           }
         }
       }
@@ -551,7 +553,7 @@ object DetectionAggregator {
         if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
           None
         } else {
-          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count, metric.alias))
+          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count, metric.metricKey))
         }
       }
     }
@@ -675,7 +677,7 @@ object DetectionAggregator {
     metrics.flatMap { metric =>
       rawValuesByAlias
         .get(metric.alias)
-        .flatMap(rawValue => sampleValue(metric, rawValue).map(metric.alias -> _))
+        .flatMap(rawValue => sampleValue(metric, rawValue).map(metric.metricKey -> _))
     }.toMap
   }
 
@@ -687,13 +689,22 @@ object DetectionAggregator {
     val metricsByAlias = metrics.map(metric => metric.alias -> metric).toMap
 
     rawValuesByFileAlias.flatMap {
-      case (key @ (_, alias), rawValue) if requestedKeys.isEmpty || requestedKeys.contains(key) =>
+      case ((fileIdentifier, alias), rawValue) =>
         metricsByAlias
           .get(alias)
-          .flatMap(metric => sampleValue(metric, rawValue).map(key -> _))
-      case _ =>
-        None
+          .flatMap { metric =>
+            val key = (fileIdentifier, metric.metricKey)
+            if (requestedKeys.isEmpty || requestedKeys.contains(key)) {
+              sampleValue(metric, rawValue).map(key -> _)
+            } else {
+              None
+            }
+          }
     }
+  }
+
+  private def stableMetricKey(columnName: String, ruleIndex: Int): String = {
+    s"$columnName#$ruleIndex"
   }
 
   private def sampleValue(
