@@ -542,6 +542,42 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("inferCsvSchemaSignature reads CSV head lines only once per file") {
+    val partialPath = "partial:///csv-schema-signature-header"
+
+    try {
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(
+        partialPath,
+        "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8)
+      )
+
+      assert(PrivySparkApp.inferCsvSchemaSignature(spark, partialPath) == Right(("name|email", true)))
+      assert(PartialReadFileSystem.openCount(partialPath) == 1)
+    } finally {
+      PartialReadFileSystem.clear()
+    }
+  }
+
+  test("csv head cache reuses detected lines across header helpers") {
+    val partialPath = "partial:///csv-head-cache"
+    val csvHeadCache = new PrivySparkApp.CsvHeadCache()
+
+    try {
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(
+        partialPath,
+        "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8)
+      )
+
+      assert(PrivySparkApp.detectCsvHasHeader(spark, partialPath, csvHeadCache))
+      assert(PrivySparkApp.inferCsvHeaderSignature(spark, partialPath, csvHeadCache) == Right("name|email"))
+      assert(PartialReadFileSystem.openCount(partialPath) == 1)
+    } finally {
+      PartialReadFileSystem.clear()
+    }
+  }
+
   test("detectCsvHasHeader returns true for plain-text headers with common column names") {
     val inputDir = Files.createTempDirectory("privyspark-plain-text-header-csv-")
 
@@ -4313,19 +4349,31 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
 object PartialReadFileSystem {
   private val fileContents = TrieMap.empty[String, Array[Byte]]
+  private val openCounts = TrieMap.empty[String, AtomicInteger]
   private def key(path: String): String = new org.apache.hadoop.fs.Path(path).toUri.getPath
   private def key(path: org.apache.hadoop.fs.Path): String = path.toUri.getPath
 
   def register(path: String, bytes: Array[Byte]): Unit = {
     fileContents.put(key(path), bytes.clone())
+    openCounts.remove(key(path))
+  }
+
+  def openCount(path: String): Int = {
+    openCounts.get(key(path)).map(_.get()).getOrElse(0)
   }
 
   def clear(): Unit = {
     fileContents.clear()
+    openCounts.clear()
   }
 
   private[privyspark] def contents(path: org.apache.hadoop.fs.Path): Array[Byte] = {
     fileContents.getOrElse(key(path), throw new java.io.FileNotFoundException(path.toString))
+  }
+
+  private[privyspark] def recordOpen(path: org.apache.hadoop.fs.Path): Unit = {
+    val normalized = key(path)
+    openCounts.getOrElseUpdate(normalized, new AtomicInteger(0)).incrementAndGet()
   }
 }
 
@@ -4336,6 +4384,7 @@ class PartialReadFileSystem extends org.apache.hadoop.fs.FileSystem {
   override def getUri: URI = fsUri
 
   override def open(path: org.apache.hadoop.fs.Path, bufferSize: Int): org.apache.hadoop.fs.FSDataInputStream = {
+    PartialReadFileSystem.recordOpen(path)
     val bytes = PartialReadFileSystem.contents(path)
     new org.apache.hadoop.fs.FSDataInputStream(new org.apache.hadoop.fs.FSInputStream {
       private var position = 0
