@@ -233,10 +233,12 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val (samples, jobCount) = captureJobCount {
       DetectionAggregator.sampleMatches(df, rules, matchCounts)
     }
+    val emailMatch = matchCounts.find(matchCount => matchCount.columnName == "c_email" && matchCount.piiType == "email").get
+    val phoneMatch = matchCounts.find(matchCount => matchCount.columnName == "c_phone" && matchCount.piiType == "phone").get
 
     assert(jobCount == 2, s"expected two Spark jobs for batched sample extraction, found $jobCount")
-    assert(samples(("c_email", "email")).sampleMatchedFragment == "alpha@example.com")
-    assert(samples(("c_phone", "phone")).sampleMatchedFragment == "010-1234-5678")
+    assert(samples(emailMatch.metricAlias).sampleMatchedFragment == "alpha@example.com")
+    assert(samples(phoneMatch.metricAlias).sampleMatchedFragment == "010-1234-5678")
   }
 
   test("sampleMatches respects aggregation fallback config") {
@@ -255,8 +257,10 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val matchCounts = DetectionAggregator.aggregate(df, rules, config)
     val logs = captureStderr {
       val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts, config)
-      assert(samples(("c_email", "email")).sampleMatchedFragment == "alpha@example.com")
-      assert(samples(("c_phone", "phone")).sampleMatchedFragment == "010-1234-5678")
+      val emailMatch = matchCounts.find(matchCount => matchCount.columnName == "c_email" && matchCount.piiType == "email").get
+      val phoneMatch = matchCounts.find(matchCount => matchCount.columnName == "c_phone" && matchCount.piiType == "phone").get
+      assert(samples(emailMatch.metricAlias).sampleMatchedFragment == "alpha@example.com")
+      assert(samples(phoneMatch.metricAlias).sampleMatchedFragment == "010-1234-5678")
     }
 
     assert(logs.contains("detection_aggregation_fallback"))
@@ -271,9 +275,10 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     val matchCounts = DetectionAggregator.aggregate(df, rules)
     val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
+    val matchCount = matchCounts.head
 
-    assert(samples(("strict_value", "freeform_text")).sampleMatchedFragment == rawValue)
-    assert(samples(("strict_value", "freeform_text")).sampleRawValue == (rawValue.take(50) + "..." + rawValue.takeRight(50)))
+    assert(samples(matchCount.metricAlias).sampleMatchedFragment == rawValue)
+    assert(samples(matchCount.metricAlias).sampleRawValue == (rawValue.take(50) + "..." + rawValue.takeRight(50)))
   }
 
   test("sampleMatches keeps samples when only one duplicate pii-type rule matches for a column") {
@@ -287,7 +292,25 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
 
     assert(matchCounts.size == 1)
-    assert(samples(("customer_email", "email")).sampleMatchedFragment == "alpha@example.com")
+    assert(samples(matchCounts.head.metricAlias).sampleMatchedFragment == "alpha@example.com")
+  }
+
+  test("sampleMatches keeps distinct samples for duplicate pii-type rules on the same column") {
+    val df = Seq(
+      "support@example.com",
+      "sales@example.com"
+    ).toDF("customer_email")
+    val rules = Seq(
+      PiiRule("email", "support@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("email", "sales@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+    )
+
+    val matchCounts = DetectionAggregator.aggregate(df, rules)
+    val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
+
+    assert(matchCounts.size == 2)
+    assert(matchCounts.flatMap(matchCount => samples.get(matchCount.metricAlias).map(_.sampleMatchedFragment)).toSet ==
+      Set("support@example.com", "sales@example.com"))
   }
 
   test("aggregateByFile matches legacy per-file behavior") {
@@ -448,10 +471,16 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val (samples, jobCount) = captureJobCount {
       DetectionAggregator.sampleMatchesByFile(df, "file_id", rules, matchCounts)
     }
+    val alphaEmail = matchCounts.find(matchCount =>
+      matchCount.fileIdentifier == "alpha.csv" && matchCount.columnName == "c_email" && matchCount.piiType == "email"
+    ).get
+    val betaPhone = matchCounts.find(matchCount =>
+      matchCount.fileIdentifier == "beta.csv" && matchCount.columnName == "c_phone" && matchCount.piiType == "phone"
+    ).get
 
     assert(jobCount == 2, s"expected two Spark jobs for batched per-file sample extraction, found $jobCount")
-    assert(samples(("alpha.csv", "c_email", "email")).sampleMatchedFragment == "alpha@example.com")
-    assert(samples(("beta.csv", "c_phone", "phone")).sampleMatchedFragment == "010-9999-8888")
+    assert(samples((alphaEmail.fileIdentifier, alphaEmail.metricAlias)).sampleMatchedFragment == "alpha@example.com")
+    assert(samples((betaPhone.fileIdentifier, betaPhone.metricAlias)).sampleMatchedFragment == "010-9999-8888")
   }
 
   test("sampleMatchesByFile respects aggregation fallback config") {
@@ -470,8 +499,14 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules, config)
     val logs = captureStderr {
       val samples = DetectionAggregator.sampleMatchesByFile(df, "file_id", rules, matchCounts, config)
-      assert(samples(("alpha.csv", "c_email", "email")).sampleMatchedFragment == "alpha@example.com")
-      assert(samples(("beta.csv", "c_phone", "phone")).sampleMatchedFragment == "010-9999-8888")
+      val alphaEmail = matchCounts.find(matchCount =>
+        matchCount.fileIdentifier == "alpha.csv" && matchCount.columnName == "c_email" && matchCount.piiType == "email"
+      ).get
+      val betaPhone = matchCounts.find(matchCount =>
+        matchCount.fileIdentifier == "beta.csv" && matchCount.columnName == "c_phone" && matchCount.piiType == "phone"
+      ).get
+      assert(samples((alphaEmail.fileIdentifier, alphaEmail.metricAlias)).sampleMatchedFragment == "alpha@example.com")
+      assert(samples((betaPhone.fileIdentifier, betaPhone.metricAlias)).sampleMatchedFragment == "010-9999-8888")
     }
 
     assert(logs.contains("detection_aggregation_fallback"))
@@ -502,6 +537,24 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     assert(actual == expected)
+  }
+
+  test("sampleMatchesByFile keeps distinct samples for duplicate pii-type rules on the same column") {
+    val df = Seq(
+      ("alpha.csv", "support@example.com"),
+      ("alpha.csv", "sales@example.com")
+    ).toDF("file_id", "customer_email")
+    val rules = Seq(
+      PiiRule("email", "support@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("email", "sales@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+    )
+
+    val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules)
+    val samples = DetectionAggregator.sampleMatchesByFile(df, "file_id", rules, matchCounts)
+
+    assert(matchCounts.size == 2)
+    assert(matchCounts.flatMap(matchCount => samples.get((matchCount.fileIdentifier, matchCount.metricAlias)).map(_.sampleMatchedFragment)).toSet ==
+      Set("support@example.com", "sales@example.com"))
   }
 
   test("counts driver license numbers only when strict validator accepts the candidate") {
@@ -554,11 +607,15 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   private def sortByKey(values: Seq[MatchCount]): Seq[MatchCount] = {
-    values.sortBy(v => (v.columnName, v.piiType, v.count))
+    values
+      .map(value => value.copy(metricAlias = ""))
+      .sortBy(v => (v.columnName, v.piiType, v.count))
   }
 
   private def sortByFileKey(values: Seq[FileMatchCount]): Seq[FileMatchCount] = {
-    values.sortBy(v => (v.fileIdentifier, v.columnName, v.piiType, v.count))
+    values
+      .map(value => value.copy(metricAlias = ""))
+      .sortBy(v => (v.fileIdentifier, v.columnName, v.piiType, v.count))
   }
 
   private def captureStderr[A](block: => A): String = {

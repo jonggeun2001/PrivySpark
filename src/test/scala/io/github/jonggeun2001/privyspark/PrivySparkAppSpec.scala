@@ -1276,6 +1276,33 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules keeps distinct samples for duplicate pii-type rules on the same column") {
+    val inputDir = Files.createTempDirectory("privyspark-duplicate-pii-samples-")
+    val timestamp = "2026-04-15T00:00:00Z"
+
+    try {
+      writeText(
+        inputDir.resolve("customers.json"),
+        "{\"email\":\"support@example.com\"}\n" +
+          "{\"email\":\"sales@example.com\"}\n"
+      )
+
+      val rules = Seq(
+        PiiRule("email", "support@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("email", "sales@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+      )
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.size == 2)
+      assert(results.forall(result => result.column_name == "email" && result.pii_type == "email" && result.match_count == 1L))
+      assert(results.map(_.sample_raw_value).toSet == Set("support@example.com", "sales@example.com"))
+      assert(results.map(_.sample_matched_fragment).toSet == Set("support@example.com", "sales@example.com"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroupByFile truncates sample_raw_value around the matched fragment") {
     val inputDir = Files.createTempDirectory("privyspark-file-sample-fragment-")
     val timestamp = "2026-04-14T00:00:00Z"
@@ -1308,6 +1335,48 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(results.size == 1)
       assert(results.head.sample_matched_fragment == email)
       assert(results.head.sample_raw_value == (("A" * 47) + " | " + email + " | " + ("B" * 47)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile keeps distinct samples for duplicate pii-type rules on the same column") {
+    val inputDir = Files.createTempDirectory("privyspark-file-duplicate-pii-samples-")
+    val timestamp = "2026-04-15T00:00:00Z"
+
+    try {
+      val file = inputDir.resolve("customers.json")
+      writeText(
+        file,
+        "{\"email\":\"support@example.com\"}\n" +
+          "{\"email\":\"sales@example.com\"}\n"
+      )
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "json",
+        schemaSignature = "email",
+        filePaths = Seq(file.toString)
+      )
+      val rules = Seq(
+        PiiRule("email", "support@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+        PiiRule("email", "sales@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+      )
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 2)
+      assert(results.forall(result => result.column_name == "email" && result.pii_type == "email" && result.match_count == 1L))
+      assert(results.map(_.sample_raw_value).toSet == Set("support@example.com", "sales@example.com"))
+      assert(results.map(_.sample_matched_fragment).toSet == Set("support@example.com", "sales@example.com"))
     } finally {
       deleteRecursively(inputDir)
     }

@@ -9,8 +9,8 @@ import java.util.regex.Pattern
 import scala.util.control.NonFatal
 
 object DetectionAggregator {
-  final case class MatchCount(columnName: String, piiType: String, count: Long)
-  final case class FileMatchCount(fileIdentifier: String, columnName: String, piiType: String, count: Long)
+  final case class MatchCount(columnName: String, piiType: String, count: Long, metricAlias: String = "")
+  final case class FileMatchCount(fileIdentifier: String, columnName: String, piiType: String, count: Long, metricAlias: String = "")
   final case class SampleValue(sampleRawValue: String, sampleMatchedFragment: String)
   final case class AggregationConfig(maxExpressionsPerAgg: Int = 400, legacyFallbackThreshold: Int = 50000)
 
@@ -292,7 +292,7 @@ object DetectionAggregator {
     sampledDf: DataFrame,
     rules: Seq[PiiRule],
     matchCounts: Seq[MatchCount]
-  ): Map[(String, String), SampleValue] = {
+  ): Map[String, SampleValue] = {
     sampleMatches(sampledDf, rules, matchCounts, AggregationConfig())
   }
 
@@ -301,7 +301,7 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[MatchCount],
     config: AggregationConfig
-  ): Map[(String, String), SampleValue] = {
+  ): Map[String, SampleValue] = {
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
     require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
 
@@ -309,7 +309,14 @@ object DetectionAggregator {
       Map.empty
     } else {
       val requestedKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
-      val metrics = buildMetrics(sampledDf.columns.toSeq, rules).filter(metric => requestedKeys.contains((metric.columnName, metric.piiType)))
+      val requestedAliases = matchCounts.map(_.metricAlias).filter(_.nonEmpty).toSet
+      val metrics = buildMetrics(sampledDf.columns.toSeq, rules).filter { metric =>
+        if (requestedAliases.nonEmpty) {
+          requestedAliases.contains(metric.alias)
+        } else {
+          requestedKeys.contains((metric.columnName, metric.piiType))
+        }
+      }
       val expressionCount = totalExpressionCount(metrics)
       val rawValues =
         if (expressionCount > config.legacyFallbackThreshold) {
@@ -330,7 +337,7 @@ object DetectionAggregator {
           }
         }
 
-      buildSampleValuesByKey(metrics, rawValues, "dataset_sample")
+      buildSampleValuesByAlias(metrics, rawValues)
     }
   }
 
@@ -339,7 +346,7 @@ object DetectionAggregator {
     fileIdentifierColumn: String,
     rules: Seq[PiiRule],
     matchCounts: Seq[FileMatchCount]
-  ): Map[(String, String, String), SampleValue] = {
+  ): Map[(String, String), SampleValue] = {
     sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, AggregationConfig())
   }
 
@@ -349,7 +356,7 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[FileMatchCount],
     config: AggregationConfig
-  ): Map[(String, String, String), SampleValue] = {
+  ): Map[(String, String), SampleValue] = {
     require(fileIdentifierColumn.nonEmpty, "fileIdentifierColumn must not be empty")
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
     require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
@@ -357,12 +364,20 @@ object DetectionAggregator {
     if (matchCounts.isEmpty) {
       Map.empty
     } else {
+      val requestedAliases = matchCounts
+        .map(matchCount => (matchCount.fileIdentifier, matchCount.metricAlias))
+        .filter(_._2.nonEmpty)
+        .toSet
       val requestedMetricKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
-      val requestedKeys = matchCounts.map(matchCount =>
-        (matchCount.fileIdentifier, matchCount.columnName, matchCount.piiType)
-      ).toSet
+      val requestedMetricAliases = requestedAliases.map(_._2)
       val metrics = buildMetrics(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules)
-        .filter(metric => requestedMetricKeys.contains((metric.columnName, metric.piiType)))
+        .filter { metric =>
+          if (requestedMetricAliases.nonEmpty) {
+            requestedMetricAliases.contains(metric.alias)
+          } else {
+            requestedMetricKeys.contains((metric.columnName, metric.piiType))
+          }
+        }
       val expressionCount = totalExpressionCount(metrics)
       val rawValues =
         if (expressionCount > config.legacyFallbackThreshold) {
@@ -383,7 +398,7 @@ object DetectionAggregator {
           }
         }
 
-      buildSampleValuesByFileKey(metrics, rawValues, requestedKeys, "file_sample")
+      buildSampleValuesByFileAlias(metrics, rawValues, requestedAliases)
     }
   }
 
@@ -451,7 +466,7 @@ object DetectionAggregator {
       batch.zipWithIndex.flatMap {
         case (metric, index) =>
           val count = if (row.isNullAt(index)) 0L else row.getLong(index)
-          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+          if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count, metric.alias)) else None
       }
     }
   }
@@ -480,7 +495,7 @@ object DetectionAggregator {
   private def aggregateSafeLegacy(sampledDf: DataFrame, metrics: Seq[Metric]): Seq[MatchCount] = {
     metrics.flatMap { metric =>
       val count = sampledDf.filter(metric.predicate).count()
-      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count)) else None
+      if (count > 0L) Some(MatchCount(metric.columnName, metric.piiType, count, metric.alias)) else None
     }
   }
 
@@ -503,7 +518,7 @@ object DetectionAggregator {
             case (metric, batchIndex) =>
               val rowIndex = batchIndex + 1
               val count = if (row.isNullAt(rowIndex)) 0L else row.getLong(rowIndex)
-              if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count)) else None
+              if (count > 0L) Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count, metric.alias)) else None
           }
         }
       }
@@ -536,7 +551,7 @@ object DetectionAggregator {
         if (fileIdentifier == null || fileIdentifier.isEmpty || count <= 0L) {
           None
         } else {
-          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count))
+          Some(FileMatchCount(fileIdentifier, metric.columnName, metric.piiType, count, metric.alias))
         }
       }
     }
@@ -653,69 +668,31 @@ object DetectionAggregator {
     }.toMap
   }
 
-  private def buildSampleValuesByKey(
+  private def buildSampleValuesByAlias(
     metrics: Seq[Metric],
-    rawValuesByAlias: Map[String, String],
-    scope: String
-  ): Map[(String, String), SampleValue] = {
-    val matchedMetrics = metrics.flatMap { metric =>
-      rawValuesByAlias.get(metric.alias).map(rawValue => ((metric.columnName, metric.piiType), metric, rawValue))
-    }
-    val ambiguousKeys = matchedMetrics
-      .groupBy(_._1)
-      .collect {
-        case ((columnName, piiType), values) if values.size > 1 => s"$columnName/$piiType"
-      }
-      .toSeq
-      .sorted
-    if (ambiguousKeys.nonEmpty) {
-      logSampleConflict(scope, ambiguousKeys)
-    }
-
-    matchedMetrics.foldLeft(Map.empty[(String, String), SampleValue]) {
-      case (acc, (key, _, _)) if acc.contains(key) => acc
-      case (acc, (key, metric, rawValue)) =>
-        sampleValue(metric, rawValue).map(value => acc + (key -> value)).getOrElse(acc)
-    }
+    rawValuesByAlias: Map[String, String]
+  ): Map[String, SampleValue] = {
+    metrics.flatMap { metric =>
+      rawValuesByAlias
+        .get(metric.alias)
+        .flatMap(rawValue => sampleValue(metric, rawValue).map(metric.alias -> _))
+    }.toMap
   }
 
-  private def buildSampleValuesByFileKey(
+  private def buildSampleValuesByFileAlias(
     metrics: Seq[Metric],
     rawValuesByFileAlias: Map[(String, String), String],
-    requestedKeys: Set[(String, String, String)],
-    scope: String
-  ): Map[(String, String, String), SampleValue] = {
-    val rawValuesByAlias = rawValuesByFileAlias.toSeq
-      .groupBy(_._1._2)
-      .map {
-        case (alias, values) =>
-          alias -> values
-            .map { case ((fileIdentifier, _), rawValue) => fileIdentifier -> rawValue }
-            .sortBy(_._1)
-      }
-    val matchedMetrics = metrics.flatMap { metric =>
-      rawValuesByAlias.getOrElse(metric.alias, Seq.empty).flatMap {
-        case (fileIdentifier, rawValue) =>
-          val key = (fileIdentifier, metric.columnName, metric.piiType)
-          if (requestedKeys.contains(key)) Some((key, metric, rawValue)) else None
-      }
-    }
-    val ambiguousKeys = matchedMetrics
-      .groupBy(_._1)
-      .collect {
-        case ((fileIdentifier, columnName, piiType), values) if values.size > 1 =>
-          s"$fileIdentifier/$columnName/$piiType"
-      }
-      .toSeq
-      .sorted
-    if (ambiguousKeys.nonEmpty) {
-      logSampleConflict(scope, ambiguousKeys)
-    }
+    requestedKeys: Set[(String, String)]
+  ): Map[(String, String), SampleValue] = {
+    val metricsByAlias = metrics.map(metric => metric.alias -> metric).toMap
 
-    matchedMetrics.foldLeft(Map.empty[(String, String, String), SampleValue]) {
-      case (acc, (key, _, _)) if acc.contains(key) => acc
-      case (acc, (key, metric, rawValue)) =>
-        sampleValue(metric, rawValue).map(value => acc + (key -> value)).getOrElse(acc)
+    rawValuesByFileAlias.flatMap {
+      case (key @ (_, alias), rawValue) if requestedKeys.isEmpty || requestedKeys.contains(key) =>
+        metricsByAlias
+          .get(alias)
+          .flatMap(metric => sampleValue(metric, rawValue).map(key -> _))
+      case _ =>
+        None
     }
   }
 

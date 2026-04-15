@@ -68,7 +68,7 @@ object PrivySparkApp {
     sampledRowCount: Long,
     nonNullValueCounts: Map[String, Long],
     matchCounts: Seq[MatchCount],
-    sampleValues: Map[(String, String), DetectionAggregator.SampleValue]
+    sampleValues: Map[String, DetectionAggregator.SampleValue]
   )
   private final case class ProbeSample(bytes: Array[Byte], truncated: Boolean)
   private final case class PreScanFileOutcome(
@@ -648,7 +648,7 @@ object PrivySparkApp {
     sampledRowCount: Long,
     nonNullValueCounts: Map[String, Long],
     matchCounts: Seq[MatchCount],
-    sampleValues: Map[(String, String), DetectionAggregator.SampleValue] = Map.empty
+    sampleValues: Map[String, DetectionAggregator.SampleValue] = Map.empty
   ): Seq[ScanResult] = {
     if (sampledRowCount <= 0L) {
       Seq.empty
@@ -657,7 +657,7 @@ object PrivySparkApp {
         val matchRatio = roundProbability(matchCount.count.toDouble / sampledRowCount.toDouble)
         val nonNullDenominator = nonNullValueCounts.get(matchCount.columnName).filter(_ > 0L).getOrElse(sampledRowCount)
         val nonNullMatchRatio = roundProbability(matchCount.count.toDouble / nonNullDenominator.toDouble)
-        val sampleValue = sampleValues.get((matchCount.columnName, matchCount.piiType))
+        val sampleValue = sampleValues.get(matchCount.metricAlias)
         ScanResult(
           dataset_path = datasetPath,
           scan_timestamp = timestamp,
@@ -2497,12 +2497,12 @@ object PrivySparkApp {
       val sampledRowCount = successfulFileMetrics.map(_.sampledRowCount).sum
       val aggregatedMatchCounts = successfulFileMetrics
         .flatMap(_.matchCounts)
-        .groupBy(matchCount => (matchCount.columnName, matchCount.piiType))
+        .groupBy(matchCount => (matchCount.metricAlias, matchCount.columnName, matchCount.piiType))
         .toSeq
-        .sortBy { case ((columnName, piiType), _) => (columnName, piiType) }
+        .sortBy { case ((metricAlias, columnName, piiType), _) => (columnName, piiType, metricAlias) }
         .map {
-          case ((columnName, piiType), matchCounts) =>
-            MatchCount(columnName, piiType, matchCounts.map(_.count).sum)
+          case ((metricAlias, columnName, piiType), matchCounts) =>
+            MatchCount(columnName, piiType, matchCounts.map(_.count).sum, metricAlias)
         }
 
       buildScanResults(
@@ -2522,7 +2522,7 @@ object PrivySparkApp {
           .flatMap(_.sampleValues.toSeq)
           .groupBy(_._1)
           .map {
-            case (key, values) => key -> values.head._2
+            case (metricAlias, values) => metricAlias -> values.head._2
           }
           .toMap
       )
@@ -2733,10 +2733,10 @@ object PrivySparkApp {
                   resolveLogicalIdentifierForPhysicalPath(group, datasetPath, matchCount.fileIdentifier),
                   sampledRowCount,
                   Map(matchCount.columnName -> nonNullCountsByFile.getOrElse((matchCount.fileIdentifier, matchCount.columnName), sampledRowCount)),
-                  Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count)),
+                  Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count, matchCount.metricAlias)),
                   sampleValuesByFile
-                    .get((matchCount.fileIdentifier, matchCount.columnName, matchCount.piiType))
-                    .map(value => Map((matchCount.columnName, matchCount.piiType) -> value))
+                    .get((matchCount.fileIdentifier, matchCount.metricAlias))
+                    .map(value => Map(matchCount.metricAlias -> value))
                     .getOrElse(Map.empty)
                 ).headOption
               }
