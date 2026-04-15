@@ -751,6 +751,33 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure treats extensionless CSV-with-RS-delimiter files as text inputs") {
+    val inputDir = Files.createTempDirectory("privyspark-extensionless-rs-text-")
+
+    try {
+      writeText(
+        inputDir.resolve("records"),
+        "email\u001ephone\n" +
+          "alice@example.com\u001e010-1234-5678\n"
+      )
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-15T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "text")
+      assert(!plan.groups.head.useDirectoryIdentifier)
+      assert(plan.groups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("records"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure records extensionless probe read failures as file errors") {
     val inputDir = Files.createTempDirectory("privyspark-extensionless-probe-failure-")
     val unreadableFile = inputDir.resolve("locked")
