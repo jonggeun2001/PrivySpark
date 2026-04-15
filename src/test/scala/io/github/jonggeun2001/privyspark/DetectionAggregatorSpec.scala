@@ -314,6 +314,32 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       Set("support@example.com", "sales@example.com"))
   }
 
+  test("safe dataset sample fallback batches raw value collection") {
+    val df = spark.sparkContext.parallelize(Seq(
+      ("alpha@example.com", "010-1234-5678", "noise", "noise"),
+      ("noise", "noise", "beta@example.com", "010-9999-8888"),
+      ("gamma@example.com", "010-2222-3333", "delta@example.com", "010-4444-5555"),
+      ("noise", "noise", "noise", "noise")
+    ), 2).toDF("email_1", "phone_1", "email_2", "phone_2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val (rawValues, jobCount) = captureJobCount {
+      invokeDatasetSafeRawCollector(df, rules)
+    }
+
+    assert(jobCount == 1, s"expected one Spark job for batched dataset safe sample collection, found $jobCount")
+    assert(rawValues == Map(
+      "m_0_0" -> "alpha@example.com",
+      "m_1_1" -> "010-1234-5678",
+      "m_2_0" -> "beta@example.com",
+      "m_3_1" -> "010-9999-8888"
+    ))
+  }
+
   test("aggregateByFile matches legacy per-file behavior") {
     val df = Seq(
       ("alpha.csv", "alpha@example.com", "010-1234-5678"),
@@ -515,6 +541,46 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("metric_threshold_exceeded(1)"))
   }
 
+  test("sampleMatchesByFile recovers with safe fallback when batched file sample extraction fails") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("alpha.csv", "noise", "none"),
+      ("beta.csv", "beta@example.com", "010-9999-8888")
+    ).toDF("file_id", "c_email", "c_phone")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules)
+    val logs = captureStderr {
+      val samples = DetectionAggregator.withForcedFileSampleBatchFailure {
+        DetectionAggregator.sampleMatchesByFile(
+          df,
+          "file_id",
+          rules,
+          matchCounts,
+          AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
+        )
+      }
+
+      val alphaEmail = matchCounts.find(matchCount =>
+        matchCount.fileIdentifier == "alpha.csv" && matchCount.columnName == "c_email" && matchCount.piiType == "email"
+      ).get
+      val betaPhone = matchCounts.find(matchCount =>
+        matchCount.fileIdentifier == "beta.csv" && matchCount.columnName == "c_phone" && matchCount.piiType == "phone"
+      ).get
+
+      assert(samples((alphaEmail.fileIdentifier, alphaEmail.metricAlias)).sampleMatchedFragment == "alpha@example.com")
+      assert(samples((betaPhone.fileIdentifier, betaPhone.metricAlias)).sampleMatchedFragment == "010-9999-8888")
+    }
+
+    assert(logs.contains("detection_aggregation_fallback"))
+    assert(logs.contains("scope=file_sample"))
+    assert(logs.contains("forced-file-sample-batch-failure"))
+  }
+
   test("counts only full-value matches per file for full-column rules") {
     val df = Seq(
       ("alpha.csv", "alpha@example.com"),
@@ -556,6 +622,35 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(matchCounts.size == 2)
     assert(matchCounts.flatMap(matchCount => samples.get((matchCount.fileIdentifier, matchCount.metricAlias)).map(_.sampleMatchedFragment)).toSet ==
       Set("support@example.com", "sales@example.com"))
+  }
+
+  test("safe file sample fallback batches raw value collection") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678", "beta@example.com", "010-2222-3333"),
+      ("beta.csv", "gamma@example.com", "010-9999-8888", "delta@example.com", "010-4444-5555"),
+      ("gamma.csv", "noise", "noise", "noise", "noise")
+    ).toDF("file_id", "email_1", "phone_1", "email_2", "phone_2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val (rawValues, jobCount) = captureJobCount {
+      invokeFileSafeRawCollector(df, "file_id", rules)
+    }
+
+    assert(jobCount == 2, s"expected two Spark jobs for batched file safe sample collection, found $jobCount")
+    assert(rawValues == Map(
+      ("alpha.csv", "m_0_0") -> "alpha@example.com",
+      ("alpha.csv", "m_1_1") -> "010-1234-5678",
+      ("alpha.csv", "m_2_0") -> "beta@example.com",
+      ("alpha.csv", "m_3_1") -> "010-2222-3333",
+      ("beta.csv", "m_0_0") -> "gamma@example.com",
+      ("beta.csv", "m_1_1") -> "010-9999-8888",
+      ("beta.csv", "m_2_0") -> "delta@example.com",
+      ("beta.csv", "m_3_1") -> "010-4444-5555"
+    ))
   }
 
   test("sampleMatches keeps driver license samples aligned with the matched regex fragment") {
@@ -773,6 +868,47 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       DetectionAggregator.resetDebugCache()
       DriverLogger.resetCache()
     }
+  }
+
+  private def invokeDatasetSafeRawCollector(df: DataFrame, rules: Seq[PiiRule]): Map[String, String] = {
+    val metrics = invokeDetectionAggregatorPrivateMethod(
+      "buildMetrics",
+      df.columns.toSeq,
+      rules
+    )
+
+    invokeDetectionAggregatorPrivateMethod(
+      "collectSampleRawValuesSafely",
+      df,
+      metrics
+    ).asInstanceOf[Map[String, String]]
+  }
+
+  private def invokeFileSafeRawCollector(
+    df: DataFrame,
+    fileIdentifierColumn: String,
+    rules: Seq[PiiRule]
+  ): Map[(String, String), String] = {
+    val metrics = invokeDetectionAggregatorPrivateMethod(
+      "buildMetrics",
+      df.columns.toSeq.filterNot(_ == fileIdentifierColumn),
+      rules
+    )
+
+    invokeDetectionAggregatorPrivateMethod(
+      "collectSampleRawValuesByFileSafely",
+      df,
+      fileIdentifierColumn,
+      metrics
+    ).asInstanceOf[Map[(String, String), String]]
+  }
+
+  private def invokeDetectionAggregatorPrivateMethod(methodName: String, args: AnyRef*): AnyRef = {
+    val method = DetectionAggregator.getClass.getDeclaredMethods
+      .find(candidate => candidate.getName == methodName && candidate.getParameterCount == args.size)
+      .getOrElse(fail(s"unable to find DetectionAggregator private method: $methodName/${args.size}"))
+    method.setAccessible(true)
+    method.invoke(DetectionAggregator, args: _*)
   }
 
   private def legacyCounts(df: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {

@@ -16,6 +16,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - `DetectionAggregator`는 메트릭별 개별 job 대신 batched aggregation을 기본 경로로 사용합니다.
 - `driver_license_number` 집계는 Scala UDF 대신 `regexp_extract_all` + SQL 조건식으로 내려가 Catalyst/codegen 경로를 유지합니다.
 - legacy fallback threshold는 `50,000` 표현식으로 올려져 있고, 초과 시에도 메트릭당 개별 count 대신 소배치 집계를 사용합니다.
+- sample raw-value fallback도 배치화되어 있습니다. dataset 경로는 `when(...)` projection을 chunk 단위로 처리하고, file 경로는 파일별 `first(when(...))` 집계를 chunk 단위로 묶어서 메트릭마다 Spark job을 따로 내지 않습니다.
 - `_progress`를 최종 집계 소스로 사용해 long scan에서 driver가 모든 결과 row payload를 끝까지 들고 있지 않도록 합니다.
 - sampled scan과 최종 리포트 저장 경로는 Spark storage cache를 사용하지 않습니다. dynamic allocation 환경에서 cached executor가 YARN 자원을 오래 점유하지 않게 하기 위한 선택입니다.
 
