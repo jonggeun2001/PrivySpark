@@ -6,6 +6,7 @@
 - If magic bytes do not match but the content looks like UTF-8 text, the input is normalized into the internal `text` format and scanned through Spark's single-column `text` reader.
 - Only binary-looking unsupported inputs are recorded as `Unsupported file format`.
 - Zero-byte physical files are skipped during pre-scan.
+- Physical files matching `--ignore` or `--ignore-file` patterns are excluded before pre-scan.
 
 The text fallback exists because extension-based filtering alone would reject too many real-world log and dump files. At the same time, forcing every unknown binary into text mode would create noise, so PrivySpark separates those cases with magic-byte checks plus UTF-8 probing.
 
@@ -14,6 +15,7 @@ The text fallback exists because extension-based filtering alone would reject to
 - Archive expansion is limited to one level.
 - Nested `zip`/`jar` entries are rejected instead of recursively expanded.
 - Zero-byte archive entries are skipped without staging or error rows.
+- Archive entries matching ignore patterns are logged as `archive_entry_skipped reason=ignored` and are not staged.
 - Archive identifiers use the `<archive>!<entry>` format.
 
 ## Excel Handling

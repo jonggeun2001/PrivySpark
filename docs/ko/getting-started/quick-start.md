@@ -56,10 +56,27 @@ bin/privyspark-submit \
   --file-sample-ratio 0.1 \
   --pre-scan-parallelism 6 \
   --group-parallelism 8 \
-  --file-parallelism 4
+  --file-parallelism 4 \
+  --ignore "_SUCCESS" \
+  --ignore "backup/**"
 ```
 
 `--file-sample-ratio`가 batch-capable group scan에 적용되면 `--sample-ratio < 1.0`은 해당 그룹에서 무시되고 warning 로그가 남습니다. 이유는 파일 샘플링 후 다시 row sampling을 적용하면 샘플 기준이 이중으로 바뀌어 결과 해석이 불명확해지기 때문입니다.
+
+## ignore 패턴 예시
+
+```bash
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ignore "_SUCCESS" \
+  --ignore "*.crc" \
+  --ignore "backup/**" \
+  --ignore-file /abs/path/scan.ignore
+```
+
+`--ignore-file`은 UTF-8 텍스트 파일이며, 빈 줄과 `#` 주석을 무시합니다.
 
 ## 커스텀 ruleset 배포
 

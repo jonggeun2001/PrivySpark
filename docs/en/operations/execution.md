@@ -15,6 +15,17 @@
 - `--pre-scan-parallelism <INT>`: parallelism for file pre-scan expansion and schema split, `> 0`
 - `--group-parallelism <INT>`: group scan parallelism, `> 0`
 - `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
+- `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
+- `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
+
+## Ignore Patterns
+- Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`
+- Patterns with `/` match input-root-relative paths. Example: `backup/**`, `logs/2025/*.gz`
+- Patterns ending with `/` are treated as directory patterns and exclude the full subtree. Example: `logs/`
+- Archive entries also apply the same rules against the entry-relative logical path under `<archive>!<entry>`.
+- v1 does not support negate patterns such as `!pattern`.
+
+The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `.crc`, log dumps, or backup directories do not inflate I/O, error rows, or report noise.
 
 ## Parallelism
 - CLI values are passed directly into application logic.
@@ -42,6 +53,8 @@ Uniform random file sampling was chosen because the operational concern was file
 - Log format: `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...`
 
 `info` exposes high-level lifecycle events such as `scan_start`, `scan_plan_ready`, and `scan_complete`. `debug` adds detailed events for file discovery, pre-scan execution, grouping, and `_progress` lifecycle.
+
+When ignore rules apply, events such as `scan_directory_file_ignored` and `archive_entry_skipped reason=ignored` are emitted, and `ignored_files` is included in `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, and `scan_complete`.
 
 ## `_progress` Handling
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
