@@ -27,7 +27,9 @@ object DetectionAggregator {
   }
   private final case class ExtractedMatch(fragment: String, start: Int, end: Int)
   private val LegacyFallbackBatchSize = 50
-  private val DriverLicenseValidatorUdf = udf((value: String) => DriverLicenseNumberValidator.containsValidCandidate(value))
+  private val DriverLicenseMatchUdf = udf((value: String, regex: String, matchType: String) =>
+    extractDriverLicenseMatch(value, regex, matchType).nonEmpty
+  )
 
   private[privyspark] def resetDebugCache(): Unit = {
     DriverLogger.resetCache()
@@ -416,10 +418,13 @@ object DetectionAggregator {
               val alias = s"m_${columnIndex}_${ruleIndex}"
               val valueColumn = col(columnName).cast(StringType)
               val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
-              val validatorPredicate = builtInValidatorPredicate(rule, valueColumn)
-              val matchPredicate = rule.matchType match {
-                case PiiRuleMatchType.FullColumn => valueColumn.rlike(fullMatchRegex(rule.regex)) && validatorPredicate
-                case _ => valueColumn.rlike(rule.regex) && validatorPredicate
+              val matchPredicate = rule.piiType match {
+                case "driver_license_number" => DriverLicenseMatchUdf(valueColumn, lit(rule.regex), lit(rule.matchType))
+                case _ =>
+                  rule.matchType match {
+                    case PiiRuleMatchType.FullColumn => valueColumn.rlike(fullMatchRegex(rule.regex))
+                    case _ => valueColumn.rlike(rule.regex)
+                  }
               }
               val predicate = rule.matchType match {
                 case PiiRuleMatchType.FullColumn => presentValuePredicate && matchPredicate
@@ -565,13 +570,6 @@ object DetectionAggregator {
 
   private def fullMatchRegex(regex: String): String = {
     s"\\A(?:$regex)\\z"
-  }
-
-  private def builtInValidatorPredicate(rule: PiiRule, valueColumn: Column): Column = {
-    rule.piiType match {
-      case "driver_license_number" => DriverLicenseValidatorUdf(valueColumn)
-      case _ => lit(true)
-    }
   }
 
   private def groupMetricsByExpressionBudget(metrics: Seq[Metric], maxExpressionsPerAgg: Int): Seq[Seq[Metric]] = {
@@ -736,10 +734,14 @@ object DetectionAggregator {
   }
 
   private def extractDriverLicenseMatch(rawValue: String, metric: Metric): Option[ExtractedMatch] = {
-    val matcher = compiledPattern(metric).matcher(rawValue)
-    if (metric.matchType == PiiRuleMatchType.FullColumn) {
+    extractDriverLicenseMatch(rawValue, metric.regex, metric.matchType)
+  }
+
+  private def extractDriverLicenseMatch(rawValue: String, regex: String, matchType: String): Option[ExtractedMatch] = {
+    val matcher = compiledPattern(regex, matchType).matcher(Option(rawValue).getOrElse(""))
+    if (matchType == PiiRuleMatchType.FullColumn) {
       if (matcher.matches() && DriverLicenseNumberValidator.isValid(matcher.group())) {
-        Some(ExtractedMatch(matcher.group(), 0, rawValue.length))
+        Some(ExtractedMatch(matcher.group(), 0, Option(rawValue).map(_.length).getOrElse(0)))
       } else {
         None
       }
@@ -755,9 +757,13 @@ object DetectionAggregator {
   }
 
   private def compiledPattern(metric: Metric): Pattern = {
+    compiledPattern(metric.regex, metric.matchType)
+  }
+
+  private def compiledPattern(regex: String, matchType: String): Pattern = {
     Pattern.compile(
-      if (metric.matchType == PiiRuleMatchType.FullColumn) fullMatchRegex(metric.regex)
-      else metric.regex
+      if (matchType == PiiRuleMatchType.FullColumn) fullMatchRegex(regex)
+      else regex
     )
   }
 
