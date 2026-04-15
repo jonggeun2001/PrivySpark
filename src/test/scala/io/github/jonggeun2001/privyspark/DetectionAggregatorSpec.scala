@@ -557,6 +557,23 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       Set("support@example.com", "sales@example.com"))
   }
 
+  test("sampleMatches keeps driver license samples aligned with the matched regex fragment") {
+    val rawValue = "이전 번호는 11-12-345678-90이고 현재 번호는 서울 07 - 111111 - 10 입니다"
+    val df = Seq(rawValue).toDF("driver_license")
+    val rules = Seq(
+      PiiRule(
+        "driver_license_number",
+        "(?<![가-힣A-Za-z0-9])서울\\s*[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2}(?![가-힣A-Za-z0-9])"
+      )
+    )
+
+    val matchCounts = DetectionAggregator.aggregate(df, rules)
+    val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
+
+    assert(matchCounts.size == 1)
+    assert(samples(matchCounts.head.metricAlias).sampleMatchedFragment == "서울 07 - 111111 - 10")
+  }
+
   test("counts driver license numbers only when strict validator accepts the candidate") {
     val df = Seq(
       ("11-12-345678-90"),

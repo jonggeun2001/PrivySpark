@@ -710,14 +710,9 @@ object DetectionAggregator {
 
   private def extractMatch(rawValue: String, metric: Metric): Option[ExtractedMatch] = {
     if (metric.piiType == "driver_license_number") {
-      DriverLicenseNumberValidator
-        .findFirstValidCandidate(rawValue)
-        .map(candidate => ExtractedMatch(candidate.candidate, candidate.start, candidate.end))
+      extractDriverLicenseMatch(rawValue, metric)
     } else {
-      val pattern = Pattern.compile(
-        if (metric.matchType == PiiRuleMatchType.FullColumn) fullMatchRegex(metric.regex)
-        else metric.regex
-      )
+      val pattern = compiledPattern(metric)
       val matcher = pattern.matcher(rawValue)
       if (metric.matchType == PiiRuleMatchType.FullColumn) {
         if (matcher.matches()) Some(ExtractedMatch(matcher.group(), 0, rawValue.length)) else None
@@ -727,6 +722,32 @@ object DetectionAggregator {
         None
       }
     }
+  }
+
+  private def extractDriverLicenseMatch(rawValue: String, metric: Metric): Option[ExtractedMatch] = {
+    val matcher = compiledPattern(metric).matcher(rawValue)
+    if (metric.matchType == PiiRuleMatchType.FullColumn) {
+      if (matcher.matches() && DriverLicenseNumberValidator.isValid(matcher.group())) {
+        Some(ExtractedMatch(matcher.group(), 0, rawValue.length))
+      } else {
+        None
+      }
+    } else {
+      while (matcher.find()) {
+        val fragment = matcher.group()
+        if (DriverLicenseNumberValidator.isValid(fragment)) {
+          return Some(ExtractedMatch(fragment, matcher.start(), matcher.end()))
+        }
+      }
+      None
+    }
+  }
+
+  private def compiledPattern(metric: Metric): Pattern = {
+    Pattern.compile(
+      if (metric.matchType == PiiRuleMatchType.FullColumn) fullMatchRegex(metric.regex)
+      else metric.regex
+    )
   }
 
   private def buildRawSnippet(rawValue: String, start: Int, end: Int): String = {
