@@ -3707,6 +3707,65 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("writeReports preserves rollback-failed backup staging across retries until success") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-rollback-retry-")
+
+    try {
+      val initialResults = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 1L,
+          sampled_row_count = 1L,
+          match_ratio = 1.0,
+          non_empty_match_ratio = 1.0,
+          confidence = 1.0,
+          sample_raw_value = "alice@example.com",
+          sample_matched_fragment = "alice@example.com"
+        )
+      )
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
+
+      intercept[IllegalStateException] {
+        PrivySparkApp.writeReports(
+          spark,
+          outputDir.toString,
+          initialResults,
+          Seq.empty,
+          Seq("csv"),
+          () => {
+            Files.write(outputDir.resolve("parquet"), "conflict".getBytes(StandardCharsets.UTF_8))
+            throw new RuntimeException("promote failed")
+          }
+        )
+      }
+
+      intercept[RuntimeException] {
+        PrivySparkApp.writeReports(
+          spark,
+          outputDir.toString,
+          initialResults,
+          Seq.empty,
+          Seq("csv"),
+          () => throw new RuntimeException("retry failed")
+        )
+      }
+
+      val stagingEntries = Files.walk(outputDir.resolve("_report_staging"))
+      try {
+        assert(stagingEntries.iterator().asScala.exists(path => path.toString.endsWith("backups/parquet/scan_results")))
+      } finally {
+        stagingEntries.close()
+      }
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("writeReports does not persist output dataframes in storage") {
     val outputDir = Files.createTempDirectory("privyspark-write-reports-no-cache-")
 

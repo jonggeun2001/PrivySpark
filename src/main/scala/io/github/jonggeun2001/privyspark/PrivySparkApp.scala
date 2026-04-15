@@ -3458,8 +3458,6 @@ object PrivySparkApp {
     val backupRoot = s"$stagingRoot/backups"
     val stagedPaths = normalizedOutputFormats.map(format => reportFormatPaths(stagingRoot, format))
 
-    deleteStagingPath(conf, stagingBaseRoot)
-
     val movedBackups = ArrayBuffer.empty[(ReportFormatPaths, ReportFormatPaths)]
     val promotedRoots = ArrayBuffer.empty[String]
 
@@ -3520,7 +3518,7 @@ object PrivySparkApp {
       "error_paths" -> errorPathsByFormat
     )
 
-    deleteStagingPath(conf, stagingRoot)
+    deleteStagingPath(conf, stagingBaseRoot)
   }
 
   private def writeExcelReport(df: DataFrame, path: String, sheetName: String): Unit = {
