@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.charset.{CharacterCodingException, CodingErrorAction}
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.{ConcurrentHashMap, Executors, ScheduledExecutorService, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, Executors, ScheduledExecutorService, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipInputStream
 import java.nio.file.NoSuchFileException
@@ -74,17 +74,61 @@ object PrivySparkApp {
   )
   private[privyspark] final class CsvHeadCache {
     private val cachedLinesByFile = new ConcurrentHashMap[String, Seq[String]]()
+    private val cachedCharactersByFile = new ConcurrentHashMap[String, Int]()
+    private val insertionOrder = new ConcurrentLinkedQueue[String]()
+    private val totalCachedCharacters = new AtomicInteger(0)
 
     def getOrRead(filePath: String)(loader: => Seq[String]): Seq[String] = {
       Option(cachedLinesByFile.get(filePath)).getOrElse {
         val loaded = loader
-        val existing = cachedLinesByFile.putIfAbsent(filePath, loaded)
-        Option(existing).getOrElse(loaded)
+        cacheLoaded(filePath, loaded)
+        Option(cachedLinesByFile.get(filePath)).getOrElse(loaded)
+      }
+    }
+
+    def clear(): Unit = this.synchronized {
+      cachedLinesByFile.clear()
+      cachedCharactersByFile.clear()
+      insertionOrder.clear()
+      totalCachedCharacters.set(0)
+    }
+
+    private def cacheLoaded(filePath: String, lines: Seq[String]): Unit = this.synchronized {
+      if (cachedLinesByFile.containsKey(filePath)) {
+        return
+      }
+
+      val characterCount = lines.iterator.map(_.length).sum
+      if (characterCount > CsvHeadCache.MaxCharacters) {
+        return
+      }
+
+      cachedLinesByFile.put(filePath, lines)
+      cachedCharactersByFile.put(filePath, characterCount)
+      insertionOrder.add(filePath)
+      totalCachedCharacters.addAndGet(characterCount)
+      evictToBounds()
+    }
+
+    private def evictToBounds(): Unit = {
+      while (cachedLinesByFile.size() > CsvHeadCache.MaxEntries || totalCachedCharacters.get() > CsvHeadCache.MaxCharacters) {
+        val oldestPath = insertionOrder.poll()
+        if (oldestPath == null) {
+          return
+        }
+
+        val removed = cachedLinesByFile.remove(oldestPath)
+        if (removed != null) {
+          val removedCharacterCount = Option(cachedCharactersByFile.remove(oldestPath)).map(_.toInt).getOrElse(removed.iterator.map(_.length).sum)
+          totalCachedCharacters.addAndGet(-removedCharacterCount)
+        }
       }
     }
   }
   private object CsvHeadCache {
     val CachedLineLimit = 2
+    val MaxEntries = 4096
+    val MaxCharacters = 1024 * 1024
   }
   private final case class ProbeSample(bytes: Array[Byte], truncated: Boolean)
   private final case class PreScanFileOutcome(
@@ -1044,6 +1088,7 @@ object PrivySparkApp {
         throw e
     } finally {
       heartbeatExecutor.foreach(stopProgressHeartbeat)
+      csvHeadCache.clear()
       cleanupStagingPaths(spark.sparkContext.hadoopConfiguration, scanPlan.stagingPaths)
     }
   }
