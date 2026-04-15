@@ -3596,6 +3596,66 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("writeReports preserves the last successful outputs when promotion fails") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-promote-failure-")
+
+    try {
+      val initialResults = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 1L,
+          sampled_row_count = 1L,
+          match_ratio = 1.0,
+          non_empty_match_ratio = 1.0,
+          confidence = 1.0,
+          sample_raw_value = "alice@example.com",
+          sample_matched_fragment = "alice@example.com"
+        )
+      )
+      val replacementResults = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:01:00Z",
+          file_identifier = "part-0002.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 1L,
+          sampled_row_count = 1L,
+          match_ratio = 1.0,
+          non_empty_match_ratio = 1.0,
+          confidence = 1.0,
+          sample_raw_value = "bob@example.com",
+          sample_matched_fragment = "bob@example.com"
+        )
+      )
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
+
+      val error = intercept[RuntimeException] {
+        PrivySparkApp.writeReports(
+          spark,
+          outputDir.toString,
+          replacementResults,
+          Seq.empty,
+          Seq("csv"),
+          () => throw new RuntimeException("promote failed")
+        )
+      }
+
+      assert(error.getMessage.contains("promote failed"))
+      val preservedDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_results")
+      assert(preservedDf.count() == 1L)
+      assert(preservedDf.select("file_identifier").collect().map(_.getString(0)).toSeq == Seq("part-0001.csv"))
+      assert(!Files.exists(outputDir.resolve("csv")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
   test("writeReports does not persist output dataframes in storage") {
     val outputDir = Files.createTempDirectory("privyspark-write-reports-no-cache-")
 
