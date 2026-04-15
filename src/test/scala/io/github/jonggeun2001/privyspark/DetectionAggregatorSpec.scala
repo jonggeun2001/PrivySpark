@@ -541,6 +541,46 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("metric_threshold_exceeded(1)"))
   }
 
+  test("sampleMatchesByFile recovers with safe fallback when batched file sample extraction fails") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("alpha.csv", "noise", "none"),
+      ("beta.csv", "beta@example.com", "010-9999-8888")
+    ).toDF("file_id", "c_email", "c_phone")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules)
+    val logs = captureStderr {
+      val samples = DetectionAggregator.withForcedFileSampleBatchFailure {
+        DetectionAggregator.sampleMatchesByFile(
+          df,
+          "file_id",
+          rules,
+          matchCounts,
+          AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
+        )
+      }
+
+      val alphaEmail = matchCounts.find(matchCount =>
+        matchCount.fileIdentifier == "alpha.csv" && matchCount.columnName == "c_email" && matchCount.piiType == "email"
+      ).get
+      val betaPhone = matchCounts.find(matchCount =>
+        matchCount.fileIdentifier == "beta.csv" && matchCount.columnName == "c_phone" && matchCount.piiType == "phone"
+      ).get
+
+      assert(samples((alphaEmail.fileIdentifier, alphaEmail.metricAlias)).sampleMatchedFragment == "alpha@example.com")
+      assert(samples((betaPhone.fileIdentifier, betaPhone.metricAlias)).sampleMatchedFragment == "010-9999-8888")
+    }
+
+    assert(logs.contains("detection_aggregation_fallback"))
+    assert(logs.contains("scope=file_sample"))
+    assert(logs.contains("forced-file-sample-batch-failure"))
+  }
+
   test("counts only full-value matches per file for full-column rules") {
     val df = Seq(
       ("alpha.csv", "alpha@example.com"),

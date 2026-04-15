@@ -37,9 +37,20 @@ object DetectionAggregator {
   private val DriverLicenseDigitsOnlySqlRegex = "^[0-9]+$"
   private val DriverLicenseCurrentRegionCodeInts = DriverLicenseNumberValidator.CurrentRegionCodes.toSeq.map(_.toInt)
   private val SafeSampleFallbackBatchSize = 32
+  @volatile private var forceFileSampleBatchFailure = false
 
   private[privyspark] def resetDebugCache(): Unit = {
     DriverLogger.resetCache()
+  }
+
+  private[privyspark] def withForcedFileSampleBatchFailure[A](block: => A): A = {
+    val previous = forceFileSampleBatchFailure
+    forceFileSampleBatchFailure = true
+    try {
+      block
+    } finally {
+      forceFileSampleBatchFailure = previous
+    }
   }
 
   private def logDebug(event: String, fields: (String, Any)*): Unit = {
@@ -503,6 +514,12 @@ object DetectionAggregator {
     }
   }
 
+  private def buildProjectedSampleFirstExpressions(batch: Seq[Metric]): Seq[Column] = {
+    batch.map { metric =>
+      first(col(metric.alias), ignoreNulls = true).as(metric.alias)
+    }
+  }
+
   private def aggregateInBatches(
     sampledDf: DataFrame,
     metrics: Seq[Metric],
@@ -694,6 +711,11 @@ object DetectionAggregator {
     metrics: Seq[Metric],
     maxExpressionsPerAgg: Int
   ): Map[(String, String), String] = {
+    if (forceFileSampleBatchFailure) {
+      forceFileSampleBatchFailure = false
+      throw new RuntimeException("forced-file-sample-batch-failure")
+    }
+
     groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).foldLeft(Map.empty[(String, String), String]) { (acc, batch) =>
       val expressions = buildSampleExpressions(batch)
       val groupedRows = sampledDf.groupBy(col(fileIdentifierColumn)).agg(expressions.head, expressions.tail: _*).collect()
@@ -714,7 +736,24 @@ object DetectionAggregator {
     fileIdentifierColumn: String,
     metrics: Seq[Metric]
   ): Map[(String, String), String] = {
-    collectSampleRawValuesByFile(sampledDf, fileIdentifierColumn, metrics, SafeSampleFallbackBatchSize)
+    groupMetricsByExpressionBudget(metrics, SafeSampleFallbackBatchSize).foldLeft(Map.empty[(String, String), String]) { (acc, batch) =>
+      val projectedExpressions = buildSampleProjectionExpressions(batch)
+      val firstExpressions = buildProjectedSampleFirstExpressions(batch)
+      val groupedRows = sampledDf
+        .select((col(fileIdentifierColumn) +: projectedExpressions): _*)
+        .groupBy(col(fileIdentifierColumn))
+        .agg(firstExpressions.head, firstExpressions.tail: _*)
+        .collect()
+      val batchValues = groupedRows.flatMap { row =>
+        Option(row.getAs[String](0)).filter(_.nonEmpty).toSeq.flatMap { fileIdentifier =>
+          batch.zipWithIndex.flatMap {
+            case (metric, batchIndex) =>
+              Option(row.getAs[String](batchIndex + 1)).map(value => (fileIdentifier, metric.alias) -> value)
+          }
+        }
+      }
+      acc ++ batchValues
+    }
   }
 
   private def mergeFirstSeenValues[K](batchValues: Seq[Map[K, String]]): Map[K, String] = {
