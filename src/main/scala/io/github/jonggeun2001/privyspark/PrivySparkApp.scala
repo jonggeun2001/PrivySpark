@@ -3484,9 +3484,29 @@ object PrivySparkApp {
       }
     } catch {
       case NonFatal(e) =>
-        restoreBackedUpReportOutputs(conf, promotedRoots.toSeq, movedBackups.toSeq)
-        deleteStagingPath(conf, stagingRoot)
-        throw e
+        val rollbackFailure = Try {
+          restoreBackedUpReportOutputs(conf, promotedRoots.toSeq, movedBackups.toSeq)
+          deleteStagingPath(conf, stagingRoot)
+        }.failed.toOption
+
+        rollbackFailure match {
+          case Some(restoreError) =>
+            logWarn(
+              "report_output_rollback_failed",
+              "output_root" -> root,
+              "staging_root" -> stagingRoot,
+              "reason" -> Option(restoreError.getMessage).getOrElse(restoreError.getClass.getSimpleName)
+            )
+
+            val rollbackException = new IllegalStateException(
+              s"Report output rollback failed; preserved backup staging at $stagingRoot",
+              restoreError
+            )
+            rollbackException.addSuppressed(e)
+            throw rollbackException
+          case None =>
+            throw e
+        }
     }
 
     val resultPathsByFormat = selectedFinalPaths.map(paths => s"${paths.format}:${paths.resultPath}").mkString(",")
@@ -3553,6 +3573,14 @@ object PrivySparkApp {
     targetPath.getFileSystem(conf).exists(targetPath)
   }
 
+  private def deleteManagedPath(conf: org.apache.hadoop.conf.Configuration, path: String): Unit = {
+    val targetPath = new Path(path)
+    val fs = targetPath.getFileSystem(conf)
+    if (fs.exists(targetPath) && !fs.delete(targetPath, true)) {
+      throw new IllegalStateException(s"Failed to delete report output: $path")
+    }
+  }
+
   private def renameManagedPath(conf: org.apache.hadoop.conf.Configuration, sourcePath: String, targetPath: String): Unit = {
     val source = new Path(sourcePath)
     val target = new Path(targetPath)
@@ -3574,22 +3602,11 @@ object PrivySparkApp {
     promotedRoots: Seq[String],
     movedBackups: Seq[(ReportFormatPaths, ReportFormatPaths)]
   ): Unit = {
-    promotedRoots.foreach(path => deleteStagingPath(conf, path))
+    promotedRoots.foreach(path => deleteManagedPath(conf, path))
     movedBackups.reverse.foreach {
       case (finalPaths, backupPaths) =>
-        try {
-          if (pathExists(conf, backupPaths.rootPath)) {
-            renameManagedPath(conf, backupPaths.rootPath, finalPaths.rootPath)
-          }
-        } catch {
-          case NonFatal(restoreError) =>
-            logWarn(
-              "report_output_restore_failed",
-              "format" -> finalPaths.format,
-              "source" -> backupPaths.rootPath,
-              "target" -> finalPaths.rootPath,
-              "reason" -> Option(restoreError.getMessage).getOrElse(restoreError.getClass.getSimpleName)
-            )
+        if (pathExists(conf, backupPaths.rootPath)) {
+          renameManagedPath(conf, backupPaths.rootPath, finalPaths.rootPath)
         }
     }
   }
