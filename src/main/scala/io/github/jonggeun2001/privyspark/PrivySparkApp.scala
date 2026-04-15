@@ -387,17 +387,17 @@ object PrivySparkApp {
     }
   }
 
-  private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int): ProbeSample = {
-    val sourcePath = new Path(filePath)
+  private def probe(conf: org.apache.hadoop.conf.Configuration, path: String, maxBytes: Int): ProbeSample = {
+    val sourcePath = new Path(path)
     val fs = sourcePath.getFileSystem(conf)
     val inputStream = fs.open(sourcePath)
     try {
-      val buffer = new Array[Byte](limit)
+      val buffer = new Array[Byte](maxBytes)
       var totalBytesRead = 0
       var continueReading = true
 
-      while (continueReading && totalBytesRead < limit) {
-        val bytesRead = inputStream.read(buffer, totalBytesRead, limit - totalBytesRead)
+      while (continueReading && totalBytesRead < maxBytes) {
+        val bytesRead = inputStream.read(buffer, totalBytesRead, maxBytes - totalBytesRead)
         if (bytesRead < 0) {
           continueReading = false
         } else if (bytesRead == 0) {
@@ -414,7 +414,7 @@ object PrivySparkApp {
       }
 
       val truncated =
-        totalBytesRead >= limit && inputStream.read() >= 0
+        totalBytesRead >= maxBytes && inputStream.read() >= 0
       val bytes =
         if (totalBytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, totalBytesRead)
       ProbeSample(bytes, truncated)
@@ -585,8 +585,9 @@ object PrivySparkApp {
     if (extensionFormat.isDefined) {
       extensionFormat
     } else {
-      val probeSample = readProbeBytes(conf, filePath, TextProbeByteLimit)
-      inferMagicByteFormat(probeSample.bytes)
+      val probeSample = probe(conf, filePath, TextProbeByteLimit)
+      val magicProbeBytes = java.util.Arrays.copyOf(probeSample.bytes, math.min(probeSample.bytes.length, MagicProbeByteLimit))
+      inferMagicByteFormat(magicProbeBytes)
         .orElse(inferTextFormat(probeSample.bytes, allowIncompleteTrailingSequence = probeSample.truncated))
     }
   }
