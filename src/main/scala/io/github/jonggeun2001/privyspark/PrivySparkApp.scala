@@ -802,11 +802,15 @@ object PrivySparkApp {
   }
 
   private[privyspark] def resolveConfiguredPreScanParallelism(fileCount: Int, configured: Int, source: String): Int = {
+    resolveParallelism(fileCount, resolvePreScanPoolSize(configured, source))
+  }
+
+  private def resolvePreScanPoolSize(configured: Int, source: String): Int = {
     if (configured <= 0) {
       throw new IllegalArgumentException(s"$source must be > 0")
     }
 
-    resolveParallelism(fileCount, math.min(configured, maxSafePreScanParallelism))
+    math.min(configured, maxSafePreScanParallelism)
   }
 
   private[privyspark] def resolvePreScanParallelism(spark: SparkSession, fileCount: Int): Int = {
@@ -819,6 +823,22 @@ object PrivySparkApp {
         )
       case None =>
         resolveParallelism(fileCount, defaultPreScanParallelism)
+    }
+  }
+
+  private def resolveDiscoveryParallelism(spark: SparkSession, configured: Int): Int = {
+    if (configured > 0) {
+      resolvePreScanPoolSize(configured, "--pre-scan-parallelism")
+    } else {
+      spark.sparkContext.getConf.getOption(PreScanParallelismConfKey) match {
+        case Some(_) =>
+          resolvePreScanPoolSize(
+            spark.sparkContext.getConf.getInt(PreScanParallelismConfKey, defaultPreScanParallelism),
+            PreScanParallelismConfKey
+          )
+        case None =>
+          math.min(defaultPreScanParallelism, maxSafePreScanParallelism)
+      }
     }
   }
 
@@ -1509,34 +1529,44 @@ object PrivySparkApp {
     fs: org.apache.hadoop.fs.FileSystem,
     rootPath: Path,
     inputPath: String,
-    ignoreMatcher: IgnoreMatcher
+    ignoreMatcher: IgnoreMatcher,
+    parallelism: Int
   ): (Seq[String], Seq[(String, String)]) = {
     val discoveredFiles = ArrayBuffer.empty[String]
     val ignoredPaths = ArrayBuffer.empty[(String, String)]
-    val pendingDirectories = scala.collection.mutable.Stack[Path](rootPath)
 
-    while (pendingDirectories.nonEmpty) {
-      val currentDirectory = pendingDirectories.pop()
-      val children = Option(fs.listStatus(currentDirectory)).getOrElse(Array.empty).sortBy(_.getPath.toString)
+    var currentLevelDirectories = Seq(rootPath)
+    while (currentLevelDirectories.nonEmpty) {
+      val listedDirectories = executeInParallel(
+        parallelism,
+        currentLevelDirectories.sortBy(_.toString).map { directory =>
+          () => Option(fs.listStatus(directory)).getOrElse(Array.empty).sortBy(_.getPath.toString)
+        }
+      )
+      val nextLevelDirectories = ArrayBuffer.empty[Path]
 
-      children.reverse.foreach { status =>
-        val childPath = status.getPath.toString
-        if (status.isDirectory) {
-          ignoreMatcher.matched(childPath, inputPath, isDirectory = true) match {
-            case Some(pattern) =>
-              ignoredPaths += ((childPath, pattern))
-            case None =>
-              pendingDirectories.push(status.getPath)
-          }
-        } else if (status.isFile) {
-          ignoreMatcher.matched(childPath, inputPath) match {
-            case Some(pattern) =>
-              ignoredPaths += ((childPath, pattern))
-            case None =>
-              discoveredFiles += childPath
+      listedDirectories.foreach { children =>
+        children.foreach { status =>
+          val childPath = status.getPath.toString
+          if (status.isDirectory) {
+            ignoreMatcher.matched(childPath, inputPath, isDirectory = true) match {
+              case Some(pattern) =>
+                ignoredPaths += ((childPath, pattern))
+              case None =>
+                nextLevelDirectories += status.getPath
+            }
+          } else if (status.isFile) {
+            ignoreMatcher.matched(childPath, inputPath) match {
+              case Some(pattern) =>
+                ignoredPaths += ((childPath, pattern))
+              case None =>
+                discoveredFiles += childPath
+            }
           }
         }
       }
+
+      currentLevelDirectories = nextLevelDirectories.toSeq
     }
 
     (discoveredFiles.toSeq.sorted, ignoredPaths.toSeq)
@@ -1562,6 +1592,11 @@ object PrivySparkApp {
         throw new IllegalArgumentException(s"Input path not found: $inputPath")
       }
       val inputPathIsFile = fs.getFileStatus(path).isFile
+      val resolvedDiscoveryParallelism = if (inputPathIsFile) {
+        1
+      } else {
+        resolveDiscoveryParallelism(spark, preScanParallelism)
+      }
 
       val (files, ignoredFiles) = if (inputPathIsFile) {
         ignoreMatcher.matched(path.toString, inputPath) match {
@@ -1571,7 +1606,12 @@ object PrivySparkApp {
             (Seq(path.toString), Seq.empty[(String, String)])
         }
       } else {
-        discoverPhysicalFiles(fs, path, inputPath, ignoreMatcher)
+        logDebug(
+          "scan_directory_file_discovery_parallelism",
+          "input_path" -> inputPath,
+          "parallelism" -> resolvedDiscoveryParallelism
+        )
+        discoverPhysicalFiles(fs, path, inputPath, ignoreMatcher, resolvedDiscoveryParallelism)
       }
       ignoredFiles.foreach {
         case (filePath, pattern) =>

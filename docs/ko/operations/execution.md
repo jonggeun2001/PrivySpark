@@ -32,8 +32,8 @@ ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로�
 ## 병렬도
 - CLI 값을 주면 해당 값이 앱 로직에 직접 전달됩니다.
 - CLI 값을 생략하면 `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 또는 앱 기본값(`4`, `4`, `3`)을 사용합니다.
-- pre-scan 병렬도는 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용됩니다.
-- pre-scan 병렬도는 파일 수와 safety ceiling `64` 기준으로 축소됩니다.
+- pre-scan 병렬도는 디렉터리 discovery, 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용됩니다.
+- 디렉터리 discovery 단계에서는 BFS 레벨의 디렉터리 수와 safety ceiling `64` 기준으로 풀 크기가 제한되고, discovery 이후 pre-scan 병렬도는 기존처럼 파일 수와 safety ceiling `64` 기준으로 축소됩니다.
 - 그룹 병렬도와 파일 병렬도는 driver가 동시에 제출하는 작업 수를 제어합니다.
 
 여기서 중요한 점은 앱 레벨 병렬도가 곧 executor 수를 직접 보장하는 것은 아니라는 점입니다. 실제 executor 분산은 입력 파티션 수, Spark scheduler, dynamic allocation backlog에 함께 영향을 받습니다.

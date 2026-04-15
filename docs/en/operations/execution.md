@@ -32,8 +32,8 @@ The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `
 ## Parallelism
 - CLI values are passed directly into application logic.
 - When omitted, PrivySpark uses `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`, or the application defaults (`4`, `4`, `3`).
-- Pre-scan parallelism covers input expansion, format probing, and group schema split.
-- Effective pre-scan parallelism is bounded by discovered file count and the safety ceiling `64`.
+- Pre-scan parallelism covers directory discovery, input expansion, format probing, and group schema split.
+- During directory discovery, the pool is capped by the safety ceiling `64` and the number of directories in the current BFS level. After discovery, effective pre-scan parallelism is still bounded by discovered file count and the safety ceiling `64`.
 - Group and file parallelism control how many scan tasks the driver submits concurrently.
 
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
