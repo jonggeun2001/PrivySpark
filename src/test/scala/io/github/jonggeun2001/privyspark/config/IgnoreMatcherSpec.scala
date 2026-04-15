@@ -68,4 +68,33 @@ class IgnoreMatcherSpec extends AnyFunSuite {
       Files.deleteIfExists(aliasPath)
     }
   }
+
+  test("buildPathCandidates preserves insertion order while deduplicating archive directory variants") {
+    val candidates = IgnoreMatcher.buildPathCandidates("bundle.zip!logs/app", isDirectory = true)
+
+    assert(candidates == Seq(
+      "bundle.zip!logs/app",
+      "bundle.zip!logs/app/",
+      "logs/app",
+      "logs/app/"
+    ))
+  }
+
+  test("buildDirectoryCandidates preserves first-seen traversal order for collectFirst consumers") {
+    val candidates = IgnoreMatcher.buildDirectoryCandidates(
+      Seq(
+        "bundle.zip!logs/app/file.csv",
+        "logs/app/file.csv",
+        "logs/app/"
+      ),
+      isDirectory = false
+    )
+
+    assert(candidates == Seq(
+      "bundle.zip!logs/",
+      "bundle.zip!logs/app/",
+      "logs/",
+      "logs/app/"
+    ))
+  }
 }

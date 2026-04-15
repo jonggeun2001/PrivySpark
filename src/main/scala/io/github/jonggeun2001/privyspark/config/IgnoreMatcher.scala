@@ -9,7 +9,7 @@ import java.io.{BufferedReader, InputStreamReader}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Paths}
 import java.util.regex.Pattern
-import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.{ArrayBuffer, LinkedHashSet}
 
 final class IgnoreMatcher private (patterns: Seq[IgnoreMatcher.CompiledPattern]) {
   import IgnoreMatcher._
@@ -187,19 +187,17 @@ object IgnoreMatcher {
     builder.toString()
   }
 
-  private def buildPathCandidates(relativePath: String, isDirectory: Boolean): Seq[String] = {
-    val candidates = ArrayBuffer.empty[String]
+  private[config] def buildPathCandidates(relativePath: String, isDirectory: Boolean): Seq[String] = {
+    val candidates = LinkedHashSet.empty[String]
 
     def addCandidate(value: String): Unit = {
       val normalized = normalizeForMatching(value)
-      if (normalized.nonEmpty && !candidates.contains(normalized)) {
+      if (normalized.nonEmpty) {
         candidates += normalized
       }
       if (isDirectory && normalized.nonEmpty) {
         val directoryVariant = normalized.stripSuffix("/") + "/"
-        if (!candidates.contains(directoryVariant)) {
-          candidates += directoryVariant
-        }
+        candidates += directoryVariant
       }
     }
 
@@ -212,16 +210,13 @@ object IgnoreMatcher {
     candidates.toSeq
   }
 
-  private def buildDirectoryCandidates(pathCandidates: Seq[String], isDirectory: Boolean): Seq[String] = {
-    val directoryCandidates = ArrayBuffer.empty[String]
+  private[config] def buildDirectoryCandidates(pathCandidates: Seq[String], isDirectory: Boolean): Seq[String] = {
+    val directoryCandidates = LinkedHashSet.empty[String]
 
     def addDirectoryCandidate(value: String): Unit = {
       val normalized = normalizeForMatching(value).stripSuffix("/")
       if (normalized.nonEmpty) {
-        val candidate = normalized + "/"
-        if (!directoryCandidates.contains(candidate)) {
-          directoryCandidates += candidate
-        }
+        directoryCandidates += normalized + "/"
       }
     }
 
