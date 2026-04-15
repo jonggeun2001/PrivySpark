@@ -4,6 +4,7 @@
 - Extension-first support: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`
 - Files without extensions and unsupported extensions are probed for `parquet` and `orc` magic bytes first.
 - If magic bytes do not match but the content looks like UTF-8 text, the input is normalized into the internal `text` format and scanned through Spark's single-column `text` reader.
+- UTF-8 text that uses ASCII information separators (`0x1C`-`0x1F`, for example RS-delimited files) still counts as text fallback input instead of binary.
 - Only binary-looking unsupported inputs are recorded as `Unsupported file format`.
 - Zero-byte physical files are skipped during pre-scan.
 

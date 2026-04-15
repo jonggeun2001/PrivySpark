@@ -12,7 +12,7 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 ## Detection Model
 - Detection uses ruleset-based regexes plus strict validators for selected PII types.
 - Invalid regexes are rejected during ruleset loading before the scan starts.
-- Aggregated results include `match_count`, `sampled_row_count`, `match_ratio`, `non_null_match_ratio`, `confidence`, `sample_raw_value`, and `sample_matched_fragment`.
+- Aggregated results include `match_count`, `sampled_row_count`, `match_ratio`, `non_empty_match_ratio`, `confidence`, `sample_raw_value`, and `sample_matched_fragment`.
 - `sample_raw_value` stores only the matched fragment plus up to 50 characters of surrounding context on each side, not the entire cell value.
 
 ## Sampling and Scan Units

@@ -201,14 +201,14 @@ object DetectionAggregator {
     }
   }
 
-  def countNonNull(
+  def countNonEmpty(
     sampledDf: DataFrame,
     columns: Seq[String]
   ): Map[String, Long] = {
-    countNonNull(sampledDf, columns, AggregationConfig())
+    countNonEmpty(sampledDf, columns, AggregationConfig())
   }
 
-  private[privyspark] def countNonNull(
+  private[privyspark] def countNonEmpty(
     sampledDf: DataFrame,
     columns: Seq[String],
     config: AggregationConfig
@@ -222,7 +222,9 @@ object DetectionAggregator {
       targetColumns.grouped(config.maxExpressionsPerAgg).foldLeft(Map.empty[String, Long]) { (acc, batch) =>
         val expressions = batch.zipWithIndex.map {
           case (columnName, index) =>
-            sparkSum(when(col(columnName).isNotNull, lit(1L)).otherwise(lit(0L))).cast("long").as(s"nn_$index")
+            val valueColumn = col(columnName).cast(StringType)
+            val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
+            sparkSum(when(presentValuePredicate, lit(1L)).otherwise(lit(0L))).cast("long").as(s"ne_$index")
         }
         val aggregated = sampledDf.agg(expressions.head, expressions.tail: _*).head()
         acc ++ batch.zipWithIndex.map {
@@ -234,15 +236,15 @@ object DetectionAggregator {
     }
   }
 
-  def countNonNullByFile(
+  def countNonEmptyByFile(
     sampledDf: DataFrame,
     fileIdentifierColumn: String,
     columns: Seq[String]
   ): Map[(String, String), Long] = {
-    countNonNullByFile(sampledDf, fileIdentifierColumn, columns, AggregationConfig())
+    countNonEmptyByFile(sampledDf, fileIdentifierColumn, columns, AggregationConfig())
   }
 
-  private[privyspark] def countNonNullByFile(
+  private[privyspark] def countNonEmptyByFile(
     sampledDf: DataFrame,
     fileIdentifierColumn: String,
     columns: Seq[String],
@@ -258,7 +260,9 @@ object DetectionAggregator {
       targetColumns.grouped(config.maxExpressionsPerAgg).foldLeft(Map.empty[(String, String), Long]) { (acc, batch) =>
         val expressions = batch.zipWithIndex.map {
           case (columnName, index) =>
-            sparkSum(when(col(columnName).isNotNull, lit(1L)).otherwise(lit(0L))).cast("long").as(s"nn_$index")
+            val valueColumn = col(columnName).cast(StringType)
+            val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
+            sparkSum(when(presentValuePredicate, lit(1L)).otherwise(lit(0L))).cast("long").as(s"ne_$index")
         }
         val batchCounts = sampledDf
           .groupBy(col(fileIdentifierColumn))
@@ -431,7 +435,7 @@ object DetectionAggregator {
               }
               val predicate = rule.matchType match {
                 case PiiRuleMatchType.FullColumn => presentValuePredicate && matchPredicate
-                case _ => valueColumn.isNotNull && matchPredicate
+                case _ => presentValuePredicate && matchPredicate
               }
               Some(
                 Metric(
