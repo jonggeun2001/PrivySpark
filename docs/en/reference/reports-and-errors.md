@@ -1,14 +1,18 @@
 # Reports and Errors
 
 ## Final Output Paths
-- Result reports:
+- Default result reports:
   - `<output>/parquet/scan_results`
-  - `<output>/csv/scan_results`
-- Error reports:
+- Default error reports:
   - `<output>/parquet/scan_errors`
+- With `--output-format csv`:
+  - `<output>/csv/scan_results`
   - `<output>/csv/scan_errors`
+- With `--output-format excel`:
+  - `<output>/excel/scan_results.xlsx`
+  - `<output>/excel/scan_errors.xlsx`
 
-PrivySpark always writes final outputs in both Parquet and CSV. The `_progress` directory is only for operational visibility and is not the public output contract.
+`--output-format` can be repeated and supports `parquet`, `csv`, and `excel`. The default is `parquet`. The `_progress` directory is only for operational visibility and is not the public output contract.
 
 ## Result Fields
 - `dataset_path`
@@ -54,7 +58,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 ## In-Progress `_progress` Path
 - Intermediate shards may be written under `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, and `meta/completions/*.jsonl`.
 - Clean completions produce completion markers without result or error rows.
-- On normal completion, PrivySpark merges `_progress` into final Parquet/CSV reports and removes `_progress/<run_id>`.
+- On normal completion, PrivySpark merges `_progress` into the selected final output formats and removes `_progress/<run_id>`.
 
 The separate progress path serves two purposes: it exposes already completed work during long scans, and it keeps partial results away from the final consumer-facing report locations.
 

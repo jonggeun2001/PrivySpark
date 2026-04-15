@@ -14,9 +14,12 @@ final case class CliConfig(
   preScanParallelism: Option[Int] = None,
   groupParallelism: Option[Int] = None,
   fileParallelism: Option[Int] = None,
+  outputFormats: Seq[String] = Seq.empty,
   ignorePatterns: Seq[String] = Seq.empty,
   ignoreFile: Option[String] = None
-)
+) {
+  def effectiveOutputFormats: Seq[String] = OutputFormats.normalizeAll(outputFormats)
+}
 
 private[privyspark] final case class CliParseResult(config: Option[CliConfig], errors: Seq[String])
 
@@ -84,6 +87,17 @@ object Cli {
           else failure("file-parallelism must be > 0")
         }
         .text("파일 폴백 스캔 병렬도(정수 > 0)"),
+      opt[String]("output-format")
+        .unbounded()
+        .optional()
+        .action((value, config) =>
+          OutputFormats.validate(value).fold(
+            _ => config,
+            format => config.copy(outputFormats = config.outputFormats :+ format)
+          )
+        )
+        .validate(value => OutputFormats.validate(value).fold(failure, _ => success))
+        .text("최종 출력 포맷(parquet, csv, excel). 반복 지정 가능, 기본값 parquet"),
       opt[String]("ignore")
         .unbounded()
         .optional()

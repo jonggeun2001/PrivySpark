@@ -37,6 +37,7 @@ bin/privyspark-submit \
   scan \
   --path /abs/input \
   --output /abs/output \
+  --output-format parquet \
   --ruleset default \
   --sample-ratio 0.2
 ```
@@ -51,6 +52,8 @@ bin/privyspark-submit \
   scan \
   --path /abs/input \
   --output /abs/output \
+  --output-format parquet \
+  --output-format csv \
   --ruleset default \
   --sample-ratio 0.2 \
   --file-sample-ratio 0.1 \
@@ -115,8 +118,12 @@ spark-submit \
 ```
 
 ## 결과 확인
-- 최종 결과: `<output>/parquet/scan_results`, `<output>/csv/scan_results`
-- 최종 오류: `<output>/parquet/scan_errors`, `<output>/csv/scan_errors`
+- 기본 최종 결과: `<output>/parquet/scan_results`
+- 기본 최종 오류: `<output>/parquet/scan_errors`
+- `--output-format csv` 추가 시: `<output>/csv/scan_results`, `<output>/csv/scan_errors`
+- `--output-format excel` 추가 시: `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`
 - 실행 중 progress: `<output>/_progress/<run_id>`
 
-progress 경로는 관측용 임시 경로입니다. 최종 소비자는 항상 Parquet/CSV 최종 리포트를 기준으로 봐야 합니다.
+`--output-format`은 반복 지정 가능하고 지원값은 `parquet`, `csv`, `excel`입니다. 기본값은 `parquet`입니다.
+
+progress 경로는 관측용 임시 경로입니다. 최종 소비자는 항상 선택한 최종 리포트 포맷을 기준으로 봐야 합니다.

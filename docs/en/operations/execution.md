@@ -9,6 +9,7 @@
 ## CLI Arguments
 - `--path <ABS_PATH_OR_URI>`: input path
 - `--output <ABS_PATH_OR_URI>`: output path
+- `--output-format <parquet|csv|excel>`: repeatable final output format option, default `parquet`
 - `--ruleset <default|path>`: built-in ruleset or external path
 - `--sample-ratio <(0.0, 1.0]>`: row sampling ratio, default `0.2`
 - `--file-sample-ratio <(0.0, 1.0]>`: batch group file sampling ratio, unset by default

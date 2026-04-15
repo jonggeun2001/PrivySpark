@@ -45,7 +45,7 @@
 - When `--file-sample-ratio` is active, `--sample-ratio < 1.0` is ignored for that batch-capable group and a warning is logged.
 - Sampled groups are never promoted to directory-level identifiers before exact-split validation.
 - Archive and Excel logical inputs keep their own identifiers.
-- The public output contract remains `parquet/scan_results`, `parquet/scan_errors`, `csv/scan_results`, and `csv/scan_errors`.
+- The public output contract defaults to `parquet/scan_results` and `parquet/scan_errors`, and CLI `--output-format` can additionally materialize `csv/...` and `excel/*.xlsx`.
 - Clean completions also emit `meta/completions` markers.
 - `_progress` is cleaned based on staleness when the next run starts. There is no shutdown hook cleanup.
 
