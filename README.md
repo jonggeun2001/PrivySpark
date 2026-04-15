@@ -70,8 +70,9 @@ bash scripts/verify-worktree.sh
 - 기본 ruleset은 [config/rules/default.yaml](config/rules/default.yaml)에 있습니다.
 
 ### 결과를 확인하는 위치
-- 최종 리포트는 `<output>/scan_results`, `<output>/scan_errors`에 저장됩니다.
+- 최종 리포트는 `<output>/parquet/scan_results`, `<output>/parquet/scan_errors`, `<output>/csv/scan_results`, `<output>/csv/scan_errors`에 저장됩니다.
 - 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓입니다.
+- `_progress`는 진행 중 임시 경로이고, 최종 출력 계약은 `parquet`와 `csv` 하위 디렉터리입니다.
 - 샘플 값 정책과 리포트 컬럼 의미는 [docs/ko/reference/reports-and-errors.md](docs/ko/reference/reports-and-errors.md)에서 확인합니다.
 
 ### 어디를 수정해야 하는지 빠르게 찾기
