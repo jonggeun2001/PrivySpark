@@ -2536,7 +2536,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanDirectoryStructure ignores archive entries matching ignore patterns") {
+  test("scanDirectoryStructure ignores archive entries under ignored archive subdirectories") {
     val inputDir = Files.createTempDirectory("privyspark-zip-ignore-entry-")
     var plan: PrivySparkApp.DirectoryScanPlan = null
 
@@ -2544,7 +2544,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       createArchiveFile(
         inputDir.resolve("bundle.zip"),
         Seq(
-          "__MACOSX/metadata.txt" -> "ignore me\n",
+          "logs/app.log" -> "ignore me\n",
           "nested/customers.csv" ->
             ("name,email\n" +
               "alice,alice@example.com\n")
@@ -2558,19 +2558,20 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
             inputDir.toString,
             inputDir.toString,
             "2026-04-15T00:00:00Z",
-            ignoreMatcher = IgnoreMatcher.fromSources(Seq("__MACOSX/**"), None)
+            ignoreMatcher = IgnoreMatcher.fromSources(Seq("logs/"), None)
           )
         }
       }
 
       assert(plan.errors.isEmpty)
       assert(plan.groups.size == 1)
+      assert(plan.ignoredFiles == 1)
       assert(plan.groups.head.logicalIdentifiersByKey.values.toSeq == Seq("bundle.zip!nested/customers.csv"))
       assert(logs.linesIterator.exists(line =>
         line.contains("archive_entry_skipped") &&
           line.contains("reason=ignored") &&
           line.contains("entry=") &&
-          line.contains("bundle.zip!__MACOSX/metadata.txt")
+          line.contains("bundle.zip!logs/app.log")
       ))
     } finally {
       deleteRecursively(inputDir)

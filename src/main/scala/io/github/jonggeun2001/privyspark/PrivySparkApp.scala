@@ -78,6 +78,7 @@ object PrivySparkApp {
     preScanErrorScope: String,
     expandedEntries: Seq[ScanFileEntry],
     expandedErrors: Seq[ScanError],
+    ignoredEntries: Int = 0,
     stagingPaths: Seq[String],
     pathInferredFormat: Option[String] = None,
     probeRequired: Boolean = false,
@@ -1082,16 +1083,17 @@ object PrivySparkApp {
     ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty,
     archiveExpansionDepth: Int = 0,
     forceDisableDirectoryIdentifier: Boolean = false
-  ): (Seq[ScanFileEntry], Seq[ScanError]) = {
+  ): (Seq[ScanFileEntry], Seq[ScanError], Int) = {
     try {
       if (isZeroBytePhysicalFile(conf, physicalPath)) {
-        return (Seq.empty, Seq.empty)
+        return (Seq.empty, Seq.empty, 0)
       }
     } catch {
       case NonFatal(e) =>
         return (
           Seq.empty,
-          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
+          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
+          0
         )
     }
 
@@ -1102,7 +1104,8 @@ object PrivySparkApp {
         case NonFatal(e) =>
           return (
             Seq.empty,
-            Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName)))
+            Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
+            0
           )
       }
     detectedFormat match {
@@ -1117,13 +1120,15 @@ object PrivySparkApp {
           ignoreMatcher,
           archiveExpansionDepth + 1
         )
-      case Some(format) if ArchiveFormats.contains(format) =>
+      case Some(format) if ArchiveFormats.contains(format) => 
         (
           Seq.empty,
-          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Nested archive expansion is not supported: $logicalIdentifier"))
+          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Nested archive expansion is not supported: $logicalIdentifier")),
+          0
         )
       case Some(XlsxFormat) =>
-        expandWorkbookSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier)
+        val (entries, errors) = expandWorkbookSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier)
+        (entries, errors, 0)
       case Some(format) =>
         (
           Seq(
@@ -1136,12 +1141,14 @@ object PrivySparkApp {
               allowDirectoryIdentifier = !forceDisableDirectoryIdentifier && !NonDirectoryIdentifierFormats.contains(format)
             )
           ),
-          Seq.empty
+          Seq.empty,
+          0
         )
       case None =>
         (
           Seq.empty,
-          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Unsupported file format: $logicalIdentifier"))
+          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Unsupported file format: $logicalIdentifier")),
+          0
         )
     }
   }
@@ -1186,11 +1193,12 @@ object PrivySparkApp {
     stagingPaths: ArrayBuffer[String],
     ignoreMatcher: IgnoreMatcher,
     archiveExpansionDepth: Int
-  ): (Seq[ScanFileEntry], Seq[ScanError]) = {
+  ): (Seq[ScanFileEntry], Seq[ScanError], Int) = {
     val sourcePath = new Path(archivePath)
     val fs = sourcePath.getFileSystem(conf)
     val extractedEntries = ArrayBuffer.empty[ScanFileEntry]
     val archiveErrors = ArrayBuffer.empty[ScanError]
+    val ignoredArchiveEntries = new AtomicInteger(0)
     val stagingBase = new Path(fs.getHomeDirectory, ".privyspark-staging")
     val stagingRoot = new Path(
       stagingBase,
@@ -1238,6 +1246,7 @@ object PrivySparkApp {
               case Some(targetPath) =>
                 ignoreMatcher.matched(childLogicalIdentifier, datasetPath) match {
                   case Some(pattern) =>
+                    ignoredArchiveEntries.incrementAndGet()
                     logDebug(
                       "archive_entry_skipped",
                       "archive" -> logicalIdentifier,
@@ -1299,7 +1308,7 @@ object PrivySparkApp {
                                         outputStream.close()
                                       }
 
-                                      val (childEntries, childErrors) = expandPhysicalSource(
+                                      val (childEntries, childErrors, childIgnoredEntries) = expandPhysicalSource(
                                         conf,
                                         datasetPath,
                                         timestamp,
@@ -1313,6 +1322,7 @@ object PrivySparkApp {
                                       )
                                       extractedEntries ++= childEntries
                                       archiveErrors ++= childErrors
+                                      ignoredArchiveEntries.addAndGet(childIgnoredEntries)
                                   }
                               }
                           }
@@ -1480,7 +1490,7 @@ object PrivySparkApp {
       archiveInputStream.close()
     }
 
-    (extractedEntries.toSeq, archiveErrors.toSeq)
+    (extractedEntries.toSeq, archiveErrors.toSeq, ignoredArchiveEntries.get())
   }
 
   private def discoverPhysicalFiles(
@@ -1622,6 +1632,7 @@ object PrivySparkApp {
                     preScanErrorScope = preScanErrorScope,
                     expandedEntries = Seq.empty,
                     expandedErrors = Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
+                    ignoredEntries = 0,
                     stagingPaths = localStagingPaths.toSeq,
                     pathInferredFormat = pathInferredFormat,
                     probeRequired = pathInferredFormat.isEmpty
@@ -1633,13 +1644,14 @@ object PrivySparkApp {
                     preScanErrorScope = preScanErrorScope,
                     expandedEntries = Seq.empty,
                     expandedErrors = Seq.empty,
+                    ignoredEntries = 0,
                     stagingPaths = localStagingPaths.toSeq,
                     pathInferredFormat = pathInferredFormat,
                     probeRequired = pathInferredFormat.isEmpty,
                     skipped = true
                   )
                 case Right(false) =>
-                  val (expandedEntries, expandedErrors) =
+                  val (expandedEntries, expandedErrors, ignoredEntries) =
                     expandPhysicalSource(
                       conf,
                       datasetPath,
@@ -1656,6 +1668,7 @@ object PrivySparkApp {
                     preScanErrorScope = preScanErrorScope,
                     expandedEntries = expandedEntries,
                     expandedErrors = expandedErrors,
+                    ignoredEntries = ignoredEntries,
                     stagingPaths = localStagingPaths.toSeq,
                     pathInferredFormat = pathInferredFormat,
                     probeRequired = pathInferredFormat.isEmpty
@@ -1669,6 +1682,7 @@ object PrivySparkApp {
                   preScanErrorScope = preScanErrorScope,
                   expandedEntries = Seq.empty,
                   expandedErrors = Seq.empty,
+                  ignoredEntries = 0,
                   stagingPaths = localStagingPaths.toSeq,
                   pathInferredFormat = pathInferredFormat,
                   probeRequired = pathInferredFormat.isEmpty,
@@ -1689,6 +1703,8 @@ object PrivySparkApp {
           outcome
         }
       })
+      val ignoredArchiveEntryCount = preScanOutcomes.map(_.ignoredEntries).sum
+      val totalIgnoredCount = ignoredFiles.size + ignoredArchiveEntryCount
 
       logDebug(
         "scan_directory_pre_scan_execute_complete",
@@ -1696,7 +1712,7 @@ object PrivySparkApp {
         "files" -> files.size,
         "parallelism" -> resolvedPreScanParallelism,
         "duration_ms" -> elapsedMillis(preScanStartedAt),
-        "ignored_files" -> ignoredFiles.size,
+        "ignored_files" -> totalIgnoredCount,
         "completed_files" -> preScanOutcomes.size,
         "skipped_files" -> preScanOutcomes.count(_.skipped),
         "expanded_entries" -> preScanOutcomes.map(_.expandedEntries.size.toLong).sum,
@@ -1854,7 +1870,7 @@ object PrivySparkApp {
         "scan_directory_structure_complete",
         "input_path" -> inputPath,
         "total_files" -> totalFiles,
-        "ignored_files" -> ignoredFiles.size,
+        "ignored_files" -> totalIgnoredCount,
         "supported_files" -> supportedFiles.size,
         "groups" -> plannedGroups.size,
         "errors" -> errors.size,
@@ -1866,7 +1882,7 @@ object PrivySparkApp {
         errors = errors.toSeq,
         totalFiles = totalFiles,
         directoryCount = directoryCount,
-        ignoredFiles = ignoredFiles.size,
+        ignoredFiles = totalIgnoredCount,
         stagingPaths = stagingPaths.toSeq
       )
     } catch {

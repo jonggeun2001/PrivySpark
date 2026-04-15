@@ -19,9 +19,10 @@ final class IgnoreMatcher private (patterns: Seq[IgnoreMatcher.CompiledPattern])
       val relativePath = normalizeForMatching(resolveRelativePath(rootPath, targetPath))
       val pathCandidates = buildPathCandidates(relativePath, isDirectory)
       val basenameCandidates = pathCandidates.map(pathBasename).filter(_.nonEmpty).distinct
+      val directoryCandidates = buildDirectoryCandidates(pathCandidates, isDirectory)
 
       patterns.collectFirst {
-        case pattern if pattern.matches(pathCandidates, basenameCandidates, isDirectory) => pattern.original
+        case pattern if pattern.matches(pathCandidates, basenameCandidates, directoryCandidates) => pattern.original
       }
     }
   }
@@ -37,22 +38,21 @@ object IgnoreMatcher {
   private final case class CompiledPattern(
     original: String,
     mode: MatchMode,
-    regex: Pattern,
-    requiresDirectory: Boolean = false
+    regex: Pattern
   ) {
-    def matches(pathCandidates: Seq[String], basenameCandidates: Seq[String], isDirectory: Boolean): Boolean = {
-      if (requiresDirectory && !isDirectory) {
-        return false
-      }
+    def matches(pathCandidates: Seq[String], basenameCandidates: Seq[String], directoryCandidates: Seq[String]): Boolean = {
       val candidates = mode match {
         case BasenameMode => basenameCandidates
         case PathMode => pathCandidates
+        case DirectoryMode => directoryCandidates
       }
       candidates.exists(candidate => regex.matcher(candidate).matches())
     }
   }
 
   val empty: IgnoreMatcher = new IgnoreMatcher(Seq.empty)
+
+  private case object DirectoryMode extends MatchMode
 
   def fromSources(inline: Seq[String], file: Option[String]): IgnoreMatcher = {
     val mergedPatterns = inline.flatMap(normalizePattern) ++ file.toSeq.flatMap(loadIgnoreFile)
@@ -82,16 +82,14 @@ object IgnoreMatcher {
     if (directoryPattern && !hasSlash) {
       CompiledPattern(
         original = pattern,
-        mode = PathMode,
-        regex = Pattern.compile(s"(^|.*/)${globToRegex(corePattern)}/?$$"),
-        requiresDirectory = true
+        mode = DirectoryMode,
+        regex = Pattern.compile(s"(^|.*/)${globToRegex(corePattern)}/$$")
       )
     } else if (directoryPattern) {
       CompiledPattern(
         original = pattern,
-        mode = PathMode,
-        regex = Pattern.compile(s"^${globToRegex(corePattern)}/?$$"),
-        requiresDirectory = true
+        mode = DirectoryMode,
+        regex = Pattern.compile(s"^${globToRegex(corePattern)}/$$")
       )
     } else if (hasSlash) {
       CompiledPattern(
@@ -156,6 +154,35 @@ object IgnoreMatcher {
     }
 
     candidates.toSeq
+  }
+
+  private def buildDirectoryCandidates(pathCandidates: Seq[String], isDirectory: Boolean): Seq[String] = {
+    val directoryCandidates = ArrayBuffer.empty[String]
+
+    def addDirectoryCandidate(value: String): Unit = {
+      val normalized = normalizeForMatching(value).stripSuffix("/")
+      if (normalized.nonEmpty) {
+        val candidate = normalized + "/"
+        if (!directoryCandidates.contains(candidate)) {
+          directoryCandidates += candidate
+        }
+      }
+    }
+
+    pathCandidates.foreach { candidate =>
+      val normalized = normalizeForMatching(candidate).stripSuffix("/")
+      if (normalized.nonEmpty) {
+        val segments = normalized.split("/").filter(_.nonEmpty)
+        val lastSegmentIsDirectory = isDirectory || candidate.endsWith("/")
+        val maxSegmentCount = if (lastSegmentIsDirectory) segments.length else math.max(segments.length - 1, 0)
+
+        (1 to maxSegmentCount).foreach { segmentCount =>
+          addDirectoryCandidate(segments.take(segmentCount).mkString("/"))
+        }
+      }
+    }
+
+    directoryCandidates.toSeq
   }
 
   private def pathBasename(path: String): String = {
