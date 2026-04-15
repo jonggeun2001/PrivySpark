@@ -45,7 +45,7 @@
 - `--file-sample-ratio`가 설정된 batch-capable group scan에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
-- 최종 출력 계약은 `parquet/scan_results`, `parquet/scan_errors`, `csv/scan_results`, `csv/scan_errors`입니다.
+- 최종 출력 계약은 기본 `parquet/scan_results`, `parquet/scan_errors`이고, CLI `--output-format`에 따라 `csv/...`, `excel/*.xlsx`가 추가됩니다.
 - clean completion도 `meta/completions` marker를 남깁니다.
 - `_progress`는 다음 실행 시작 시 stale 여부를 판정해 정리합니다. shutdown hook은 사용하지 않습니다.
 

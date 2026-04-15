@@ -1010,6 +1010,7 @@ object PrivySparkApp {
 
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
     val (preScanParallelism, groupParallelism, fileParallelism) = resolveCliParallelism(config)
+    val outputFormats = config.effectiveOutputFormats
     val csvHeadCache = new CsvHeadCache()
     val ignoreMatcher = IgnoreMatcher.fromSources(spark.sparkContext.hadoopConfiguration, config.ignorePatterns, config.ignoreFile)
     logInfo(
@@ -1022,6 +1023,7 @@ object PrivySparkApp {
       "configured_pre_scan_parallelism" -> renderConfiguredParallelism(config.preScanParallelism),
       "configured_group_parallelism" -> renderConfiguredParallelism(config.groupParallelism),
       "configured_file_parallelism" -> renderConfiguredParallelism(config.fileParallelism),
+      "output_formats" -> outputFormats.mkString(","),
       "ignore_patterns" -> config.ignorePatterns.size,
       "ignore_file" -> config.ignoreFile.getOrElse("none"),
       "driver_log_level" -> DriverLogger.currentLogLevel.label.toLowerCase
@@ -1083,9 +1085,20 @@ object PrivySparkApp {
         csvHeadCache = csvHeadCache
       )
 
-      logDebug("report_write_start", "output_root" -> config.outputPath, "progress_run" -> preparedProgressRun.runId)
-      val (resultCount, errorCount) = mergeProgressReports(spark, config.outputPath, preparedProgressRun)
-      logDebug("report_write_complete", "results" -> resultCount, "errors" -> errorCount, "output_root" -> config.outputPath)
+      logDebug(
+        "report_write_start",
+        "output_root" -> config.outputPath,
+        "progress_run" -> preparedProgressRun.runId,
+        "output_formats" -> outputFormats.mkString(",")
+      )
+      val (resultCount, errorCount) = mergeProgressReports(spark, config.outputPath, preparedProgressRun, outputFormats)
+      logDebug(
+        "report_write_complete",
+        "results" -> resultCount,
+        "errors" -> errorCount,
+        "output_root" -> config.outputPath,
+        "output_formats" -> outputFormats.mkString(",")
+      )
       logInfo(
         "scan_complete",
         "scanned_files" -> scanPlan.totalFiles,
@@ -1094,7 +1107,8 @@ object PrivySparkApp {
         "groups" -> scanPlan.groups.size,
         "detections" -> resultCount,
         "errors" -> errorCount,
-        "output_root" -> config.outputPath
+        "output_root" -> config.outputPath,
+        "output_formats" -> outputFormats.mkString(",")
       )
 
       println(
@@ -3389,13 +3403,22 @@ object PrivySparkApp {
     outputRoot: String,
     results: Seq[ScanResult],
     errors: Seq[ScanError]
+  ): Unit = writeReports(spark, outputRoot, results, errors, OutputFormats.Default)
+
+  private[privyspark] def writeReports(
+    spark: SparkSession,
+    outputRoot: String,
+    results: Seq[ScanResult],
+    errors: Seq[ScanError],
+    outputFormats: Seq[String]
   ): Unit = {
     import spark.implicits._
     writeReports(
       spark,
       outputRoot,
       spark.createDataset(results).toDF(),
-      spark.createDataset(errors).toDF()
+      spark.createDataset(errors).toDF(),
+      outputFormats
     )
   }
 
@@ -3403,10 +3426,16 @@ object PrivySparkApp {
     spark: SparkSession,
     outputRoot: String,
     resultsDf: DataFrame,
-    errorsDf: DataFrame
+    errorsDf: DataFrame,
+    outputFormats: Seq[String]
   ): Unit = {
     val root = outputRoot.stripSuffix("/")
-    logDebug("write_reports_materialize", "output_root" -> root)
+    val normalizedOutputFormats = OutputFormats.requireSupported(outputFormats)
+    logDebug(
+      "write_reports_materialize",
+      "output_root" -> root,
+      "output_formats" -> normalizedOutputFormats.mkString(",")
+    )
     val resultDf = resultsDf.coalesce(1)
     val errorDf = errorsDf.coalesce(1)
 
@@ -3414,28 +3443,61 @@ object PrivySparkApp {
     val errorParquetPath = s"$root/parquet/scan_errors"
     val resultCsvPath = s"$root/csv/scan_results"
     val errorCsvPath = s"$root/csv/scan_errors"
+    val resultExcelPath = s"$root/excel/scan_results.xlsx"
+    val errorExcelPath = s"$root/excel/scan_errors.xlsx"
 
-    resultDf.write.mode("overwrite").parquet(resultParquetPath)
-    errorDf.write.mode("overwrite").parquet(errorParquetPath)
+    cleanupReportOutputRoots(spark.sparkContext.hadoopConfiguration, root)
 
-    resultDf.write
-      .option("header", "true")
-      .mode("overwrite")
-      .csv(resultCsvPath)
+    if (normalizedOutputFormats.contains(OutputFormats.Parquet)) {
+      resultDf.write.mode("overwrite").parquet(resultParquetPath)
+      errorDf.write.mode("overwrite").parquet(errorParquetPath)
+    }
 
-    errorDf.write
-      .option("header", "true")
-      .mode("overwrite")
-      .csv(errorCsvPath)
+    if (normalizedOutputFormats.contains(OutputFormats.Csv)) {
+      resultDf.write
+        .option("header", "true")
+        .mode("overwrite")
+        .csv(resultCsvPath)
+
+      errorDf.write
+        .option("header", "true")
+        .mode("overwrite")
+        .csv(errorCsvPath)
+    }
+
+    if (normalizedOutputFormats.contains(OutputFormats.Excel)) {
+      writeExcelReport(resultDf, resultExcelPath, "scan_results")
+      writeExcelReport(errorDf, errorExcelPath, "scan_errors")
+    }
 
     logDebug(
       "write_reports_complete",
       "output_root" -> root,
+      "output_formats" -> normalizedOutputFormats.mkString(","),
       "result_parquet_path" -> resultParquetPath,
       "error_parquet_path" -> errorParquetPath,
       "result_csv_path" -> resultCsvPath,
-      "error_csv_path" -> errorCsvPath
+      "error_csv_path" -> errorCsvPath,
+      "result_excel_path" -> resultExcelPath,
+      "error_excel_path" -> errorExcelPath
     )
+  }
+
+  private def cleanupReportOutputRoots(conf: org.apache.hadoop.conf.Configuration, outputRoot: String): Unit = {
+    Seq(
+      s"$outputRoot/${OutputFormats.Parquet}",
+      s"$outputRoot/${OutputFormats.Csv}",
+      s"$outputRoot/${OutputFormats.Excel}"
+    ).foreach(path => deleteStagingPath(conf, path))
+  }
+
+  private def writeExcelReport(df: DataFrame, path: String, sheetName: String): Unit = {
+    df.write
+      .format("com.crealytics.spark.excel")
+      .option("header", "true")
+      .option("dataAddress", workbookDataAddress(sheetName))
+      .mode("overwrite")
+      .save(path)
   }
 
   private[privyspark] def prepareProgressRun(
@@ -3507,24 +3569,34 @@ object PrivySparkApp {
     spark: SparkSession,
     outputRoot: String,
     progressRun: ProgressRun
+  ): (Long, Long) = mergeProgressReports(spark, outputRoot, progressRun, OutputFormats.Default)
+
+  private[privyspark] def mergeProgressReports(
+    spark: SparkSession,
+    outputRoot: String,
+    progressRun: ProgressRun,
+    outputFormats: Seq[String]
   ): (Long, Long) = {
+    val normalizedOutputFormats = OutputFormats.requireSupported(outputFormats)
     logDebug(
       "progress_merge_start",
       "run_id" -> progressRun.runId,
       "results_path" -> progressRun.resultsPath,
-      "errors_path" -> progressRun.errorsPath
+      "errors_path" -> progressRun.errorsPath,
+      "output_formats" -> normalizedOutputFormats.mkString(",")
     )
     val resultDf = readProgressScanResults(spark, progressRun.resultsPath)
     val errorDf = readProgressRecords(spark, progressRun.errorsPath, Encoders.product[ScanError].schema)
     val resultCount = resultDf.count()
     val errorCount = errorDf.count()
-    writeReports(spark, outputRoot, resultDf, errorDf)
+    writeReports(spark, outputRoot, resultDf, errorDf, normalizedOutputFormats)
     deleteProgressRun(spark.sparkContext.hadoopConfiguration, progressRun)
     logDebug(
       "progress_merge_complete",
       "run_id" -> progressRun.runId,
       "results" -> resultCount,
-      "errors" -> errorCount
+      "errors" -> errorCount,
+      "output_formats" -> normalizedOutputFormats.mkString(",")
     )
     (resultCount, errorCount)
   }

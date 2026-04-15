@@ -14,7 +14,7 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - 0바이트 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 건너뜁니다.
 - row sampling(`--sample-ratio`)과 batch group용 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있습니다.
 - `--ignore`, `--ignore-file`로 gitignore 스타일 glob 패턴을 지정해 파일/아카이브 엔트리를 pre-scan 전에 제외할 수 있습니다.
-- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress를 남기고, 정상 종료 시 최종 Parquet/CSV 리포트로 merge한 뒤 정리합니다.
+- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다.
 - `scan_results`에는 집계 지표와 함께 `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
 
 ## 빠른 시작
@@ -38,6 +38,8 @@ bin/privyspark-submit \
   scan \
   --path /abs/input \
   --output /abs/output \
+  --output-format parquet \
+  --output-format csv \
   --ruleset default \
   --sample-ratio 0.2 \
   --file-sample-ratio 0.1 \
@@ -67,12 +69,15 @@ bash scripts/verify-worktree.sh
 
 - 로컬 개발과 CI 전 확인은 `bash scripts/verify-worktree.sh`를 기준으로 맞춥니다.
 - 스캔 실행 시 `--path`, `--output`은 절대경로 또는 URI만 허용합니다.
+- `--output-format`은 반복 지정 가능하고, 기본값은 `parquet`입니다. 지원값은 `parquet`, `csv`, `excel`입니다.
 - 기본 ruleset은 [config/rules/default.yaml](config/rules/default.yaml)에 있습니다.
 
 ### 결과를 확인하는 위치
-- 최종 리포트는 `<output>/parquet/scan_results`, `<output>/parquet/scan_errors`, `<output>/csv/scan_results`, `<output>/csv/scan_errors`에 저장됩니다.
+- 기본 최종 리포트는 `<output>/parquet/scan_results`, `<output>/parquet/scan_errors`에 저장됩니다.
+- `--output-format csv`를 지정하면 `<output>/csv/scan_results`, `<output>/csv/scan_errors`가 추가로 생성됩니다.
+- `--output-format excel`을 지정하면 `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`가 추가로 생성됩니다.
 - 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓입니다.
-- `_progress`는 진행 중 임시 경로이고, 최종 출력 계약은 `parquet`와 `csv` 하위 디렉터리입니다.
+- `_progress`는 진행 중 임시 경로이고, 최종 출력 계약은 선택된 `parquet`, `csv`, `excel` 산출물입니다.
 - 샘플 값 정책과 리포트 컬럼 의미는 [docs/ko/reference/reports-and-errors.md](docs/ko/reference/reports-and-errors.md)에서 확인합니다.
 
 ### 어디를 수정해야 하는지 빠르게 찾기

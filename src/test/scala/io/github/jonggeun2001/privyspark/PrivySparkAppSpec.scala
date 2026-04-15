@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
+import org.apache.poi.ss.usermodel.{DataFormatter, WorkbookFactory}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageSubmitted}
@@ -3470,7 +3471,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("writeReports stores scan results and errors in csv output paths") {
+  test("writeReports materializes parquet outputs by default with current schema") {
     val outputDir = Files.createTempDirectory("privyspark-write-reports-")
 
     try {
@@ -3516,21 +3517,80 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
 
+      val resultParquetDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_results")
+      val errorParquetDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_errors")
+
+      assert(resultParquetDf.count() == 2L)
+      assert(errorParquetDf.count() == 1L)
+      assert(resultParquetDf.columns.toSet.contains("file_identifier"))
+      assert(resultParquetDf.columns.toSet.contains("sampled_row_count"))
+      assert(resultParquetDf.columns.toSet.contains("non_empty_match_ratio"))
+      assert(resultParquetDf.columns.toSet.contains("sample_raw_value"))
+      assert(resultParquetDf.columns.toSet.contains("sample_matched_fragment"))
+      assert(errorParquetDf.columns.toSet.contains("error_message"))
+      assert(countPartFiles(outputDir.resolve("parquet/scan_results")) == 1L)
+      assert(countPartFiles(outputDir.resolve("parquet/scan_errors")) == 1L)
+      assert(!Files.exists(outputDir.resolve("csv")))
+      assert(!Files.exists(outputDir.resolve("excel")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("writeReports materializes only selected csv and excel outputs and removes stale format directories") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-selected-formats-")
+
+    try {
+      val results = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 2L,
+          sampled_row_count = 5L,
+          match_ratio = 0.4,
+          non_empty_match_ratio = 0.5,
+          confidence = 0.4,
+          sample_raw_value = "alice@example.com",
+          sample_matched_fragment = "alice@example.com"
+        )
+      )
+
+      val errors = Seq(
+        ScanError(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "broken.csv",
+          error_message = "Unsupported file format"
+        )
+      )
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
+      assert(Files.exists(outputDir.resolve("parquet/scan_results")))
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, results, errors, Seq("csv", "excel"))
+
       val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
       val errorCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors")
 
-      assert(resultCsvDf.count() == 2L)
+      assert(resultCsvDf.count() == 1L)
       assert(errorCsvDf.count() == 1L)
-      assert(resultCsvDf.columns.toSet.contains("file_identifier"))
-      assert(resultCsvDf.columns.toSet.contains("sampled_row_count"))
-      assert(resultCsvDf.columns.toSet.contains("non_empty_match_ratio"))
       assert(resultCsvDf.columns.toSet.contains("sample_raw_value"))
-      assert(resultCsvDf.columns.toSet.contains("sample_matched_fragment"))
       assert(errorCsvDf.columns.toSet.contains("error_message"))
       assert(countPartFiles(outputDir.resolve("csv/scan_results")) == 1L)
       assert(countPartFiles(outputDir.resolve("csv/scan_errors")) == 1L)
-      assert(countPartFiles(outputDir.resolve("parquet/scan_results")) == 1L)
-      assert(countPartFiles(outputDir.resolve("parquet/scan_errors")) == 1L)
+      assert(!Files.exists(outputDir.resolve("parquet")))
+
+      val resultWorkbookRows = readWorkbookRows(outputDir.resolve("excel/scan_results.xlsx"), "scan_results")
+      val errorWorkbookRows = readWorkbookRows(outputDir.resolve("excel/scan_errors.xlsx"), "scan_errors")
+
+      assert(resultWorkbookRows.head.contains("file_identifier"))
+      assert(resultWorkbookRows.head.contains("sample_raw_value"))
+      assert(resultWorkbookRows(1).contains("part-0001.csv"))
+      assert(errorWorkbookRows.head.contains("error_message"))
+      assert(errorWorkbookRows(1).contains("broken.csv"))
     } finally {
       deleteRecursively(outputDir)
     }
@@ -3898,22 +3958,23 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(mergedResults == 2L)
       assert(mergedErrors == 0L)
       assert(!Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}")))
-      val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
-      assert(resultCsvDf.count() == 2L)
-      assert(resultCsvDf.columns.toSet.contains("sample_raw_value"))
-      assert(resultCsvDf.columns.toSet.contains("sample_matched_fragment"))
-      assert(resultCsvDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_empty_match_ratio").collect().map { row =>
-        (row.getString(0), row.getString(1), row.getString(2), row.getString(3))
+      val resultParquetDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_results")
+      assert(resultParquetDf.count() == 2L)
+      assert(resultParquetDf.columns.toSet.contains("sample_raw_value"))
+      assert(resultParquetDf.columns.toSet.contains("sample_matched_fragment"))
+      assert(resultParquetDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_empty_match_ratio").collect().map { row =>
+        (row.getString(0), row.getLong(1), row.getDouble(2), row.getDouble(3))
       }.toSet == Set(
-        ("part-0001.json", "3", "0.33", "0.5"),
-        ("part-0002.json", "3", "0.67", "1.0")
+        ("part-0001.json", 3L, 0.33, 0.5),
+        ("part-0002.json", 3L, 0.67, 1.0)
       ))
-      assert(resultCsvDf.select("sample_raw_value", "sample_matched_fragment").collect().forall { row =>
+      assert(resultParquetDf.select("sample_raw_value", "sample_matched_fragment").collect().forall { row =>
         val rawValue = row.getString(0)
         val fragment = row.getString(1)
         rawValue == fragment && fragment.endsWith("@example.com")
       })
-      assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors").count() == 0L)
+      assert(spark.read.parquet(s"${outputDir.toString}/parquet/scan_errors").count() == 0L)
+      assert(!Files.exists(outputDir.resolve("csv")))
     } finally {
       deleteRecursively(inputDir)
       deleteRecursively(outputDir)
@@ -4257,6 +4318,29 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       zipOutputStream.close()
     }
     outputStream.toByteArray
+  }
+
+  private def readWorkbookRows(path: Path, sheetName: String): Seq[Seq[String]] = {
+    val inputStream = Files.newInputStream(path)
+    val formatter = new DataFormatter()
+    try {
+      val workbook = WorkbookFactory.create(inputStream)
+      try {
+        val sheet = workbook.getSheet(sheetName)
+        assert(sheet != null, s"expected workbook $path to contain sheet $sheetName")
+        (0 to sheet.getLastRowNum).flatMap { rowIndex =>
+          Option(sheet.getRow(rowIndex)).map { row =>
+            (0 until row.getLastCellNum).map { cellIndex =>
+              formatter.formatCellValue(row.getCell(cellIndex))
+            }
+          }
+        }
+      } finally {
+        workbook.close()
+      }
+    } finally {
+      inputStream.close()
+    }
   }
 
   private def findDataFile(root: Path, extension: String): Option[Path] = {

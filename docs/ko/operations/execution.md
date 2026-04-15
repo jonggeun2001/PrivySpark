@@ -9,6 +9,7 @@
 ## CLI 인자
 - `--path <ABS_PATH_OR_URI>`: 입력 경로
 - `--output <ABS_PATH_OR_URI>`: 출력 경로
+- `--output-format <parquet|csv|excel>`: 반복 지정 가능한 최종 출력 포맷, 기본 `parquet`
 - `--ruleset <default|path>`: 규칙셋 경로 또는 `default`
 - `--sample-ratio <(0.0, 1.0]>`: row sampling 비율, 기본 `0.2`
 - `--file-sample-ratio <(0.0, 1.0]>`: batch group scan 파일 샘플링 비율, 기본 미설정
