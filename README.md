@@ -50,6 +50,53 @@ bin/privyspark-submit \
 
 자세한 실행 절차와 옵션은 [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/ko/operations/execution.md](docs/ko/operations/execution.md)에 정리돼 있습니다.
 
+## 코드베이스 사용법
+
+### 가장 자주 쓰는 개발 명령
+
+```bash
+# 저장소 기준 표준 검증
+bash scripts/verify-worktree.sh
+
+# 전체 테스트
+./gradlew test
+
+# fat JAR 재생성
+./gradlew clean shadowJar
+```
+
+- 로컬 개발과 CI 전 확인은 `bash scripts/verify-worktree.sh`를 기준으로 맞춥니다.
+- 스캔 실행 시 `--path`, `--output`은 절대경로 또는 URI만 허용합니다.
+- 기본 ruleset은 [config/rules/default.yaml](config/rules/default.yaml)에 있습니다.
+
+### 결과를 확인하는 위치
+- 최종 리포트는 `<output>/scan_results`, `<output>/scan_errors`에 저장됩니다.
+- 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓입니다.
+- 샘플 값 정책과 리포트 컬럼 의미는 [docs/ko/reference/reports-and-errors.md](docs/ko/reference/reports-and-errors.md)에서 확인합니다.
+
+### 어디를 수정해야 하는지 빠르게 찾기
+- `src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala`
+  - 입력 확장, 그룹화, 스캔 오케스트레이션, progress/최종 리포트 저장
+- `src/main/scala/io/github/jonggeun2001/privyspark/Cli.scala`
+  - CLI 파싱과 실행 옵션 정의
+- `src/main/scala/io/github/jonggeun2001/privyspark/DetectionAggregator.scala`
+  - 규칙별 집계, sample 값 추출, fallback regroup 전략
+- `src/main/scala/io/github/jonggeun2001/privyspark/FormatDetector.scala`
+  - 지원 포맷 판별
+- `src/main/scala/io/github/jonggeun2001/privyspark/config/RulesetLoader.scala`
+  - 기본/외부 ruleset 로딩과 검증
+- `src/main/scala/io/github/jonggeun2001/privyspark/model/Models.scala`
+  - ruleset, 결과, 오류 모델
+- `src/test/scala/io/github/jonggeun2001/privyspark`
+  - 기능별 ScalaTest 스펙
+
+### 수정 흐름 추천
+1. 현재 상태를 `./gradlew test` 또는 `bash scripts/verify-worktree.sh`로 먼저 확인합니다.
+2. ruleset 변경이면 [config/rules/default.yaml](config/rules/default.yaml)과 관련 문서를 함께 수정합니다.
+3. 입력 포맷 처리 변경이면 `FormatDetector.scala`, `PrivySparkApp.scala`, 입력 포맷 문서를 같이 봅니다.
+4. 집계나 출력 스키마 변경이면 `DetectionAggregator.scala`, `Models.scala`, `PrivySparkApp.scala`, 관련 테스트를 같이 봅니다.
+5. 변경 후 테스트를 다시 돌리고, 필요하면 `bin/privyspark-submit`으로 실제 스캔을 재현합니다.
+
 ## 문서 구조
 - 시작하기: [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/en/getting-started/quick-start.md](docs/en/getting-started/quick-start.md)
 - 제품/기능 개요: [docs/ko/reference/overview.md](docs/ko/reference/overview.md), [docs/en/reference/overview.md](docs/en/reference/overview.md)
