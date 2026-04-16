@@ -57,6 +57,7 @@ bin/privyspark-submit \
   --ruleset default \
   --sample-ratio 0.2 \
   --file-sample-ratio 0.1 \
+  --file-sample-min-files 10 \
   --pre-scan-parallelism 32 \
   --group-parallelism 16 \
   --file-parallelism 8 \
@@ -64,7 +65,7 @@ bin/privyspark-submit \
   --ignore "backup/**"
 ```
 
-When `--file-sample-ratio` is active for a batch-capable group, `--sample-ratio < 1.0` is ignored for that group and a warning is logged. This avoids changing the sampling basis twice.
+`--file-sample-ratio` only applies when a group has more files than `--file-sample-min-files`. Once file sampling actually applies to a group, `--sample-ratio < 1.0` is ignored for that group and a warning is logged. This avoids changing the sampling basis twice.
 
 ## Ignore Pattern Example
 

@@ -41,8 +41,8 @@
 - Directory discovery uses breadth-first traversal and parallelizes `listStatus` per BFS level, capped by the safety ceiling `64`.
 - After file discovery, effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
 - `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.
-- `--file-sample-ratio` only applies to batch-capable group scans and uniformly samples at least one file using `ceil(fileCount * ratio)`.
-- When `--file-sample-ratio` is active, `--sample-ratio < 1.0` is ignored for that batch-capable group and a warning is logged.
+- `--file-sample-ratio` applies to both batch scans and file-fallback scans, but only when a group has more files than `--file-sample-min-files`; when it does apply, PrivySpark uniformly samples at least one file using `ceil(fileCount * ratio)`.
+- When file sampling actually applies, `--sample-ratio < 1.0` is ignored for that group and a warning is logged.
 - Sampled groups are never promoted to directory-level identifiers before exact-split validation.
 - Archive and Excel logical inputs keep their own identifiers.
 - The public output contract defaults to `parquet/scan_results` and `parquet/scan_errors`, and CLI `--output-format` can additionally materialize `csv/...` and `excel/*.xlsx`.

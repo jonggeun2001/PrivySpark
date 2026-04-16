@@ -11,6 +11,7 @@ final case class CliConfig(
   ruleset: String = "default",
   sampleRatio: Double = 0.2,
   fileSampleRatio: Option[Double] = None,
+  fileSampleMinFiles: Int = 10,
   preScanParallelism: Option[Int] = None,
   groupParallelism: Option[Int] = None,
   fileParallelism: Option[Int] = None,
@@ -63,6 +64,14 @@ object Cli {
           else failure("file-sample-ratio must be > 0.0 and <= 1.0")
         }
         .text("그룹 batch scan 파일 샘플링 비율(0.0, 1.0]"),
+      opt[Int]("file-sample-min-files")
+        .optional()
+        .action((value, config) => config.copy(fileSampleMinFiles = value))
+        .validate { value =>
+          if (value >= 1) success
+          else failure("file-sample-min-files must be >= 1")
+        }
+        .text("file-sample-ratio를 적용할 최소 그룹 파일 수(정수 >= 1)"),
       opt[Int]("pre-scan-parallelism")
         .optional()
         .action((value, config) => config.copy(preScanParallelism = Some(value)))

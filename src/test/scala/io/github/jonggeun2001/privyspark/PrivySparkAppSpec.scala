@@ -1000,6 +1000,29 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure skips probe reads for known non-data extensions") {
+    val partialPath = "partial:///brochure.pdf"
+
+    try {
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(partialPath, "%PDF-1.7".getBytes(StandardCharsets.UTF_8))
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        partialPath,
+        partialPath,
+        "2026-04-16T00:00:00Z"
+      )
+
+      assert(plan.errors.map(_.file_identifier) == Seq("brochure.pdf"))
+      assert(plan.errors.head.error_message.contains("Unsupported file format"))
+      assert(plan.groups.isEmpty)
+      assert(PartialReadFileSystem.openCount(partialPath) == 0)
+    } finally {
+      PartialReadFileSystem.clear()
+    }
+  }
+
   test("scanDirectoryStructure records malformed json files without exposing Spark corrupt-record errors") {
     val inputDir = Files.createTempDirectory("privyspark-malformed-json-")
 
@@ -1100,6 +1123,43 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     } finally {
       deleteRecursively(inputDir)
     }
+  }
+
+  test("inferSchemaSignature reuses cached signatures across repeated reads") {
+    val partialPath = "partial:///schema-cache.json"
+    val schemaSignatureCache = new PrivySparkApp.SchemaSignatureCache()
+
+    try {
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(partialPath, "{\"email\":\"alice@example.com\"}\n".getBytes(StandardCharsets.UTF_8))
+
+      val first = PrivySparkApp.inferSchemaSignature(
+        spark,
+        "json",
+        partialPath,
+        schemaSigCache = schemaSignatureCache
+      )
+      val second = PrivySparkApp.inferSchemaSignature(
+        spark,
+        "json",
+        partialPath,
+        schemaSigCache = schemaSignatureCache
+      )
+
+      assert(first == Right("email"))
+      assert(second == Right("email"))
+      assert(PartialReadFileSystem.openCount(partialPath) == 1)
+    } finally {
+      PartialReadFileSystem.clear()
+    }
+  }
+
+  test("parse ok cache tracks validated files") {
+    val cache = new PrivySparkApp.ParseOkCache()
+
+    assert(!cache.isOk("/tmp/a.json"))
+    cache.markOk("/tmp/a.json")
+    assert(cache.isOk("/tmp/a.json"))
   }
 
   test("scanWithRules ignores malformed json payloads when valid rows are present") {
@@ -2462,6 +2522,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
             rules,
             sampleRatio = 0.5,
             fileSampleRatio = Some(0.2),
+            fileSampleMinFiles = 2,
             timestamp = "2026-04-13T00:00:00Z"
           )
 
@@ -2474,6 +2535,97 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(logs.contains("group_scan_row_sampling_ignored"))
       assert(logs.contains("file_sample_ratio=0.2"))
       assert(logs.contains("sample_ratio=0.5"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupBatch skips file sampling when the group is below the threshold") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-file-sampling-threshold-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+      val file3 = inputDir.resolve("part-0003.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+      writeText(file3,
+        "name,email\n" +
+          "carol,carol@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString, file3.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          val results = PrivySparkApp.scanGroupBatch(
+            spark,
+            inputDir.toString,
+            group,
+            rules,
+            sampleRatio = 1.0,
+            fileSampleRatio = Some(0.2),
+            fileSampleMinFiles = 10,
+            timestamp = "2026-04-16T00:00:00Z"
+          )
+
+          assert(results.size == 3)
+          assert(results.map(_.file_identifier).toSet == Set("part-0001.csv", "part-0002.csv", "part-0003.csv"))
+        }
+      }
+
+      assert(logs.contains("file_sample_skipped_reason=below_threshold"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile applies file sampling when the threshold is exceeded") {
+    val inputDir = Files.createTempDirectory("privyspark-file-sampling-fallback-threshold-")
+    val timestamp = "2026-04-16T00:00:00Z"
+
+    try {
+      val file1 = inputDir.resolve("users-a.json")
+      val file2 = inputDir.resolve("users-b.json")
+      val file3 = inputDir.resolve("users-c.json")
+
+      writeText(file1, "{\"email\":\"alice@example.com\"}\n")
+      writeText(file2, "{\"email\":\"bob@example.com\"}\n")
+      writeText(file3, "{\"email\":\"carol@example.com\"}\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "json",
+        schemaSignature = "email",
+        filePaths = Seq(file1.toString, file2.toString, file3.toString)
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp,
+        fileSampleRatio = Some(0.2),
+        fileSampleMinFiles = 2
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 1)
+      assert(results.head.pii_type == "email")
+      assert(Set("users-a.json", "users-b.json", "users-c.json").contains(results.head.file_identifier))
     } finally {
       deleteRecursively(inputDir)
     }

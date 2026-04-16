@@ -12,7 +12,7 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - 지원 입력은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`입니다.
 - 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 판별하고, 바이너리처럼 보이지 않는 UTF-8 텍스트는 내부 `text` 포맷으로 정규화해 스캔합니다.
 - 0바이트 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 건너뜁니다.
-- row sampling(`--sample-ratio`)과 batch group용 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있습니다.
+- row sampling(`--sample-ratio`)과 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있고, `--file-sample-min-files`로 파일 샘플링을 적용할 최소 그룹 크기(기본 `10`)를 조정할 수 있습니다.
 - `--ignore`, `--ignore-file`로 gitignore 스타일 glob 패턴을 지정해 파일/아카이브 엔트리를 pre-scan 전에 제외할 수 있습니다.
 - 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다.
 - `scan_results`에는 집계 지표와 함께 `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
@@ -43,12 +43,15 @@ bin/privyspark-submit \
   --ruleset default \
   --sample-ratio 0.2 \
   --file-sample-ratio 0.1 \
+  --file-sample-min-files 10 \
   --pre-scan-parallelism 6 \
   --group-parallelism 8 \
   --file-parallelism 4 \
   --ignore "_SUCCESS" \
   --ignore "backup/**"
 ```
+
+`--file-sample-ratio`는 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용됩니다. 실제 파일 샘플링이 적용된 그룹에서는 `--sample-ratio < 1.0` row sampling을 무시하고 warning 로그를 남깁니다.
 
 자세한 실행 절차와 옵션은 [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/ko/operations/execution.md](docs/ko/operations/execution.md)에 정리돼 있습니다.
 
