@@ -13,6 +13,7 @@
 - `--ruleset <default|path>`: 규칙셋 경로 또는 `default`
 - `--sample-ratio <(0.0, 1.0]>`: row sampling 비율, 기본 `0.2`
 - `--file-sample-ratio <(0.0, 1.0]>`: batch group scan 파일 샘플링 비율, 기본 미설정
+- `--file-sample-min-files <INT>`: file sampling을 적용할 최소 그룹 파일 수, 기본 `10`, `>= 1`
 - `--pre-scan-parallelism <INT>`: 디렉터리 discovery, 파일 pre-scan 확장, schema split 병렬도, `> 0`
 - `--group-parallelism <INT>`: 그룹 스캔 병렬도, `> 0`
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
@@ -42,9 +43,10 @@ ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로�
 ## 샘플링
 - `--sample-ratio`는 비결정적 row sampling입니다.
 - `sampleRatio >= 1.0`이면 row sampling 없이 전체 행을 사용합니다.
-- `--file-sample-ratio`는 batch-capable group scan에서 그룹 내부 파일을 균등 무작위로 추출합니다.
-- 샘플 파일 수는 `ceil(fileCount * fileSampleRatio)`이며 최소 1개 파일은 항상 선택합니다.
-- `--file-sample-ratio`가 설정되고 동시에 `--sample-ratio < 1.0`이면 batch-capable group scan에서는 row sampling을 무시하고 `group_scan_row_sampling_ignored` warning 로그를 남깁니다.
+- `--file-sample-ratio`는 batch scan 경로와 file fallback scan 경로에서 그룹 내부 파일을 균등 무작위로 추출합니다.
+- file sampling은 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용합니다. 임계값 이하 그룹은 전체 파일을 그대로 스캔합니다.
+- 샘플 파일 수는 `ceil(fileCount * fileSampleRatio)`이며, sampling이 적용된 그룹에서는 최소 1개 파일을 항상 선택합니다.
+- `--file-sample-ratio`가 실제로 적용되고 동시에 `--sample-ratio < 1.0`이면 row sampling을 무시하고 `group_scan_row_sampling_ignored` warning 로그를 남깁니다.
 
 균등 무작위 파일 추출을 택한 이유는 특정 데이터가 한 파일에 몰려 있을 가능성을 과소평가하지 않기 위해서입니다. 파일 크기 가중치 방식은 큰 파일을 더 자주 뽑아 concentration risk를 강화할 수 있습니다.
 

@@ -24,7 +24,8 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 ## Small-File-Heavy Inputs
 - `--pre-scan-parallelism` is the first lever for directory discovery, probe, and schema-split latency.
 - `--group-parallelism` and `--file-parallelism` increase driver-side concurrent submissions, but they do not directly guarantee executor distribution.
-- `--file-sample-ratio` can be more effective than `--sample-ratio` for small-file-heavy batch-capable groups because it reduces the number of files read at all.
+- `--file-sample-ratio` can be more effective than `--sample-ratio` for small-file-heavy inputs because it reduces the number of files read at all.
+- The default `--file-sample-min-files 10` means small groups are not sampled. Lower the threshold if you want file sampling to kick in for smaller groups.
 
 Uniform random file sampling is not only a performance feature. It also preserves file-level concentration risk better than size-weighted sampling, which would over-bias large files.
 

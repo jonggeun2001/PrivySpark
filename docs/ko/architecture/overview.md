@@ -41,8 +41,8 @@
 - 디렉터리 discovery는 BFS 순회로 진행하고, 각 레벨의 `listStatus`는 safety ceiling `64` 안에서 병렬 실행합니다.
 - discovery 이후 pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.
-- `--file-sample-ratio`는 batch-capable group scan에만 적용하고, `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.
-- `--file-sample-ratio`가 설정된 batch-capable group scan에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.
+- `--file-sample-ratio`는 batch scan과 file fallback scan에서 적용하고, 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.
+- 실제 file sampling이 적용된 그룹에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
 - 최종 출력 계약은 기본 `parquet/scan_results`, `parquet/scan_errors`이고, CLI `--output-format`에 따라 `csv/...`, `excel/*.xlsx`가 추가됩니다.

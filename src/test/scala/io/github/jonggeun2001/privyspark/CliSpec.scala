@@ -15,6 +15,7 @@ class CliSpec extends AnyFunSuite {
     assert(parsed.get.ruleset == "default")
     assert(parsed.get.sampleRatio == 0.2)
     assert(parsed.get.fileSampleRatio.isEmpty)
+    assert(parsed.get.fileSampleMinFiles == 10)
     assert(parsed.get.preScanParallelism.isEmpty)
     assert(parsed.get.groupParallelism.isEmpty)
     assert(parsed.get.fileParallelism.isEmpty)
@@ -36,6 +37,8 @@ class CliSpec extends AnyFunSuite {
         "0.75",
         "--file-sample-ratio",
         "0.4",
+        "--file-sample-min-files",
+        "12",
         "--pre-scan-parallelism",
         "3",
         "--group-parallelism",
@@ -61,6 +64,7 @@ class CliSpec extends AnyFunSuite {
     assert(parsed.get.ruleset == "/etc/privyspark/rules.yaml")
     assert(parsed.get.sampleRatio == 0.75)
     assert(parsed.get.fileSampleRatio.contains(0.4))
+    assert(parsed.get.fileSampleMinFiles == 12)
     assert(parsed.get.preScanParallelism.contains(3))
     assert(parsed.get.groupParallelism.contains(8))
     assert(parsed.get.fileParallelism.contains(6))
@@ -77,6 +81,8 @@ class CliSpec extends AnyFunSuite {
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--file-sample-ratio", "0.0"))
     val overOneFileSampleRatio =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--file-sample-ratio", "1.1"))
+    val zeroFileSampleMinFiles =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--file-sample-min-files", "0"))
     val zeroPreScanParallelism =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--pre-scan-parallelism", "0"))
     val largePreScanParallelism =
@@ -92,6 +98,7 @@ class CliSpec extends AnyFunSuite {
     assert(overOneRatio.isEmpty)
     assert(zeroFileSampleRatio.isEmpty)
     assert(overOneFileSampleRatio.isEmpty)
+    assert(zeroFileSampleMinFiles.isEmpty)
     assert(zeroPreScanParallelism.isEmpty)
     assert(largePreScanParallelism.nonEmpty)
     assert(largePreScanParallelism.get.preScanParallelism.contains(128))
@@ -105,6 +112,8 @@ class CliSpec extends AnyFunSuite {
     val invalidSampleRatio = Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--sample-ratio", "0.0"))
     val invalidFileSampleRatio =
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--file-sample-ratio", "0.0"))
+    val invalidFileSampleMinFiles =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--file-sample-min-files", "0"))
     val invalidOutputFormat =
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--output-format", "json"))
 
@@ -114,6 +123,8 @@ class CliSpec extends AnyFunSuite {
     assert(invalidSampleRatio.errors.exists(_.contains("sample-ratio must be > 0.0 and <= 1.0")))
     assert(invalidFileSampleRatio.config.isEmpty)
     assert(invalidFileSampleRatio.errors.exists(_.contains("file-sample-ratio must be > 0.0 and <= 1.0")))
+    assert(invalidFileSampleMinFiles.config.isEmpty)
+    assert(invalidFileSampleMinFiles.errors.exists(_.contains("file-sample-min-files must be >= 1")))
     assert(invalidOutputFormat.config.isEmpty)
     assert(invalidOutputFormat.errors.exists(_.contains("output-format must be one of: parquet, csv, excel")))
   }

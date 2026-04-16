@@ -45,4 +45,13 @@ class FormatDetectorSpec extends AnyFunSuite {
   test("returns empty for unsupported extensions") {
     assert(FormatDetector.infer("/data/input.unknown").isEmpty)
   }
+
+  test("skips probe for known non-data extensions") {
+    assert(FormatDetector.shouldSkipProbe("/data/brochure.pdf"))
+    assert(FormatDetector.shouldSkipProbe("/data/photo.jpg"))
+    assert(!FormatDetector.shouldSkipProbe("/data/input.csv"))
+    assert(!FormatDetector.shouldSkipProbe("/data/input.json"))
+    assert(!FormatDetector.shouldSkipProbe("/data/app.log"))
+    assert(!FormatDetector.shouldSkipProbe("/data/input.dat"))
+  }
 }
