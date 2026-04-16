@@ -37,6 +37,7 @@ bin/privyspark-submit \
   scan \
   --path /abs/input \
   --output /abs/output \
+  --output-format parquet \
   --ruleset default \
   --sample-ratio 0.2
 ```
@@ -51,17 +52,20 @@ bin/privyspark-submit \
   scan \
   --path /abs/input \
   --output /abs/output \
+  --output-format parquet \
+  --output-format csv \
   --ruleset default \
   --sample-ratio 0.2 \
   --file-sample-ratio 0.1 \
-  --pre-scan-parallelism 6 \
-  --group-parallelism 8 \
-  --file-parallelism 4 \
+  --file-sample-min-files 10 \
+  --pre-scan-parallelism 32 \
+  --group-parallelism 16 \
+  --file-parallelism 8 \
   --ignore "_SUCCESS" \
   --ignore "backup/**"
 ```
 
-When `--file-sample-ratio` is active for a batch-capable group, `--sample-ratio < 1.0` is ignored for that group and a warning is logged. This avoids changing the sampling basis twice.
+`--file-sample-ratio` only applies when a group has more files than `--file-sample-min-files`. Once file sampling actually applies to a group, `--sample-ratio < 1.0` is ignored for that group and a warning is logged. This avoids changing the sampling basis twice.
 
 ## Ignore Pattern Example
 
@@ -115,8 +119,12 @@ spark-submit \
 ```
 
 ## Output Paths
-- Final results: `<output>/parquet/scan_results`, `<output>/csv/scan_results`
-- Final errors: `<output>/parquet/scan_errors`, `<output>/csv/scan_errors`
+- Default final results: `<output>/parquet/scan_results`
+- Default final errors: `<output>/parquet/scan_errors`
+- With `--output-format csv`: `<output>/csv/scan_results`, `<output>/csv/scan_errors`
+- With `--output-format excel`: `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`
 - In-progress data: `<output>/_progress/<run_id>`
 
-The `_progress` directory is only for observability during long scans. Consumers should rely on the final Parquet/CSV reports.
+`--output-format` can be repeated and supports `parquet`, `csv`, and `excel`. The default is `parquet`.
+
+The `_progress` directory is only for observability during long scans. Consumers should rely on the selected final report formats.

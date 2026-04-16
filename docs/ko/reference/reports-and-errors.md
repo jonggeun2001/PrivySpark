@@ -1,14 +1,18 @@
 # 결과와 오류 리포트
 
 ## 최종 출력 경로
-- 결과 리포트:
+- 기본 결과 리포트:
   - `<output>/parquet/scan_results`
-  - `<output>/csv/scan_results`
-- 오류 리포트:
+- 기본 오류 리포트:
   - `<output>/parquet/scan_errors`
+- `--output-format csv` 추가 시:
+  - `<output>/csv/scan_results`
   - `<output>/csv/scan_errors`
+- `--output-format excel` 추가 시:
+  - `<output>/excel/scan_results.xlsx`
+  - `<output>/excel/scan_errors.xlsx`
 
-최종 출력은 Parquet와 CSV를 함께 제공합니다. 임시 `_progress` 경로는 운영 관측용이며, 최종 출력 계약은 아닙니다.
+`--output-format`은 반복 지정 가능하고 지원값은 `parquet`, `csv`, `excel`입니다. 기본값은 `parquet`입니다. 임시 `_progress` 경로는 운영 관측용이며, 최종 출력 계약은 아닙니다.
 
 ## 결과 필드
 - `dataset_path`
@@ -54,7 +58,7 @@
 ## 진행 중 progress 경로
 - 진행 중 임시 shard는 `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, `meta/completions/*.jsonl`에 기록될 수 있습니다.
 - clean completion은 탐지나 오류 row 없이 completion marker만 남깁니다.
-- 정상 종료 시 `_progress` 내용을 merge해 최종 Parquet/CSV를 만들고 `_progress/<run_id>`를 삭제합니다.
+- 정상 종료 시 `_progress` 내용을 merge해 선택된 최종 출력 포맷을 만들고 `_progress/<run_id>`를 삭제합니다.
 
 progress 경로를 별도로 둔 이유는 두 가지입니다. 첫째, 긴 스캔에서 이미 끝난 범위의 결과를 바로 확인할 수 있어야 합니다. 둘째, 최종 리포트 소비자가 부분 결과를 완성본으로 오해하지 않게 해야 합니다.
 

@@ -11,12 +11,16 @@ final case class CliConfig(
   ruleset: String = "default",
   sampleRatio: Double = 0.2,
   fileSampleRatio: Option[Double] = None,
+  fileSampleMinFiles: Int = 10,
   preScanParallelism: Option[Int] = None,
   groupParallelism: Option[Int] = None,
   fileParallelism: Option[Int] = None,
+  outputFormats: Seq[String] = Seq.empty,
   ignorePatterns: Seq[String] = Seq.empty,
   ignoreFile: Option[String] = None
-)
+) {
+  def effectiveOutputFormats: Seq[String] = OutputFormats.normalizeAll(outputFormats)
+}
 
 private[privyspark] final case class CliParseResult(config: Option[CliConfig], errors: Seq[String])
 
@@ -60,6 +64,14 @@ object Cli {
           else failure("file-sample-ratio must be > 0.0 and <= 1.0")
         }
         .text("그룹 batch scan 파일 샘플링 비율(0.0, 1.0]"),
+      opt[Int]("file-sample-min-files")
+        .optional()
+        .action((value, config) => config.copy(fileSampleMinFiles = value))
+        .validate { value =>
+          if (value >= 1) success
+          else failure("file-sample-min-files must be >= 1")
+        }
+        .text("file-sample-ratio를 적용할 최소 그룹 파일 수(정수 >= 1)"),
       opt[Int]("pre-scan-parallelism")
         .optional()
         .action((value, config) => config.copy(preScanParallelism = Some(value)))
@@ -84,6 +96,17 @@ object Cli {
           else failure("file-parallelism must be > 0")
         }
         .text("파일 폴백 스캔 병렬도(정수 > 0)"),
+      opt[String]("output-format")
+        .unbounded()
+        .optional()
+        .action((value, config) =>
+          OutputFormats.validate(value).fold(
+            _ => config,
+            format => config.copy(outputFormats = config.outputFormats :+ format)
+          )
+        )
+        .validate(value => OutputFormats.validate(value).fold(failure, _ => success))
+        .text("최종 출력 포맷(parquet, csv, excel). 반복 지정 가능, 기본값 parquet"),
       opt[String]("ignore")
         .unbounded()
         .optional()

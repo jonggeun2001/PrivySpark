@@ -6,6 +6,7 @@ import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
 import org.apache.spark.sql.functions.{col, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.catalyst.trees.TreeNode
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
@@ -313,6 +314,32 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       Set("support@example.com", "sales@example.com"))
   }
 
+  test("safe dataset sample fallback batches raw value collection") {
+    val df = spark.sparkContext.parallelize(Seq(
+      ("alpha@example.com", "010-1234-5678", "noise", "noise"),
+      ("noise", "noise", "beta@example.com", "010-9999-8888"),
+      ("gamma@example.com", "010-2222-3333", "delta@example.com", "010-4444-5555"),
+      ("noise", "noise", "noise", "noise")
+    ), 2).toDF("email_1", "phone_1", "email_2", "phone_2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val (rawValues, jobCount) = captureJobCount {
+      invokeDatasetSafeRawCollector(df, rules)
+    }
+
+    assert(jobCount == 1, s"expected one Spark job for batched dataset safe sample collection, found $jobCount")
+    assert(rawValues == Map(
+      "m_0_0" -> "alpha@example.com",
+      "m_1_1" -> "010-1234-5678",
+      "m_2_0" -> "beta@example.com",
+      "m_3_1" -> "010-9999-8888"
+    ))
+  }
+
   test("aggregateByFile matches legacy per-file behavior") {
     val df = Seq(
       ("alpha.csv", "alpha@example.com", "010-1234-5678"),
@@ -514,6 +541,46 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("metric_threshold_exceeded(1)"))
   }
 
+  test("sampleMatchesByFile recovers with safe fallback when batched file sample extraction fails") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678"),
+      ("alpha.csv", "noise", "none"),
+      ("beta.csv", "beta@example.com", "010-9999-8888")
+    ).toDF("file_id", "c_email", "c_phone")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules)
+    val logs = captureStderr {
+      val samples = DetectionAggregator.withForcedFileSampleBatchFailure {
+        DetectionAggregator.sampleMatchesByFile(
+          df,
+          "file_id",
+          rules,
+          matchCounts,
+          AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
+        )
+      }
+
+      val alphaEmail = matchCounts.find(matchCount =>
+        matchCount.fileIdentifier == "alpha.csv" && matchCount.columnName == "c_email" && matchCount.piiType == "email"
+      ).get
+      val betaPhone = matchCounts.find(matchCount =>
+        matchCount.fileIdentifier == "beta.csv" && matchCount.columnName == "c_phone" && matchCount.piiType == "phone"
+      ).get
+
+      assert(samples((alphaEmail.fileIdentifier, alphaEmail.metricAlias)).sampleMatchedFragment == "alpha@example.com")
+      assert(samples((betaPhone.fileIdentifier, betaPhone.metricAlias)).sampleMatchedFragment == "010-9999-8888")
+    }
+
+    assert(logs.contains("detection_aggregation_fallback"))
+    assert(logs.contains("scope=file_sample"))
+    assert(logs.contains("forced-file-sample-batch-failure"))
+  }
+
   test("counts only full-value matches per file for full-column rules") {
     val df = Seq(
       ("alpha.csv", "alpha@example.com"),
@@ -555,6 +622,35 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(matchCounts.size == 2)
     assert(matchCounts.flatMap(matchCount => samples.get((matchCount.fileIdentifier, matchCount.metricAlias)).map(_.sampleMatchedFragment)).toSet ==
       Set("support@example.com", "sales@example.com"))
+  }
+
+  test("safe file sample fallback batches raw value collection") {
+    val df = Seq(
+      ("alpha.csv", "alpha@example.com", "010-1234-5678", "beta@example.com", "010-2222-3333"),
+      ("beta.csv", "gamma@example.com", "010-9999-8888", "delta@example.com", "010-4444-5555"),
+      ("gamma.csv", "noise", "noise", "noise", "noise")
+    ).toDF("file_id", "email_1", "phone_1", "email_2", "phone_2")
+
+    val rules = Seq(
+      PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
+      PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+
+    val (rawValues, jobCount) = captureJobCount {
+      invokeFileSafeRawCollector(df, "file_id", rules)
+    }
+
+    assert(jobCount == 2, s"expected two Spark jobs for batched file safe sample collection, found $jobCount")
+    assert(rawValues == Map(
+      ("alpha.csv", "m_0_0") -> "alpha@example.com",
+      ("alpha.csv", "m_1_1") -> "010-1234-5678",
+      ("alpha.csv", "m_2_0") -> "beta@example.com",
+      ("alpha.csv", "m_3_1") -> "010-2222-3333",
+      ("beta.csv", "m_0_0") -> "gamma@example.com",
+      ("beta.csv", "m_1_1") -> "010-9999-8888",
+      ("beta.csv", "m_2_0") -> "delta@example.com",
+      ("beta.csv", "m_3_1") -> "010-4444-5555"
+    ))
   }
 
   test("sampleMatches keeps driver license samples aligned with the matched regex fragment") {
@@ -609,6 +705,82 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val expected = Seq(MatchCount("driver_license", "driver_license_number", 5L))
 
     assert(actual == expected)
+  }
+
+  test("buildMetrics uses codegen-friendly SQL predicates for driver license detection") {
+    val df = Seq(
+      ("11-12-345678-90"),
+      ("noise")
+    ).toDF("driver_license")
+    val rules = Seq(
+      PiiRule(
+        "driver_license_number",
+        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
+      )
+    )
+
+    val metrics = invokeBuildMetrics(df.columns.toSeq, rules)
+    val predicate = extractMetricPredicate(metrics.head)
+    val expressionClassNames = df
+      .filter(predicate)
+      .queryExecution
+      .analyzed
+      .expressions
+      .toSeq
+      .flatMap(expression => treeNodeClassNames(expression.asInstanceOf[TreeNode[_]]))
+
+    assert(!expressionClassNames.contains("ScalaUDF"), expressionClassNames.mkString(","))
+  }
+
+  test("batched driver license aggregation matches safe legacy fallback") {
+    val df = Seq(
+      ("11-12-345678-90", "서울 07 - 111111 - 10"),
+      ("27-12-345678-90", "부산0711111110"),
+      ("271234567890", "면허번호 서울 07 - 111111 - 10"),
+      ("이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90", "세종 07 - 111111 - 10"),
+      ("noise", "noise")
+    ).toDF("driver_license_partial", "driver_license_full")
+
+    val rules = Seq(
+      PiiRule(
+        "driver_license_number",
+        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
+      ),
+      PiiRule(
+        "driver_license_number",
+        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))",
+        matchType = PiiRuleMatchType.FullColumn,
+        columnHints = Seq("full")
+      )
+    )
+
+    val batched = DetectionAggregator.aggregate(
+      df,
+      rules,
+      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1000)
+    )
+    val fallback = DetectionAggregator.aggregate(
+      df,
+      rules,
+      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
+    )
+
+    assert(sortByKey(batched) == sortByKey(fallback))
+  }
+
+  test("driver license aggregation accepts a later valid regex match after an earlier invalid one") {
+    val df = Seq(
+      "이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90"
+    ).toDF("driver_license")
+
+    val rules = Seq(
+      PiiRule("driver_license_number", "(?:27|11)-[0-9]{2}-[0-9]{6}-[0-9]{2}")
+    )
+
+    val actual = DetectionAggregator.aggregate(df, rules)
+    val expected = Seq(MatchCount("driver_license", "driver_license_number", 1L))
+
+    assert(sortByKey(actual) == sortByKey(expected))
   }
 
   test("counts Korean region-name driver license numbers for full-column rules") {
@@ -696,6 +868,47 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       DetectionAggregator.resetDebugCache()
       DriverLogger.resetCache()
     }
+  }
+
+  private def invokeDatasetSafeRawCollector(df: DataFrame, rules: Seq[PiiRule]): Map[String, String] = {
+    val metrics = invokeDetectionAggregatorPrivateMethod(
+      "buildMetrics",
+      df.columns.toSeq,
+      rules
+    )
+
+    invokeDetectionAggregatorPrivateMethod(
+      "collectSampleRawValuesSafely",
+      df,
+      metrics
+    ).asInstanceOf[Map[String, String]]
+  }
+
+  private def invokeFileSafeRawCollector(
+    df: DataFrame,
+    fileIdentifierColumn: String,
+    rules: Seq[PiiRule]
+  ): Map[(String, String), String] = {
+    val metrics = invokeDetectionAggregatorPrivateMethod(
+      "buildMetrics",
+      df.columns.toSeq.filterNot(_ == fileIdentifierColumn),
+      rules
+    )
+
+    invokeDetectionAggregatorPrivateMethod(
+      "collectSampleRawValuesByFileSafely",
+      df,
+      fileIdentifierColumn,
+      metrics
+    ).asInstanceOf[Map[(String, String), String]]
+  }
+
+  private def invokeDetectionAggregatorPrivateMethod(methodName: String, args: AnyRef*): AnyRef = {
+    val method = DetectionAggregator.getClass.getDeclaredMethods
+      .find(candidate => candidate.getName == methodName && candidate.getParameterCount == args.size)
+      .getOrElse(fail(s"unable to find DetectionAggregator private method: $methodName/${args.size}"))
+    method.setAccessible(true)
+    method.invoke(DetectionAggregator, args: _*)
   }
 
   private def legacyCounts(df: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
@@ -788,5 +1001,19 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       case PiiRuleMatchType.FullColumn => s"\\A(?:${rule.regex})\\z"
       case _ => rule.regex
     }
+  }
+
+  private def invokeBuildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[AnyRef] = {
+    val method = DetectionAggregator.getClass.getDeclaredMethods.find(_.getName == "buildMetrics").get
+    method.setAccessible(true)
+    method.invoke(DetectionAggregator, columns, rules).asInstanceOf[Seq[AnyRef]]
+  }
+
+  private def extractMetricPredicate(metric: AnyRef): org.apache.spark.sql.Column = {
+    metric.getClass.getMethod("predicate").invoke(metric).asInstanceOf[org.apache.spark.sql.Column]
+  }
+
+  private def treeNodeClassNames(node: TreeNode[_]): Seq[String] = {
+    node.getClass.getSimpleName +: node.children.toSeq.flatMap(child => treeNodeClassNames(child.asInstanceOf[TreeNode[_]]))
   }
 }

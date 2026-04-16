@@ -37,6 +37,7 @@ bin/privyspark-submit \
   scan \
   --path /abs/input \
   --output /abs/output \
+  --output-format parquet \
   --ruleset default \
   --sample-ratio 0.2
 ```
@@ -51,17 +52,20 @@ bin/privyspark-submit \
   scan \
   --path /abs/input \
   --output /abs/output \
+  --output-format parquet \
+  --output-format csv \
   --ruleset default \
   --sample-ratio 0.2 \
   --file-sample-ratio 0.1 \
-  --pre-scan-parallelism 6 \
-  --group-parallelism 8 \
-  --file-parallelism 4 \
+  --file-sample-min-files 10 \
+  --pre-scan-parallelism 32 \
+  --group-parallelism 16 \
+  --file-parallelism 8 \
   --ignore "_SUCCESS" \
   --ignore "backup/**"
 ```
 
-`--file-sample-ratio`가 batch-capable group scan에 적용되면 `--sample-ratio < 1.0`은 해당 그룹에서 무시되고 warning 로그가 남습니다. 이유는 파일 샘플링 후 다시 row sampling을 적용하면 샘플 기준이 이중으로 바뀌어 결과 해석이 불명확해지기 때문입니다.
+`--file-sample-ratio`는 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용됩니다. 실제 파일 샘플링이 적용된 그룹에서는 `--sample-ratio < 1.0`이 무시되고 warning 로그가 남습니다. 이유는 파일 샘플링 후 다시 row sampling을 적용하면 샘플 기준이 이중으로 바뀌어 결과 해석이 불명확해지기 때문입니다.
 
 ## ignore 패턴 예시
 
@@ -115,8 +119,12 @@ spark-submit \
 ```
 
 ## 결과 확인
-- 최종 결과: `<output>/parquet/scan_results`, `<output>/csv/scan_results`
-- 최종 오류: `<output>/parquet/scan_errors`, `<output>/csv/scan_errors`
+- 기본 최종 결과: `<output>/parquet/scan_results`
+- 기본 최종 오류: `<output>/parquet/scan_errors`
+- `--output-format csv` 추가 시: `<output>/csv/scan_results`, `<output>/csv/scan_errors`
+- `--output-format excel` 추가 시: `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`
 - 실행 중 progress: `<output>/_progress/<run_id>`
 
-progress 경로는 관측용 임시 경로입니다. 최종 소비자는 항상 Parquet/CSV 최종 리포트를 기준으로 봐야 합니다.
+`--output-format`은 반복 지정 가능하고 지원값은 `parquet`, `csv`, `excel`입니다. 기본값은 `parquet`입니다.
+
+progress 경로는 관측용 임시 경로입니다. 최종 소비자는 항상 선택한 최종 리포트 포맷을 기준으로 봐야 합니다.

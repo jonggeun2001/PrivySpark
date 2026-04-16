@@ -11,17 +11,21 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 실제 병목은 입력 분포에 따라 달라집니다. 작은 파일이 매우 많으면 pre-scan과 파티션 fan-out이, 넓은 스키마 테이블에서는 탐지 집계 표현식 수가 더 크게 작용합니다.
 
 ## 현재 구현이 이미 적용하는 최적화
-- pre-scan 병렬도는 파일 확장, 포맷 판별, 그룹별 schema split에 재사용됩니다.
+- pre-scan 병렬도는 BFS 디렉터리 discovery, 파일 확장, 포맷 판별, 그룹별 schema split에 재사용됩니다.
 - CSV 본문 읽기는 `inferSchema=false`로 동작합니다.
 - `DetectionAggregator`는 메트릭별 개별 job 대신 batched aggregation을 기본 경로로 사용합니다.
+- `driver_license_number` 집계는 Scala UDF 대신 `regexp_extract_all` + SQL 조건식으로 내려가 Catalyst/codegen 경로를 유지합니다.
 - legacy fallback threshold는 `50,000` 표현식으로 올려져 있고, 초과 시에도 메트릭당 개별 count 대신 소배치 집계를 사용합니다.
+- sample raw-value fallback도 배치화되어 있습니다. dataset 경로는 `when(...)` projection을 chunk 단위로 처리하고, file 경로는 파일별 `first(when(...))` 집계를 chunk 단위로 묶어서 메트릭마다 Spark job을 따로 내지 않습니다.
 - `_progress`를 최종 집계 소스로 사용해 long scan에서 driver가 모든 결과 row payload를 끝까지 들고 있지 않도록 합니다.
 - sampled scan과 최종 리포트 저장 경로는 Spark storage cache를 사용하지 않습니다. dynamic allocation 환경에서 cached executor가 YARN 자원을 오래 점유하지 않게 하기 위한 선택입니다.
+- 기본 driver-side 병렬도는 I/O 바운드 pre-scan fan-out을 기준으로 `--pre-scan-parallelism 32`, `--group-parallelism 16`, `--file-parallelism 8`에서 시작합니다. `pre-scan`은 안전 상한 `64`를 유지합니다.
 
 ## 작은 파일이 많은 입력
-- `--pre-scan-parallelism`은 파일 probe와 schema split 대기 시간을 줄이는 1차 옵션입니다.
+- `--pre-scan-parallelism`은 디렉터리 discovery, 파일 probe, schema split 대기 시간을 줄이는 1차 옵션입니다.
 - `--group-parallelism`과 `--file-parallelism`은 driver 제출 동시성을 늘리지만, executor 분산을 직접 보장하지는 않습니다.
-- `--file-sample-ratio`는 batch-capable group에서 읽는 파일 수 자체를 줄이므로, 작은 파일이 매우 많을 때 `--sample-ratio`보다 직접적인 효과가 날 수 있습니다.
+- `--file-sample-ratio`는 읽는 파일 수 자체를 줄이므로, 작은 파일이 매우 많을 때 `--sample-ratio`보다 직접적인 효과가 날 수 있습니다.
+- 기본 `--file-sample-min-files 10` 때문에 작은 그룹은 sampling 대상이 아닙니다. 더 작은 그룹에도 file sampling을 적용하려면 임계값을 낮춰야 합니다.
 
 균등 무작위 파일 샘플링을 둔 이유는 성능만이 아니라 데이터 concentration risk를 보존하기 위해서입니다. 특정 데이터가 한 파일에 몰린 경우를 운영적으로 배제하지 않는다는 요구가 있었기 때문에, 파일 크기 가중치 대신 각 파일을 같은 확률로 뽑습니다.
 

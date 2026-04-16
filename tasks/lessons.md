@@ -5,3 +5,5 @@
 - 진행 중 스캔용 progress 스키마를 바꿀 때는 merge reader에 구 필드 fallback을 남겨야 한다. 그렇지 않으면 배포 중 재시작 시 누적된 JSONL progress가 새 버전에서 끊긴다.
 - glob ignore 기능은 매칭 엔진만 추가해서 끝나지 않는다. CLI 옵션, 파일 discovery, archive entry 확장, summary 로그, 문서, 테스트를 한 번에 묶어야 실제 운영 노이즈 감소로 이어진다.
 - DriverLogger는 `*`, `!` 같은 문자를 가진 값을 자동으로 quote 하므로, 로그 기반 테스트는 `key=value` 전체 literal보다 핵심 token 존재 여부로 검증하는 편이 안정적이다.
+- Spark SQL 성능 최적화에서 UDF 제거를 검증할 때는 `optimizedPlan`만 보면 안 된다. local relation folding 때문에 UDF 흔적이 사라질 수 있으므로 analyzed expression 트리에서 클래스 이름을 확인하는 편이 안정적이다.
+- 운영 기본값 튜닝은 상수 변경만으로 끝나지 않는다. 회귀 테스트, quick start 예시, performance 가이드 숫자를 같이 올리지 않으면 사용자는 여전히 예전 값을 따라가게 된다.

@@ -9,10 +9,12 @@
 ## CLI Arguments
 - `--path <ABS_PATH_OR_URI>`: input path
 - `--output <ABS_PATH_OR_URI>`: output path
+- `--output-format <parquet|csv|excel>`: repeatable final output format option, default `parquet`
 - `--ruleset <default|path>`: built-in ruleset or external path
 - `--sample-ratio <(0.0, 1.0]>`: row sampling ratio, default `0.2`
 - `--file-sample-ratio <(0.0, 1.0]>`: batch group file sampling ratio, unset by default
-- `--pre-scan-parallelism <INT>`: parallelism for file pre-scan expansion and schema split, `> 0`
+- `--file-sample-min-files <INT>`: minimum group size required before file sampling applies, default `10`, `>= 1`
+- `--pre-scan-parallelism <INT>`: parallelism for directory discovery, file pre-scan expansion, and schema split, `> 0`
 - `--group-parallelism <INT>`: group scan parallelism, `> 0`
 - `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
@@ -32,8 +34,8 @@ The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `
 ## Parallelism
 - CLI values are passed directly into application logic.
 - When omitted, PrivySpark uses `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`, or the application defaults (`4`, `4`, `3`).
-- Pre-scan parallelism covers input expansion, format probing, and group schema split.
-- Effective pre-scan parallelism is bounded by discovered file count and the safety ceiling `64`.
+- Pre-scan parallelism covers directory discovery, input expansion, format probing, and group schema split.
+- During directory discovery, the pool is capped by the safety ceiling `64` and the number of directories in the current BFS level. After discovery, effective pre-scan parallelism is still bounded by discovered file count and the safety ceiling `64`.
 - Group and file parallelism control how many scan tasks the driver submits concurrently.
 
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
@@ -41,9 +43,10 @@ These settings do not directly guarantee executor fan-out. Actual executor distr
 ## Sampling
 - `--sample-ratio` is non-deterministic row sampling.
 - When `sampleRatio >= 1.0`, no row sampling is applied.
-- `--file-sample-ratio` uniformly samples files inside a batch-capable group.
-- The sampled file count is `ceil(fileCount * fileSampleRatio)` with a minimum of one file.
-- When `--file-sample-ratio` is active and `--sample-ratio < 1.0` is also provided, row sampling is ignored for that group and `group_scan_row_sampling_ignored` is logged.
+- `--file-sample-ratio` uniformly samples files inside both batch scan and file-fallback group scans.
+- File sampling only applies when the group has more files than `--file-sample-min-files`. Groups at or below the threshold still scan every file.
+- When sampling applies, the sampled file count is `ceil(fileCount * fileSampleRatio)` with a minimum of one file.
+- When file sampling actually applies and `--sample-ratio < 1.0` is also provided, row sampling is ignored for that group and `group_scan_row_sampling_ignored` is logged.
 
 Uniform random file sampling was chosen because the operational concern was file-level concentration risk. Size-weighted sampling would bias toward large files and could amplify concentration instead of reflecting it.
 

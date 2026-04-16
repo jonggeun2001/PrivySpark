@@ -9,10 +9,12 @@
 ## CLI 인자
 - `--path <ABS_PATH_OR_URI>`: 입력 경로
 - `--output <ABS_PATH_OR_URI>`: 출력 경로
+- `--output-format <parquet|csv|excel>`: 반복 지정 가능한 최종 출력 포맷, 기본 `parquet`
 - `--ruleset <default|path>`: 규칙셋 경로 또는 `default`
 - `--sample-ratio <(0.0, 1.0]>`: row sampling 비율, 기본 `0.2`
 - `--file-sample-ratio <(0.0, 1.0]>`: batch group scan 파일 샘플링 비율, 기본 미설정
-- `--pre-scan-parallelism <INT>`: 파일 pre-scan 확장과 schema split 병렬도, `> 0`
+- `--file-sample-min-files <INT>`: file sampling을 적용할 최소 그룹 파일 수, 기본 `10`, `>= 1`
+- `--pre-scan-parallelism <INT>`: 디렉터리 discovery, 파일 pre-scan 확장, schema split 병렬도, `> 0`
 - `--group-parallelism <INT>`: 그룹 스캔 병렬도, `> 0`
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
@@ -32,8 +34,8 @@ ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로�
 ## 병렬도
 - CLI 값을 주면 해당 값이 앱 로직에 직접 전달됩니다.
 - CLI 값을 생략하면 `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 또는 앱 기본값(`4`, `4`, `3`)을 사용합니다.
-- pre-scan 병렬도는 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용됩니다.
-- pre-scan 병렬도는 파일 수와 safety ceiling `64` 기준으로 축소됩니다.
+- pre-scan 병렬도는 디렉터리 discovery, 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용됩니다.
+- 디렉터리 discovery 단계에서는 BFS 레벨의 디렉터리 수와 safety ceiling `64` 기준으로 풀 크기가 제한되고, discovery 이후 pre-scan 병렬도는 기존처럼 파일 수와 safety ceiling `64` 기준으로 축소됩니다.
 - 그룹 병렬도와 파일 병렬도는 driver가 동시에 제출하는 작업 수를 제어합니다.
 
 여기서 중요한 점은 앱 레벨 병렬도가 곧 executor 수를 직접 보장하는 것은 아니라는 점입니다. 실제 executor 분산은 입력 파티션 수, Spark scheduler, dynamic allocation backlog에 함께 영향을 받습니다.
@@ -41,9 +43,10 @@ ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로�
 ## 샘플링
 - `--sample-ratio`는 비결정적 row sampling입니다.
 - `sampleRatio >= 1.0`이면 row sampling 없이 전체 행을 사용합니다.
-- `--file-sample-ratio`는 batch-capable group scan에서 그룹 내부 파일을 균등 무작위로 추출합니다.
-- 샘플 파일 수는 `ceil(fileCount * fileSampleRatio)`이며 최소 1개 파일은 항상 선택합니다.
-- `--file-sample-ratio`가 설정되고 동시에 `--sample-ratio < 1.0`이면 batch-capable group scan에서는 row sampling을 무시하고 `group_scan_row_sampling_ignored` warning 로그를 남깁니다.
+- `--file-sample-ratio`는 batch scan 경로와 file fallback scan 경로에서 그룹 내부 파일을 균등 무작위로 추출합니다.
+- file sampling은 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용합니다. 임계값 이하 그룹은 전체 파일을 그대로 스캔합니다.
+- 샘플 파일 수는 `ceil(fileCount * fileSampleRatio)`이며, sampling이 적용된 그룹에서는 최소 1개 파일을 항상 선택합니다.
+- `--file-sample-ratio`가 실제로 적용되고 동시에 `--sample-ratio < 1.0`이면 row sampling을 무시하고 `group_scan_row_sampling_ignored` warning 로그를 남깁니다.
 
 균등 무작위 파일 추출을 택한 이유는 특정 데이터가 한 파일에 몰려 있을 가능성을 과소평가하지 않기 위해서입니다. 파일 크기 가중치 방식은 큰 파일을 더 자주 뽑아 concentration risk를 강화할 수 있습니다.
 

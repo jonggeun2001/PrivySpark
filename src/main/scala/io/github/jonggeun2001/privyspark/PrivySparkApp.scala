@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.charset.{CharacterCodingException, CodingErrorAction}
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.{Executors, ScheduledExecutorService, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, Executors, ScheduledExecutorService, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipInputStream
 import java.nio.file.NoSuchFileException
@@ -72,6 +72,116 @@ object PrivySparkApp {
     matchCounts: Seq[MatchCount],
     sampleValues: Map[String, DetectionAggregator.SampleValue]
   )
+  private[privyspark] final class CsvHeadCache {
+    private val cachedLinesByFile = new ConcurrentHashMap[String, Seq[String]]()
+    private val cachedCharactersByFile = new ConcurrentHashMap[String, Int]()
+    private val insertionOrder = new ConcurrentLinkedQueue[String]()
+    private val totalCachedCharacters = new AtomicInteger(0)
+
+    def getOrRead(filePath: String)(loader: => Seq[String]): Seq[String] = {
+      Option(cachedLinesByFile.get(filePath)).getOrElse {
+        val loaded = loader
+        cacheLoaded(filePath, loaded)
+        Option(cachedLinesByFile.get(filePath)).getOrElse(loaded)
+      }
+    }
+
+    def clear(): Unit = this.synchronized {
+      cachedLinesByFile.clear()
+      cachedCharactersByFile.clear()
+      insertionOrder.clear()
+      totalCachedCharacters.set(0)
+    }
+
+    private def cacheLoaded(filePath: String, lines: Seq[String]): Unit = this.synchronized {
+      if (cachedLinesByFile.containsKey(filePath)) {
+        return
+      }
+
+      val characterCount = lines.iterator.map(_.length).sum
+      if (characterCount > CsvHeadCache.MaxCharacters) {
+        return
+      }
+
+      cachedLinesByFile.put(filePath, lines)
+      cachedCharactersByFile.put(filePath, characterCount)
+      insertionOrder.add(filePath)
+      totalCachedCharacters.addAndGet(characterCount)
+      evictToBounds()
+    }
+
+    private def evictToBounds(): Unit = {
+      while (cachedLinesByFile.size() > CsvHeadCache.MaxEntries || totalCachedCharacters.get() > CsvHeadCache.MaxCharacters) {
+        val oldestPath = insertionOrder.poll()
+        if (oldestPath == null) {
+          return
+        }
+
+        val removed = cachedLinesByFile.remove(oldestPath)
+        if (removed != null) {
+          val removedCharacterCount = Option(cachedCharactersByFile.remove(oldestPath)).map(_.toInt).getOrElse(removed.iterator.map(_.length).sum)
+          totalCachedCharacters.addAndGet(-removedCharacterCount)
+        }
+      }
+    }
+  }
+  private object CsvHeadCache {
+    val CachedLineLimit = 2
+    val MaxEntries = 4096
+    val MaxCharacters = 1024 * 1024
+  }
+  private[privyspark] final case class CachedSchemaSignature(signature: String, csvHasHeader: Boolean)
+  private[privyspark] final class SchemaSignatureCache {
+    private val cache = new ConcurrentHashMap[String, CachedSchemaSignature]()
+    private val insertionOrder = new ConcurrentLinkedQueue[String]()
+
+    def getOrCompute(
+      filePath: String,
+      format: String,
+      readOptions: ScanReadOptions = ScanReadOptions()
+    )(loader: => CachedSchemaSignature): CachedSchemaSignature = {
+      val key = cacheKey(filePath, format, readOptions)
+      Option(cache.get(key)).getOrElse {
+        val loaded = loader
+        val existing = cache.putIfAbsent(key, loaded)
+        if (existing == null) {
+          insertionOrder.offer(key)
+          evictIfNeeded()
+          loaded
+        } else {
+          existing
+        }
+      }
+    }
+
+    def clear(): Unit = this.synchronized {
+      cache.clear()
+      insertionOrder.clear()
+    }
+
+    private def cacheKey(filePath: String, format: String, readOptions: ScanReadOptions): String =
+      s"$format::$filePath::$readOptions"
+
+    private def evictIfNeeded(): Unit = this.synchronized {
+      while (cache.size() > SchemaSignatureCache.MaxEntries) {
+        val oldestKey = insertionOrder.poll()
+        if (oldestKey == null) {
+          return
+        }
+        cache.remove(oldestKey)
+      }
+    }
+  }
+  private object SchemaSignatureCache {
+    val MaxEntries = 4096
+  }
+  private[privyspark] final class ParseOkCache {
+    private val okPaths = ConcurrentHashMap.newKeySet[String]()
+
+    def markOk(path: String): Unit = okPaths.add(path)
+    def isOk(path: String): Boolean = okPaths.contains(path)
+    def clear(): Unit = okPaths.clear()
+  }
   private final case class ProbeSample(bytes: Array[Byte], truncated: Boolean)
   private final case class PreScanFileOutcome(
     filePath: String,
@@ -101,9 +211,11 @@ object PrivySparkApp {
   )
   private final case class ActiveRunMarker(runId: String, state: String, lastHeartbeatEpochMillis: Long)
   private final case class ProgressRunMetadata(runId: String, state: String)
+  private final case class ReportFormatPaths(format: String, rootPath: String, resultPath: String, errorPath: String)
 
   private val FileIdentifierColumn = "__privyspark_file_identifier"
   private val ProgressDirectoryName = "_progress"
+  private val ReportStagingDirectoryName = "_report_staging"
   private val TextFormat = "text"
   private val XlsxFormat = "xlsx"
   private val AvroFormat = "avro"
@@ -172,13 +284,13 @@ object PrivySparkApp {
     "item"
   )
   private val PreScanParallelismConfKey = "spark.privyspark.preScanParallelism"
-  private val DefaultPreScanParallelism = 4
+  private val DefaultPreScanParallelism = 32
   // Allow higher-than-core I/O fan-out without letting a single scan create an unbounded number of driver threads.
   private val MaxSafePreScanParallelism = 64
   private val GroupParallelismConfKey = "spark.privyspark.groupParallelism"
-  private val DefaultGroupParallelism = 4
+  private val DefaultGroupParallelism = 16
   private val FileParallelismConfKey = "spark.privyspark.fileParallelism"
-  private val DefaultFileParallelism = 3
+  private val DefaultFileParallelism = 8
   private val RetriableFileReadErrorSnippets = Seq(
     "path does not exist",
     "file does not exist",
@@ -387,17 +499,17 @@ object PrivySparkApp {
     }
   }
 
-  private def readProbeBytes(conf: org.apache.hadoop.conf.Configuration, filePath: String, limit: Int): ProbeSample = {
-    val sourcePath = new Path(filePath)
+  private def probe(conf: org.apache.hadoop.conf.Configuration, path: String, maxBytes: Int): ProbeSample = {
+    val sourcePath = new Path(path)
     val fs = sourcePath.getFileSystem(conf)
     val inputStream = fs.open(sourcePath)
     try {
-      val buffer = new Array[Byte](limit)
+      val buffer = new Array[Byte](maxBytes)
       var totalBytesRead = 0
       var continueReading = true
 
-      while (continueReading && totalBytesRead < limit) {
-        val bytesRead = inputStream.read(buffer, totalBytesRead, limit - totalBytesRead)
+      while (continueReading && totalBytesRead < maxBytes) {
+        val bytesRead = inputStream.read(buffer, totalBytesRead, maxBytes - totalBytesRead)
         if (bytesRead < 0) {
           continueReading = false
         } else if (bytesRead == 0) {
@@ -414,7 +526,7 @@ object PrivySparkApp {
       }
 
       val truncated =
-        totalBytesRead >= limit && inputStream.read() >= 0
+        totalBytesRead >= maxBytes && inputStream.read() >= 0
       val bytes =
         if (totalBytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, totalBytesRead)
       ProbeSample(bytes, truncated)
@@ -584,12 +696,18 @@ object PrivySparkApp {
     val extensionFormat = FormatDetector.infer(filePath)
     if (extensionFormat.isDefined) {
       extensionFormat
+    } else if (FormatDetector.shouldSkipProbe(filePath)) {
+      None
     } else {
-      val probeSample = readProbeBytes(conf, filePath, TextProbeByteLimit)
-      inferMagicByteFormat(probeSample.bytes)
+      val probeSample = probe(conf, filePath, TextProbeByteLimit)
+      val magicProbeBytes = java.util.Arrays.copyOf(probeSample.bytes, math.min(probeSample.bytes.length, MagicProbeByteLimit))
+      inferMagicByteFormat(magicProbeBytes)
         .orElse(inferTextFormat(probeSample.bytes, allowIncompleteTrailingSequence = probeSample.truncated))
     }
   }
+
+  private def shouldProbeForFormat(filePath: String, pathInferredFormat: Option[String]): Boolean =
+    pathInferredFormat.isEmpty && !FormatDetector.shouldSkipProbe(filePath)
 
   private def isZeroBytePhysicalFile(conf: org.apache.hadoop.conf.Configuration, filePath: String): Boolean = {
     val sourcePath = new Path(filePath)
@@ -797,16 +915,28 @@ object PrivySparkApp {
     DefaultPreScanParallelism
   }
 
+  private[privyspark] def defaultGroupParallelism: Int = {
+    DefaultGroupParallelism
+  }
+
+  private[privyspark] def defaultFileParallelism: Int = {
+    DefaultFileParallelism
+  }
+
   private[privyspark] def maxSafePreScanParallelism: Int = {
     MaxSafePreScanParallelism
   }
 
   private[privyspark] def resolveConfiguredPreScanParallelism(fileCount: Int, configured: Int, source: String): Int = {
+    resolveParallelism(fileCount, resolvePreScanPoolSize(configured, source))
+  }
+
+  private def resolvePreScanPoolSize(configured: Int, source: String): Int = {
     if (configured <= 0) {
       throw new IllegalArgumentException(s"$source must be > 0")
     }
 
-    resolveParallelism(fileCount, math.min(configured, maxSafePreScanParallelism))
+    math.min(configured, maxSafePreScanParallelism)
   }
 
   private[privyspark] def resolvePreScanParallelism(spark: SparkSession, fileCount: Int): Int = {
@@ -819,6 +949,22 @@ object PrivySparkApp {
         )
       case None =>
         resolveParallelism(fileCount, defaultPreScanParallelism)
+    }
+  }
+
+  private def resolveDiscoveryParallelism(spark: SparkSession, configured: Int): Int = {
+    if (configured > 0) {
+      resolvePreScanPoolSize(configured, "--pre-scan-parallelism")
+    } else {
+      spark.sparkContext.getConf.getOption(PreScanParallelismConfKey) match {
+        case Some(_) =>
+          resolvePreScanPoolSize(
+            spark.sparkContext.getConf.getInt(PreScanParallelismConfKey, defaultPreScanParallelism),
+            PreScanParallelismConfKey
+          )
+        case None =>
+          math.min(defaultPreScanParallelism, maxSafePreScanParallelism)
+      }
     }
   }
 
@@ -848,7 +994,8 @@ object PrivySparkApp {
     } else if (parallelism <= 1 || tasks.size <= 1) {
       tasks.map(task => task())
     } else {
-      val pool = Executors.newFixedThreadPool(parallelism)
+      val workerCount = math.max(1, math.min(parallelism, tasks.size))
+      val pool = Executors.newFixedThreadPool(workerCount)
       implicit val ec: ExecutionContext = ExecutionContext.fromExecutorService(pool)
       try {
         Await.result(Future.sequence(tasks.map(task => Future(task()))), Duration.Inf)
@@ -930,6 +1077,10 @@ object PrivySparkApp {
 
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
     val (preScanParallelism, groupParallelism, fileParallelism) = resolveCliParallelism(config)
+    val outputFormats = config.effectiveOutputFormats
+    val csvHeadCache = new CsvHeadCache()
+    val schemaSigCache = new SchemaSignatureCache()
+    val parseOkCache = new ParseOkCache()
     val ignoreMatcher = IgnoreMatcher.fromSources(spark.sparkContext.hadoopConfiguration, config.ignorePatterns, config.ignoreFile)
     logInfo(
       "scan_start",
@@ -938,9 +1089,11 @@ object PrivySparkApp {
       "ruleset" -> config.ruleset,
       "sample_ratio" -> config.sampleRatio,
       "file_sample_ratio" -> config.fileSampleRatio.getOrElse("none"),
+      "file_sample_min_files" -> config.fileSampleMinFiles,
       "configured_pre_scan_parallelism" -> renderConfiguredParallelism(config.preScanParallelism),
       "configured_group_parallelism" -> renderConfiguredParallelism(config.groupParallelism),
       "configured_file_parallelism" -> renderConfiguredParallelism(config.fileParallelism),
+      "output_formats" -> outputFormats.mkString(","),
       "ignore_patterns" -> config.ignorePatterns.size,
       "ignore_file" -> config.ignoreFile.getOrElse("none"),
       "driver_log_level" -> DriverLogger.currentLogLevel.label.toLowerCase
@@ -954,7 +1107,10 @@ object PrivySparkApp {
       config.inputPath,
       timestamp,
       preScanParallelism,
-      ignoreMatcher = ignoreMatcher
+      ignoreMatcher = ignoreMatcher,
+      csvHeadCache = csvHeadCache,
+      schemaSigCache = schemaSigCache,
+      parseOkCache = parseOkCache
     )
     var progressRun: Option[ProgressRun] = None
     var heartbeatExecutor: Option[ScheduledExecutorService] = None
@@ -996,13 +1152,26 @@ object PrivySparkApp {
         groupParallelism,
         fileParallelism,
         config.fileSampleRatio,
+        config.fileSampleMinFiles,
         Some(preparedProgressRun),
-        retainPayloads = false
+        retainPayloads = false,
+        csvHeadCache = csvHeadCache
       )
 
-      logDebug("report_write_start", "output_root" -> config.outputPath, "progress_run" -> preparedProgressRun.runId)
-      val (resultCount, errorCount) = mergeProgressReports(spark, config.outputPath, preparedProgressRun)
-      logDebug("report_write_complete", "results" -> resultCount, "errors" -> errorCount, "output_root" -> config.outputPath)
+      logDebug(
+        "report_write_start",
+        "output_root" -> config.outputPath,
+        "progress_run" -> preparedProgressRun.runId,
+        "output_formats" -> outputFormats.mkString(",")
+      )
+      val (resultCount, errorCount) = mergeProgressReports(spark, config.outputPath, preparedProgressRun, outputFormats)
+      logDebug(
+        "report_write_complete",
+        "results" -> resultCount,
+        "errors" -> errorCount,
+        "output_root" -> config.outputPath,
+        "output_formats" -> outputFormats.mkString(",")
+      )
       logInfo(
         "scan_complete",
         "scanned_files" -> scanPlan.totalFiles,
@@ -1011,7 +1180,8 @@ object PrivySparkApp {
         "groups" -> scanPlan.groups.size,
         "detections" -> resultCount,
         "errors" -> errorCount,
-        "output_root" -> config.outputPath
+        "output_root" -> config.outputPath,
+        "output_formats" -> outputFormats.mkString(",")
       )
 
       println(
@@ -1026,6 +1196,9 @@ object PrivySparkApp {
         throw e
     } finally {
       heartbeatExecutor.foreach(stopProgressHeartbeat)
+      csvHeadCache.clear()
+      schemaSigCache.clear()
+      parseOkCache.clear()
       cleanupStagingPaths(spark.sparkContext.hadoopConfiguration, scanPlan.stagingPaths)
     }
   }
@@ -1040,8 +1213,10 @@ object PrivySparkApp {
     groupParallelism: Int = -1,
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
+    fileSampleMinFiles: Int = 10,
     progressRun: Option[ProgressRun] = None,
-    retainPayloads: Boolean = true
+    retainPayloads: Boolean = true,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] = {
     if (groups.isEmpty) {
       return Seq.empty
@@ -1066,7 +1241,19 @@ object PrivySparkApp {
           "parallelism" -> parallelism
         )
         val (groupResults, groupErrors) =
-          scanGroup(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, fileSampleRatio, progressRun)
+          scanGroup(
+            spark,
+            datasetPath,
+            group,
+            rules,
+            sampleRatio,
+            timestamp,
+            fileParallelism,
+            fileSampleRatio,
+            fileSampleMinFiles,
+            progressRun,
+            csvHeadCache
+          )
         logDebug(
           "group_scan_recorded",
           "directory" -> group.directoryPath,
@@ -1339,6 +1526,24 @@ object PrivySparkApp {
                               }
                           }
                         }
+                      case None if FormatDetector.shouldSkipProbe(normalizedEntryName) =>
+                        val declaredEmpty = entry.getSize == 0L || entry.getCompressedSize == 0L
+                        val firstByte = if (declaredEmpty) -1 else zipInputStream.read()
+                        if (firstByte >= 0) {
+                          archiveErrors += ScanError(
+                            datasetPath,
+                            timestamp,
+                            childLogicalIdentifier,
+                            s"Unsupported file format: $childLogicalIdentifier"
+                          )
+                        } else {
+                          logDebug(
+                            "archive_entry_skipped",
+                            "archive" -> logicalIdentifier,
+                            "entry" -> childLogicalIdentifier,
+                            "reason" -> "zero_byte"
+                          )
+                        }
                       case None =>
                         val probeBuffer = new java.io.ByteArrayOutputStream()
                         val buffer = new Array[Byte](8192)
@@ -1509,34 +1714,50 @@ object PrivySparkApp {
     fs: org.apache.hadoop.fs.FileSystem,
     rootPath: Path,
     inputPath: String,
-    ignoreMatcher: IgnoreMatcher
+    ignoreMatcher: IgnoreMatcher,
+    parallelism: Int
   ): (Seq[String], Seq[(String, String)]) = {
     val discoveredFiles = ArrayBuffer.empty[String]
     val ignoredPaths = ArrayBuffer.empty[(String, String)]
-    val pendingDirectories = scala.collection.mutable.Stack[Path](rootPath)
 
-    while (pendingDirectories.nonEmpty) {
-      val currentDirectory = pendingDirectories.pop()
-      val children = Option(fs.listStatus(currentDirectory)).getOrElse(Array.empty).sortBy(_.getPath.toString)
+    var currentLevelDirectories = Seq(rootPath)
+    while (currentLevelDirectories.nonEmpty) {
+      val nextLevelDirectories = ArrayBuffer.empty[Path]
 
-      children.reverse.foreach { status =>
-        val childPath = status.getPath.toString
-        if (status.isDirectory) {
-          ignoreMatcher.matched(childPath, inputPath, isDirectory = true) match {
-            case Some(pattern) =>
-              ignoredPaths += ((childPath, pattern))
-            case None =>
-              pendingDirectories.push(status.getPath)
-          }
-        } else if (status.isFile) {
-          ignoreMatcher.matched(childPath, inputPath) match {
-            case Some(pattern) =>
-              ignoredPaths += ((childPath, pattern))
-            case None =>
-              discoveredFiles += childPath
+      currentLevelDirectories
+        .sortBy(_.toString)
+        .grouped(math.max(1, parallelism))
+        .foreach { directoryBatch =>
+          val listedDirectories = executeInParallel(
+            parallelism,
+            directoryBatch.map { directory =>
+              () => Option(fs.listStatus(directory)).getOrElse(Array.empty).sortBy(_.getPath.toString)
+            }
+          )
+
+          listedDirectories.foreach { children =>
+            children.foreach { status =>
+              val childPath = status.getPath.toString
+              if (status.isDirectory) {
+                ignoreMatcher.matched(childPath, inputPath, isDirectory = true) match {
+                  case Some(pattern) =>
+                    ignoredPaths += ((childPath, pattern))
+                  case None =>
+                    nextLevelDirectories += status.getPath
+                }
+              } else if (status.isFile) {
+                ignoreMatcher.matched(childPath, inputPath) match {
+                  case Some(pattern) =>
+                    ignoredPaths += ((childPath, pattern))
+                  case None =>
+                    discoveredFiles += childPath
+                }
+              }
+            }
           }
         }
-      }
+
+      currentLevelDirectories = nextLevelDirectories.toSeq
     }
 
     (discoveredFiles.toSeq.sorted, ignoredPaths.toSeq)
@@ -1548,7 +1769,10 @@ object PrivySparkApp {
     datasetPath: String,
     timestamp: String,
     preScanParallelism: Int = -1,
-    ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty
+    ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
+    parseOkCache: ParseOkCache = new ParseOkCache()
   ): DirectoryScanPlan = {
     logDebug("scan_directory_structure_start", "input_path" -> inputPath, "dataset_path" -> datasetPath)
     val conf = spark.sparkContext.hadoopConfiguration
@@ -1562,6 +1786,11 @@ object PrivySparkApp {
         throw new IllegalArgumentException(s"Input path not found: $inputPath")
       }
       val inputPathIsFile = fs.getFileStatus(path).isFile
+      val resolvedDiscoveryParallelism = if (inputPathIsFile) {
+        1
+      } else {
+        resolveDiscoveryParallelism(spark, preScanParallelism)
+      }
 
       val (files, ignoredFiles) = if (inputPathIsFile) {
         ignoreMatcher.matched(path.toString, inputPath) match {
@@ -1571,7 +1800,12 @@ object PrivySparkApp {
             (Seq(path.toString), Seq.empty[(String, String)])
         }
       } else {
-        discoverPhysicalFiles(fs, path, inputPath, ignoreMatcher)
+        logDebug(
+          "scan_directory_file_discovery_parallelism",
+          "input_path" -> inputPath,
+          "parallelism" -> resolvedDiscoveryParallelism
+        )
+        discoverPhysicalFiles(fs, path, inputPath, ignoreMatcher, resolvedDiscoveryParallelism)
       }
       ignoredFiles.foreach {
         case (filePath, pattern) =>
@@ -1622,6 +1856,7 @@ object PrivySparkApp {
           val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
           val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
           val pathInferredFormat = FormatDetector.infer(filePath)
+          val probeRequired = shouldProbeForFormat(filePath, pathInferredFormat)
           val preScanErrorScope = pathInferredFormat match {
             case Some(format) if ArchiveFormats.contains(format) || format == XlsxFormat => logicalIdentifier
             case _ => parentDirectory
@@ -1647,7 +1882,7 @@ object PrivySparkApp {
                     ignoredEntries = 0,
                     stagingPaths = localStagingPaths.toSeq,
                     pathInferredFormat = pathInferredFormat,
-                    probeRequired = pathInferredFormat.isEmpty
+                    probeRequired = probeRequired
                   )
                 case Right(true) =>
                   PreScanFileOutcome(
@@ -1659,7 +1894,7 @@ object PrivySparkApp {
                     ignoredEntries = 0,
                     stagingPaths = localStagingPaths.toSeq,
                     pathInferredFormat = pathInferredFormat,
-                    probeRequired = pathInferredFormat.isEmpty,
+                    probeRequired = probeRequired,
                     skipped = true
                   )
                 case Right(false) =>
@@ -1683,7 +1918,7 @@ object PrivySparkApp {
                     ignoredEntries = ignoredEntries,
                     stagingPaths = localStagingPaths.toSeq,
                     pathInferredFormat = pathInferredFormat,
-                    probeRequired = pathInferredFormat.isEmpty
+                    probeRequired = probeRequired
                   )
               }
             } catch {
@@ -1697,7 +1932,7 @@ object PrivySparkApp {
                   ignoredEntries = 0,
                   stagingPaths = localStagingPaths.toSeq,
                   pathInferredFormat = pathInferredFormat,
-                  probeRequired = pathInferredFormat.isEmpty,
+                  probeRequired = probeRequired,
                   failure = Some(e)
                 )
             }
@@ -1820,7 +2055,15 @@ object PrivySparkApp {
       )
       val schemaSplitOutcomes = executeInParallel(schemaSplitParallelism, groupedByDirectoryAndFormat.map { group =>
         () =>
-          val (splitGroups, splitErrors) = splitGroupBySchemaFast(spark, datasetPath, timestamp, group)
+          val (splitGroups, splitErrors) = splitGroupBySchemaFast(
+            spark,
+            datasetPath,
+            timestamp,
+            group,
+            csvHeadCache,
+            schemaSigCache,
+            parseOkCache
+          )
           (group, splitGroups, splitErrors)
       })
 
@@ -1908,10 +2151,13 @@ object PrivySparkApp {
     spark: SparkSession,
     datasetPath: String,
     timestamp: String,
-    group: ScanGroup
+    group: ScanGroup,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
+    parseOkCache: ParseOkCache = new ParseOkCache()
   ): (Seq[ScanGroup], Seq[ScanError]) = {
     if (group.filePaths.size <= 1) {
-      splitGroupBySchema(spark, datasetPath, timestamp, group)
+      splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache)
     } else {
       logDebug(
         "scan_group_schema_sample_start",
@@ -1924,16 +2170,17 @@ object PrivySparkApp {
       val sampledPhysicalPath = resolvePhysicalPath(group, sampledSourceKey)
       val sampledReadOptions = resolveReadOptions(group, sampledSourceKey)
       val sampledSchemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, sampledPhysicalPath)
+        inferCsvSchemaSignature(spark, sampledPhysicalPath, csvHeadCache, schemaSigCache)
       } else {
-        inferSchemaSignature(spark, group.format, sampledPhysicalPath, sampledReadOptions).map(signature => (signature, true))
+        inferSchemaSignature(spark, group.format, sampledPhysicalPath, sampledReadOptions, schemaSigCache)
+          .map(signature => (signature, true))
       }
 
       sampledSchemaResult match {
         case Right((schemaSignature, csvHasHeader)) =>
           val (validatedFilePaths, validationErrors) =
             if (group.format == "json") {
-              validateSampledJsonFiles(spark, datasetPath, timestamp, group)
+              validateSampledJsonFiles(spark, datasetPath, timestamp, group, parseOkCache)
             } else {
               (group.filePaths, Seq.empty)
             }
@@ -1966,7 +2213,7 @@ object PrivySparkApp {
             "files" -> group.filePaths.size,
             "reason" -> errorMessage
           )
-          splitGroupBySchema(spark, datasetPath, timestamp, group)
+          splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache)
       }
     }
   }
@@ -1975,7 +2222,8 @@ object PrivySparkApp {
     spark: SparkSession,
     datasetPath: String,
     timestamp: String,
-    group: ScanGroup
+    group: ScanGroup,
+    parseOkCache: ParseOkCache = new ParseOkCache()
   ): (Seq[String], Seq[ScanError]) = {
     val validFilePaths = ArrayBuffer.empty[String]
     val errors = ArrayBuffer.empty[ScanError]
@@ -1983,28 +2231,33 @@ object PrivySparkApp {
     group.filePaths.foreach { sourceKey =>
       val physicalPath = resolvePhysicalPath(group, sourceKey)
       val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
-      try {
-        withFileReadRetry(spark, Seq(physicalPath), "schema_detection") {
-          readSchemaSource(spark, group.format, physicalPath, group.csvHasHeader)
-          ()
-        }
+      if (parseOkCache.isOk(physicalPath)) {
         validFilePaths += sourceKey
-      } catch {
-        case NonFatal(e) =>
-          val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
-          logDebug(
-            "group_schema_signature_failed",
-            "directory" -> group.directoryPath,
-            "file" -> physicalPath,
-            "format" -> group.format,
-            "reason" -> errorMessage
-          )
-          errors += ScanError(
-            datasetPath,
-            timestamp,
-            logicalIdentifier,
-            s"Schema detection failed: $errorMessage"
-          )
+      } else {
+        try {
+          withFileReadRetry(spark, Seq(physicalPath), "schema_detection") {
+            readSchemaSource(spark, group.format, physicalPath, group.csvHasHeader)
+            ()
+          }
+          parseOkCache.markOk(physicalPath)
+          validFilePaths += sourceKey
+        } catch {
+          case NonFatal(e) =>
+            val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+            logDebug(
+              "group_schema_signature_failed",
+              "directory" -> group.directoryPath,
+              "file" -> physicalPath,
+              "format" -> group.format,
+              "reason" -> errorMessage
+            )
+            errors += ScanError(
+              datasetPath,
+              timestamp,
+              logicalIdentifier,
+              s"Schema detection failed: $errorMessage"
+            )
+        }
       }
     }
 
@@ -2015,7 +2268,9 @@ object PrivySparkApp {
     spark: SparkSession,
     datasetPath: String,
     timestamp: String,
-    group: ScanGroup
+    group: ScanGroup,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
   ): (Seq[ScanGroup], Seq[ScanError]) = {
     logDebug(
       "scan_group_schema_split_start",
@@ -2030,9 +2285,10 @@ object PrivySparkApp {
       val physicalPath = resolvePhysicalPath(group, sourceKey)
       val readOptions = resolveReadOptions(group, sourceKey)
       val schemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, physicalPath)
+        inferCsvSchemaSignature(spark, physicalPath, csvHeadCache, schemaSigCache)
       } else {
-        inferSchemaSignature(spark, group.format, physicalPath, readOptions).map(signature => (signature, true))
+        inferSchemaSignature(spark, group.format, physicalPath, readOptions, schemaSigCache)
+          .map(signature => (signature, true))
       }
 
       schemaResult match {
@@ -2118,21 +2374,12 @@ object PrivySparkApp {
 
   private[privyspark] def inferCsvHeaderSignature(
     spark: SparkSession,
-    filePath: String
+    filePath: String,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Either[String, String] = {
     try {
-      val signature = withFileReadRetry(spark, Seq(filePath), "csv_header_signature") {
-        val csvOptions = createCsvOptions(spark)
-        val headerLine = readFirstNonBlankCsvLines(spark, filePath, maxLines = 1).headOption
-          .getOrElse(throw new IllegalArgumentException("Empty or missing CSV header"))
-        val headerColumns = CSVUtils.makeSafeHeader(
-          parseCsvLine(spark, headerLine),
-          spark.sessionState.conf.caseSensitiveAnalysis,
-          csvOptions
-        )
-        headerColumns.map(_.toLowerCase).mkString("|")
-      }
-      Right(signature)
+      val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = CsvHeadCache.CachedLineLimit, csvHeadCache)
+      Right(inferCsvHeaderSignatureFromLines(spark, lines))
     } catch {
       case NonFatal(e) =>
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
@@ -2141,9 +2388,17 @@ object PrivySparkApp {
 
   private[privyspark] def detectCsvHasHeader(
     spark: SparkSession,
-    filePath: String
+    filePath: String,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Boolean = {
-    val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = 2)
+    val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = CsvHeadCache.CachedLineLimit, csvHeadCache)
+    detectCsvHasHeaderFromLines(spark, lines)
+  }
+
+  private def detectCsvHasHeaderFromLines(
+    spark: SparkSession,
+    lines: Seq[String]
+  ): Boolean = {
     val firstRowFields = lines.headOption.map(parseCsvLine(spark, _).toSeq).getOrElse(Seq.empty)
     if (firstRowFields.isEmpty) {
       false
@@ -2181,18 +2436,24 @@ object PrivySparkApp {
 
   private[privyspark] def inferCsvSchemaSignature(
     spark: SparkSession,
-    filePath: String
+    filePath: String,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
   ): Either[String, (String, Boolean)] = {
     try {
-      val csvHasHeader = detectCsvHasHeader(spark, filePath)
-      if (csvHasHeader) {
-        inferCsvHeaderSignature(spark, filePath).map(signature => (signature, true))
-      } else {
-        val firstDataLine = readFirstNonBlankCsvLines(spark, filePath, maxLines = 1).headOption
-          .getOrElse(throw new IllegalArgumentException("Empty CSV file"))
-        val columnCount = parseCsvLine(spark, firstDataLine).length
-        Right((s"cols:$columnCount", false))
+      val cached = schemaSigCache.getOrCompute(filePath, "csv") {
+        val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = CsvHeadCache.CachedLineLimit, csvHeadCache)
+        val csvHasHeader = detectCsvHasHeaderFromLines(spark, lines)
+        if (csvHasHeader) {
+          CachedSchemaSignature(inferCsvHeaderSignatureFromLines(spark, lines), csvHasHeader = true)
+        } else {
+          val firstDataLine = lines.headOption
+            .getOrElse(throw new IllegalArgumentException("Empty CSV file"))
+          val columnCount = parseCsvLine(spark, firstDataLine).length
+          CachedSchemaSignature(s"cols:$columnCount", csvHasHeader = false)
+        }
       }
+      Right((cached.signature, cached.csvHasHeader))
     } catch {
       case NonFatal(e) =>
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
@@ -2203,20 +2464,24 @@ object PrivySparkApp {
     spark: SparkSession,
     format: String,
     filePath: String,
-    readOptions: ScanReadOptions = ScanReadOptions()
+    readOptions: ScanReadOptions = ScanReadOptions(),
+    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
   ): Either[String, String] = {
     try {
-      val schemaSignature = withFileReadRetry(spark, Seq(filePath), "schema_detection") {
-        val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
-        val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
-        if (format == "csv") {
-          // CSV는 헤더 순서가 데이터 매핑에 직접 영향을 주므로 순서를 유지한다.
-          normalizedFieldNames.mkString("|")
-        } else {
-          normalizedFieldNames.sorted.mkString("|")
+      val cached = schemaSigCache.getOrCompute(filePath, format, readOptions) {
+        val schemaSignature = withFileReadRetry(spark, Seq(filePath), "schema_detection") {
+          val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
+          val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
+          if (format == "csv") {
+            // CSV는 헤더 순서가 데이터 매핑에 직접 영향을 주므로 순서를 유지한다.
+            normalizedFieldNames.mkString("|")
+          } else {
+            normalizedFieldNames.sorted.mkString("|")
+          }
         }
+        CachedSchemaSignature(schemaSignature, csvHasHeader = true)
       }
-      Right(schemaSignature)
+      Right(cached.signature)
     } catch {
       case NonFatal(e) =>
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
@@ -2330,7 +2595,10 @@ object PrivySparkApp {
     timestamp: String,
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
-    progressRun: Option[ProgressRun] = None
+    fileSampleMinFiles: Int = 10,
+    progressRun: Option[ProgressRun] = None,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    selectedSourceKeys: Option[Seq[String]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logDebug(
       "group_scan_start",
@@ -2340,6 +2608,7 @@ object PrivySparkApp {
       "files" -> group.filePaths.size,
       "sample_ratio" -> sampleRatio,
       "file_sample_ratio" -> fileSampleRatio.getOrElse("none"),
+      "file_sample_min_files" -> fileSampleMinFiles,
       "use_directory_identifier" -> group.useDirectoryIdentifier,
       "schema_sampled" -> group.schemaSampled,
       "csv_has_header" -> group.csvHasHeader
@@ -2355,7 +2624,9 @@ object PrivySparkApp {
         "sampled_exact_split",
         fileParallelism,
         fileSampleRatio,
-        progressRun
+        fileSampleMinFiles,
+        progressRun,
+        csvHeadCache
       )
       logDebug(
         "group_scan_complete",
@@ -2370,7 +2641,22 @@ object PrivySparkApp {
     }
 
     if (!supportsBatchScan(group)) {
-      val fallbackResult = scanGroupByFile(spark, datasetPath, group, rules, sampleRatio, timestamp, fileParallelism, progressRun)
+      val effectiveSelectedSourceKeys =
+        selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
+      val fallbackResult = scanGroupByFile(
+        spark,
+        datasetPath,
+        group,
+        rules,
+        sampleRatio,
+        timestamp,
+        fileParallelism,
+        progressRun,
+        csvHeadCache,
+        fileSampleRatio,
+        fileSampleMinFiles,
+        selectedSourceKeys = Some(effectiveSelectedSourceKeys)
+      )
       logDebug(
         "group_scan_complete",
         "directory" -> group.directoryPath,
@@ -2383,17 +2669,30 @@ object PrivySparkApp {
       return fallbackResult
     }
 
+    val effectiveSelectedSourceKeys =
+      selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
+
     try {
-      val results = scanGroupBatch(spark, datasetPath, group, rules, sampleRatio, timestamp, fileSampleRatio)
-          progressRun.foreach { run =>
-            persistProgressRecords(
-              spark.sparkContext.hadoopConfiguration,
-              run,
-              "group",
-              group.directoryPath,
-              results,
-              Seq.empty
-            )
+      val results = scanGroupBatch(
+        spark,
+        datasetPath,
+        group,
+        rules,
+        sampleRatio,
+        timestamp,
+        fileSampleRatio,
+        fileSampleMinFiles,
+        selectedSourceKeys = Some(effectiveSelectedSourceKeys)
+      )
+      progressRun.foreach { run =>
+        persistProgressRecords(
+          spark.sparkContext.hadoopConfiguration,
+          run,
+          "group",
+          group.directoryPath,
+          results,
+          Seq.empty
+        )
       }
       logDebug(
         "group_scan_complete",
@@ -2443,7 +2742,9 @@ object PrivySparkApp {
             "fallback_schema_resplit",
             fileParallelism,
             fileSampleRatio,
-            progressRun
+            fileSampleMinFiles,
+            progressRun,
+            csvHeadCache
           )
 
           logDebug(
@@ -2465,7 +2766,11 @@ object PrivySparkApp {
             sampleRatio,
             timestamp,
             fileParallelism,
-            progressRun
+            progressRun,
+            csvHeadCache,
+            fileSampleRatio,
+            fileSampleMinFiles,
+            selectedSourceKeys = Some(effectiveSelectedSourceKeys)
           )
           logDebug(
             "group_scan_complete",
@@ -2489,7 +2794,11 @@ object PrivySparkApp {
     sampleRatio: Double,
     timestamp: String,
     fileParallelism: Int = -1,
-    progressRun: Option[ProgressRun] = None
+    progressRun: Option[ProgressRun] = None,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    fileSampleRatio: Option[Double] = None,
+    fileSampleMinFiles: Int = 10,
+    selectedSourceKeys: Option[Seq[String]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logWarn(
       "group_scan_fallback_execute",
@@ -2497,12 +2806,17 @@ object PrivySparkApp {
       "format" -> group.format,
       "schema" -> group.schemaSignature,
       "files" -> group.filePaths.size,
+      "file_sample_ratio" -> fileSampleRatio.getOrElse("none"),
+      "file_sample_min_files" -> fileSampleMinFiles,
       "mode" -> "file_scan"
     )
+    val effectiveSelectedSourceKeys =
+      selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
+    val effectiveSampleRatio = if (effectiveSelectedSourceKeys.size < group.filePaths.size) 1.0 else sampleRatio
     val parallelism = if (fileParallelism > 0) {
-      resolveParallelism(group.filePaths.size, fileParallelism)
+      resolveParallelism(effectiveSelectedSourceKeys.size, fileParallelism)
     } else {
-      resolveFileParallelism(spark, group.filePaths.size)
+      resolveFileParallelism(spark, effectiveSelectedSourceKeys.size)
     }
     logDebug(
       "group_scan_fallback_execute",
@@ -2510,12 +2824,15 @@ object PrivySparkApp {
       "format" -> group.format,
       "schema" -> group.schemaSignature,
       "files" -> group.filePaths.size,
+      "selected_files" -> effectiveSelectedSourceKeys.size,
+      "file_sample_ratio" -> fileSampleRatio.getOrElse("none"),
+      "file_sample_min_files" -> fileSampleMinFiles,
       "use_directory_identifier" -> group.useDirectoryIdentifier,
       "parallelism" -> parallelism
     )
     val successfulFileMetrics = ArrayBuffer.empty[FileScanMetrics]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
-    executeInParallel(parallelism, group.filePaths.map { sourceKey =>
+    executeInParallel(parallelism, effectiveSelectedSourceKeys.map { sourceKey =>
       () => {
         val physicalPath = resolvePhysicalPath(group, sourceKey)
         val readOptions = resolveReadOptions(group, sourceKey)
@@ -2528,13 +2845,14 @@ object PrivySparkApp {
           datasetPath,
           sourceKey,
           rules,
-          sampleRatio,
+          effectiveSampleRatio,
           timestamp,
           csvHasHeaderOverride,
           formatOverride = Some(group.format),
           logicalIdentifierOverride = Some(logicalIdentifier),
           physicalPathOverride = Some(physicalPath),
-          readOptions = readOptions
+          readOptions = readOptions,
+          csvHeadCache = csvHeadCache
         )
           .fold(
             error => {
@@ -2697,7 +3015,9 @@ object PrivySparkApp {
     rules: Seq[PiiRule],
     sampleRatio: Double,
     timestamp: String,
-    fileSampleRatio: Option[Double] = None
+    fileSampleRatio: Option[Double] = None,
+    fileSampleMinFiles: Int = 10,
+    selectedSourceKeys: Option[Seq[String]] = None
   ): Seq[ScanResult] = {
     logDebug(
       "group_scan_batch_start",
@@ -2707,36 +3027,13 @@ object PrivySparkApp {
       "files" -> group.filePaths.size,
       "sample_ratio" -> sampleRatio,
       "file_sample_ratio" -> fileSampleRatio.getOrElse("none"),
+      "file_sample_min_files" -> fileSampleMinFiles,
       "use_directory_identifier" -> group.useDirectoryIdentifier
     )
-    val selectedSourceKeys = fileSampleRatio match {
-      case Some(ratio) =>
-        val sampledKeys = selectSampledFileKeys(group.filePaths, ratio)
-        if (sampleRatio < 1.0) {
-          logWarn(
-            "group_scan_row_sampling_ignored",
-            "directory" -> group.directoryPath,
-            "format" -> group.format,
-            "schema" -> group.schemaSignature,
-            "sample_ratio" -> sampleRatio,
-            "file_sample_ratio" -> ratio,
-            "selected_files" -> sampledKeys.size,
-            "total_files" -> group.filePaths.size
-          )
-        }
-        logDebug(
-          "group_scan_file_sampling_applied",
-          "directory" -> group.directoryPath,
-          "format" -> group.format,
-          "schema" -> group.schemaSignature,
-          "file_sample_ratio" -> ratio,
-          "selected_files" -> sampledKeys.size,
-          "total_files" -> group.filePaths.size
-        )
-        sampledKeys
-      case None => group.filePaths
-    }
-    val physicalPaths = selectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
+    val effectiveSelectedSourceKeys =
+      selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
+    val fileSamplingApplied = effectiveSelectedSourceKeys.size < group.filePaths.size
+    val physicalPaths = effectiveSelectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
       val effectiveRules = effectiveRulesForFormat(group.format, rules)
       val baseDf = readSource(spark, group.format, physicalPaths, group.csvHasHeader)
@@ -2757,7 +3054,7 @@ object PrivySparkApp {
         "file_identifier_mode" -> fileIdentifierColumn.fold("directory")(identity)
       )
 
-      val sampledDf = if (fileSampleRatio.nonEmpty || sampleRatio >= 1.0) {
+      val sampledDf = if (fileSamplingApplied || sampleRatio >= 1.0) {
         sourceDf
       } else {
         sourceDf.sample(withReplacement = false, sampleRatio)
@@ -2873,7 +3170,8 @@ object PrivySparkApp {
     formatOverride: Option[String] = None,
     logicalIdentifierOverride: Option[String] = None,
     physicalPathOverride: Option[String] = None,
-    readOptions: ScanReadOptions = ScanReadOptions()
+    readOptions: ScanReadOptions = ScanReadOptions(),
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Either[ScanError, FileScanMetrics] = {
     val physicalPath = physicalPathOverride.getOrElse(filePath)
     val fileIdentifier = logicalIdentifierOverride.getOrElse(resolveRelativeIdentifier(datasetPath, physicalPath))
@@ -2888,7 +3186,7 @@ object PrivySparkApp {
         val effectiveRules = effectiveRulesForFormat(format, rules)
 
         val csvHasHeader = if (format == "csv") {
-          csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, physicalPath))
+          csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, physicalPath, csvHeadCache))
         } else {
           true
         }
@@ -3021,7 +3319,7 @@ object PrivySparkApp {
     Option(parser.parseLine(Option(line).getOrElse("").stripPrefix("\uFEFF"))).getOrElse(Array.empty[String])
   }
 
-  private def readFirstNonBlankCsvLines(
+  private def loadFirstNonBlankCsvLines(
     spark: SparkSession,
     filePath: String,
     maxLines: Int
@@ -3044,6 +3342,35 @@ object PrivySparkApp {
         reader.close()
       }
     }
+  }
+
+  private def readFirstNonBlankCsvLines(
+    spark: SparkSession,
+    filePath: String,
+    maxLines: Int,
+    csvHeadCache: CsvHeadCache = new CsvHeadCache()
+  ): Seq[String] = {
+    if (maxLines <= CsvHeadCache.CachedLineLimit) {
+      csvHeadCache.getOrRead(filePath) {
+        loadFirstNonBlankCsvLines(spark, filePath, CsvHeadCache.CachedLineLimit)
+      }.take(maxLines)
+    } else {
+      loadFirstNonBlankCsvLines(spark, filePath, maxLines)
+    }
+  }
+
+  private def inferCsvHeaderSignatureFromLines(
+    spark: SparkSession,
+    lines: Seq[String]
+  ): String = {
+    val csvOptions = createCsvOptions(spark)
+    val headerLine = lines.headOption.getOrElse(throw new IllegalArgumentException("Empty or missing CSV header"))
+    val headerColumns = CSVUtils.makeSafeHeader(
+      parseCsvLine(spark, headerLine),
+      spark.sessionState.conf.caseSensitiveAnalysis,
+      csvOptions
+    )
+    headerColumns.map(_.toLowerCase).mkString("|")
   }
 
   private def isNumericLikeField(value: String): Boolean = {
@@ -3099,6 +3426,70 @@ object PrivySparkApp {
     trimmed.nonEmpty &&
       !trimmed.contains("@") &&
       isCsvHeaderFieldShape(trimmed)
+  }
+
+  private def resolveSelectedFileKeys(
+    group: ScanGroup,
+    sampleRatio: Double,
+    fileSampleRatio: Option[Double],
+    fileSampleMinFiles: Int
+  ): Seq[String] = {
+    fileSampleRatio match {
+      case Some(ratio) if group.filePaths.size > fileSampleMinFiles =>
+        val sampledKeys = selectSampledFileKeys(group.filePaths, ratio)
+        if (sampledKeys.size < group.filePaths.size) {
+          if (sampleRatio < 1.0) {
+            logWarn(
+              "group_scan_row_sampling_ignored",
+              "directory" -> group.directoryPath,
+              "format" -> group.format,
+              "schema" -> group.schemaSignature,
+              "sample_ratio" -> sampleRatio,
+              "file_sample_ratio" -> ratio,
+              "file_sample_min_files" -> fileSampleMinFiles,
+              "selected_files" -> sampledKeys.size,
+              "total_files" -> group.filePaths.size
+            )
+          }
+          logDebug(
+            "group_scan_file_sampling_applied",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "schema" -> group.schemaSignature,
+            "file_sample_ratio" -> ratio,
+            "file_sample_min_files" -> fileSampleMinFiles,
+            "selected_files" -> sampledKeys.size,
+            "total_files" -> group.filePaths.size
+          )
+        } else {
+          logDebug(
+            "group_scan_file_sampling_skipped",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "schema" -> group.schemaSignature,
+            "file_sample_ratio" -> ratio,
+            "file_sample_min_files" -> fileSampleMinFiles,
+            "selected_files" -> sampledKeys.size,
+            "total_files" -> group.filePaths.size,
+            "file_sample_skipped_reason" -> "no_reduction"
+          )
+        }
+        sampledKeys
+      case Some(ratio) =>
+        logDebug(
+          "group_scan_file_sampling_skipped",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "file_sample_ratio" -> ratio,
+          "file_sample_min_files" -> fileSampleMinFiles,
+          "total_files" -> group.filePaths.size,
+          "file_sample_skipped_reason" -> "below_threshold"
+        )
+        group.filePaths
+      case None =>
+        group.filePaths
+    }
   }
 
   private[privyspark] def selectSampledFileKeys(fileKeys: Seq[String], fileSampleRatio: Double): Seq[String] = {
@@ -3169,13 +3560,16 @@ object PrivySparkApp {
     mode: String,
     fileParallelism: Int,
     fileSampleRatio: Option[Double],
-    progressRun: Option[ProgressRun]
+    fileSampleMinFiles: Int,
+    progressRun: Option[ProgressRun],
+    csvHeadCache: CsvHeadCache
   ): (Seq[ScanResult], Seq[ScanError]) = {
     val (splitGroups, splitErrors) = splitGroupBySchema(
       spark,
       datasetPath,
       timestamp,
-      group.copy(schemaSampled = false)
+      group.copy(schemaSampled = false),
+      csvHeadCache
     )
     val exactSplitCanUseDirectoryIdentifier =
       group.directoryIdentifierEligible &&
@@ -3211,7 +3605,9 @@ object PrivySparkApp {
         timestamp,
         fileParallelism,
         fileSampleRatio,
-        progressRun
+        fileSampleMinFiles,
+        progressRun,
+        csvHeadCache
       )
       rescannedResults ++= groupResults
       rescannedErrors ++= groupErrors
@@ -3235,13 +3631,32 @@ object PrivySparkApp {
     outputRoot: String,
     results: Seq[ScanResult],
     errors: Seq[ScanError]
+  ): Unit = writeReports(spark, outputRoot, results, errors, OutputFormats.Default)
+
+  private[privyspark] def writeReports(
+    spark: SparkSession,
+    outputRoot: String,
+    results: Seq[ScanResult],
+    errors: Seq[ScanError],
+    outputFormats: Seq[String]
+  ): Unit = writeReports(spark, outputRoot, results, errors, outputFormats, () => ())
+
+  private[privyspark] def writeReports(
+    spark: SparkSession,
+    outputRoot: String,
+    results: Seq[ScanResult],
+    errors: Seq[ScanError],
+    outputFormats: Seq[String],
+    beforePromote: () => Unit
   ): Unit = {
     import spark.implicits._
     writeReports(
       spark,
       outputRoot,
       spark.createDataset(results).toDF(),
-      spark.createDataset(errors).toDF()
+      spark.createDataset(errors).toDF(),
+      outputFormats,
+      beforePromote
     )
   }
 
@@ -3249,39 +3664,175 @@ object PrivySparkApp {
     spark: SparkSession,
     outputRoot: String,
     resultsDf: DataFrame,
-    errorsDf: DataFrame
+    errorsDf: DataFrame,
+    outputFormats: Seq[String],
+    beforePromote: () => Unit
   ): Unit = {
     val root = outputRoot.stripSuffix("/")
-    logDebug("write_reports_materialize", "output_root" -> root)
+    val conf = spark.sparkContext.hadoopConfiguration
+    val normalizedOutputFormats = OutputFormats.requireSupported(outputFormats)
+    logDebug(
+      "write_reports_materialize",
+      "output_root" -> root,
+      "output_formats" -> normalizedOutputFormats.mkString(",")
+    )
     val resultDf = resultsDf.coalesce(1)
     val errorDf = errorsDf.coalesce(1)
+    val selectedFinalPaths = normalizedOutputFormats.map(format => reportFormatPaths(root, format))
+    val stagingBaseRoot = s"$root/$ReportStagingDirectoryName"
+    val stagingRoot = s"$stagingBaseRoot/${UUID.randomUUID().toString}"
+    val backupRoot = s"$stagingRoot/backups"
+    val stagedPaths = normalizedOutputFormats.map(format => reportFormatPaths(stagingRoot, format))
 
-    val resultParquetPath = s"$root/parquet/scan_results"
-    val errorParquetPath = s"$root/parquet/scan_errors"
-    val resultCsvPath = s"$root/csv/scan_results"
-    val errorCsvPath = s"$root/csv/scan_errors"
+    val movedBackups = ArrayBuffer.empty[(ReportFormatPaths, ReportFormatPaths)]
+    val promotedRoots = ArrayBuffer.empty[String]
 
-    resultDf.write.mode("overwrite").parquet(resultParquetPath)
-    errorDf.write.mode("overwrite").parquet(errorParquetPath)
+    try {
+      stagedPaths.foreach(paths => writeReportFormat(resultDf, errorDf, paths))
 
-    resultDf.write
-      .option("header", "true")
-      .mode("overwrite")
-      .csv(resultCsvPath)
+      OutputFormats.All.foreach { format =>
+        val finalPaths = reportFormatPaths(root, format)
+        if (pathExists(conf, finalPaths.rootPath)) {
+          val backupPaths = reportFormatPaths(backupRoot, format)
+          renameManagedPath(conf, finalPaths.rootPath, backupPaths.rootPath)
+          movedBackups += ((finalPaths, backupPaths))
+        }
+      }
 
-    errorDf.write
-      .option("header", "true")
-      .mode("overwrite")
-      .csv(errorCsvPath)
+      beforePromote()
+
+      stagedPaths.foreach { stagePaths =>
+        val finalPaths = reportFormatPaths(root, stagePaths.format)
+        renameManagedPath(conf, stagePaths.rootPath, finalPaths.rootPath)
+        promotedRoots += finalPaths.rootPath
+      }
+    } catch {
+      case NonFatal(e) =>
+        val rollbackFailure = Try {
+          restoreBackedUpReportOutputs(conf, promotedRoots.toSeq, movedBackups.toSeq)
+          deleteStagingPath(conf, stagingRoot)
+        }.failed.toOption
+
+        rollbackFailure match {
+          case Some(restoreError) =>
+            logWarn(
+              "report_output_rollback_failed",
+              "output_root" -> root,
+              "staging_root" -> stagingRoot,
+              "reason" -> Option(restoreError.getMessage).getOrElse(restoreError.getClass.getSimpleName)
+            )
+
+            val rollbackException = new IllegalStateException(
+              s"Report output rollback failed; preserved backup staging at $stagingRoot",
+              restoreError
+            )
+            rollbackException.addSuppressed(e)
+            throw rollbackException
+          case None =>
+            throw e
+        }
+    }
+
+    val resultPathsByFormat = selectedFinalPaths.map(paths => s"${paths.format}:${paths.resultPath}").mkString(",")
+    val errorPathsByFormat = selectedFinalPaths.map(paths => s"${paths.format}:${paths.errorPath}").mkString(",")
 
     logDebug(
       "write_reports_complete",
       "output_root" -> root,
-      "result_parquet_path" -> resultParquetPath,
-      "error_parquet_path" -> errorParquetPath,
-      "result_csv_path" -> resultCsvPath,
-      "error_csv_path" -> errorCsvPath
+      "output_formats" -> normalizedOutputFormats.mkString(","),
+      "result_paths" -> resultPathsByFormat,
+      "error_paths" -> errorPathsByFormat
     )
+
+    deleteStagingPath(conf, stagingBaseRoot)
+  }
+
+  private def writeExcelReport(df: DataFrame, path: String, sheetName: String): Unit = {
+    df.write
+      .format("com.crealytics.spark.excel")
+      .option("header", "true")
+      .option("dataAddress", workbookDataAddress(sheetName))
+      .mode("overwrite")
+      .save(path)
+  }
+
+  private def writeReportFormat(resultDf: DataFrame, errorDf: DataFrame, paths: ReportFormatPaths): Unit = {
+    paths.format match {
+      case OutputFormats.Parquet =>
+        resultDf.write.mode("overwrite").parquet(paths.resultPath)
+        errorDf.write.mode("overwrite").parquet(paths.errorPath)
+      case OutputFormats.Csv =>
+        resultDf.write
+          .option("header", "true")
+          .mode("overwrite")
+          .csv(paths.resultPath)
+
+        errorDf.write
+          .option("header", "true")
+          .mode("overwrite")
+          .csv(paths.errorPath)
+      case OutputFormats.Excel =>
+        writeExcelReport(resultDf, paths.resultPath, "scan_results")
+        writeExcelReport(errorDf, paths.errorPath, "scan_errors")
+      case unsupported =>
+        throw new IllegalArgumentException(s"Unsupported output format: $unsupported")
+    }
+  }
+
+  private def reportFormatPaths(root: String, format: String): ReportFormatPaths = {
+    format match {
+      case OutputFormats.Parquet =>
+        ReportFormatPaths(format, s"$root/${OutputFormats.Parquet}", s"$root/${OutputFormats.Parquet}/scan_results", s"$root/${OutputFormats.Parquet}/scan_errors")
+      case OutputFormats.Csv =>
+        ReportFormatPaths(format, s"$root/${OutputFormats.Csv}", s"$root/${OutputFormats.Csv}/scan_results", s"$root/${OutputFormats.Csv}/scan_errors")
+      case OutputFormats.Excel =>
+        ReportFormatPaths(format, s"$root/${OutputFormats.Excel}", s"$root/${OutputFormats.Excel}/scan_results.xlsx", s"$root/${OutputFormats.Excel}/scan_errors.xlsx")
+      case unsupported =>
+        throw new IllegalArgumentException(s"Unsupported output format: $unsupported")
+    }
+  }
+
+  private def pathExists(conf: org.apache.hadoop.conf.Configuration, path: String): Boolean = {
+    val targetPath = new Path(path)
+    targetPath.getFileSystem(conf).exists(targetPath)
+  }
+
+  private def deleteManagedPath(conf: org.apache.hadoop.conf.Configuration, path: String): Unit = {
+    val targetPath = new Path(path)
+    val fs = targetPath.getFileSystem(conf)
+    if (fs.exists(targetPath) && !fs.delete(targetPath, true)) {
+      throw new IllegalStateException(s"Failed to delete report output: $path")
+    }
+  }
+
+  private def renameManagedPath(conf: org.apache.hadoop.conf.Configuration, sourcePath: String, targetPath: String): Unit = {
+    val source = new Path(sourcePath)
+    val target = new Path(targetPath)
+    val fs = source.getFileSystem(conf)
+    val targetFs = target.getFileSystem(conf)
+    require(fs.getUri == targetFs.getUri, s"Cannot rename across filesystems: $sourcePath -> $targetPath")
+    Option(target.getParent).foreach { parent =>
+      if (!fs.exists(parent) && !fs.mkdirs(parent)) {
+        throw new IllegalStateException(s"Failed to create parent path for report output: ${parent.toString}")
+      }
+    }
+    if (!fs.rename(source, target)) {
+      throw new IllegalStateException(s"Failed to move report output: $sourcePath -> $targetPath")
+    }
+  }
+
+  private def restoreBackedUpReportOutputs(
+    conf: org.apache.hadoop.conf.Configuration,
+    promotedRoots: Seq[String],
+    movedBackups: Seq[(ReportFormatPaths, ReportFormatPaths)]
+  ): Unit = {
+    promotedRoots.foreach(path => deleteManagedPath(conf, path))
+    movedBackups.reverse.foreach {
+      case (finalPaths, backupPaths) =>
+        if (pathExists(conf, backupPaths.rootPath)) {
+          renameManagedPath(conf, backupPaths.rootPath, finalPaths.rootPath)
+        }
+    }
   }
 
   private[privyspark] def prepareProgressRun(
@@ -3353,24 +3904,34 @@ object PrivySparkApp {
     spark: SparkSession,
     outputRoot: String,
     progressRun: ProgressRun
+  ): (Long, Long) = mergeProgressReports(spark, outputRoot, progressRun, OutputFormats.Default)
+
+  private[privyspark] def mergeProgressReports(
+    spark: SparkSession,
+    outputRoot: String,
+    progressRun: ProgressRun,
+    outputFormats: Seq[String]
   ): (Long, Long) = {
+    val normalizedOutputFormats = OutputFormats.requireSupported(outputFormats)
     logDebug(
       "progress_merge_start",
       "run_id" -> progressRun.runId,
       "results_path" -> progressRun.resultsPath,
-      "errors_path" -> progressRun.errorsPath
+      "errors_path" -> progressRun.errorsPath,
+      "output_formats" -> normalizedOutputFormats.mkString(",")
     )
     val resultDf = readProgressScanResults(spark, progressRun.resultsPath)
     val errorDf = readProgressRecords(spark, progressRun.errorsPath, Encoders.product[ScanError].schema)
     val resultCount = resultDf.count()
     val errorCount = errorDf.count()
-    writeReports(spark, outputRoot, resultDf, errorDf)
+    writeReports(spark, outputRoot, resultDf, errorDf, normalizedOutputFormats, () => ())
     deleteProgressRun(spark.sparkContext.hadoopConfiguration, progressRun)
     logDebug(
       "progress_merge_complete",
       "run_id" -> progressRun.runId,
       "results" -> resultCount,
-      "errors" -> errorCount
+      "errors" -> errorCount,
+      "output_formats" -> normalizedOutputFormats.mkString(",")
     )
     (resultCount, errorCount)
   }

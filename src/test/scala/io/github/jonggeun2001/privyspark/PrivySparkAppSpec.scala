@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
+import org.apache.poi.ss.usermodel.{DataFormatter, WorkbookFactory}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageSubmitted}
@@ -22,6 +23,7 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.concurrent.TrieMap
+import scala.collection.JavaConverters._
 import scala.concurrent.{Await, Future}
 import scala.util.control.ControlThrowable
 
@@ -436,6 +438,61 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure lists sibling directories in parallel before descending to the next level") {
+    val rootPath = "trackingfs:///dataset"
+    val rootKey = TrackingListingFileSystem.normalize(rootPath)
+    val leftKey = TrackingListingFileSystem.normalize(s"$rootPath/left")
+    val rightKey = TrackingListingFileSystem.normalize(s"$rootPath/right")
+    val nestedKey = TrackingListingFileSystem.normalize(s"$rootPath/left/nested")
+
+    spark.sparkContext.hadoopConfiguration.set("fs.trackingfs.impl", classOf[TrackingListingFileSystem].getName)
+    TrackingListingFileSystem.clear()
+
+    try {
+      TrackingListingFileSystem.registerDirectory(rootPath)
+      TrackingListingFileSystem.registerDirectory(s"$rootPath/left", delayMs = 150L, trackConcurrency = true)
+      TrackingListingFileSystem.registerDirectory(s"$rootPath/right", delayMs = 150L, trackConcurrency = true)
+      TrackingListingFileSystem.registerDirectory(s"$rootPath/left/nested")
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/left/a.csv",
+        "name,email\nalice,alice@example.com\n"
+      )
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/right/b.csv",
+        "name,email\nbob,bob@example.com\n"
+      )
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/left/nested/c.csv",
+        "name,email\ncarol,carol@example.com\n"
+      )
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        rootPath,
+        rootPath,
+        "2026-04-15T00:00:00Z",
+        preScanParallelism = 4
+      )
+
+      val listedPaths = TrackingListingFileSystem.listedPaths()
+      val rootIndex = listedPaths.indexOf(rootKey)
+      val leftIndex = listedPaths.indexOf(leftKey)
+      val rightIndex = listedPaths.indexOf(rightKey)
+      val nestedIndex = listedPaths.indexOf(nestedKey)
+
+      assert(rootIndex >= 0)
+      assert(leftIndex > rootIndex)
+      assert(rightIndex > rootIndex)
+      assert(nestedIndex > math.max(leftIndex, rightIndex))
+      assert(TrackingListingFileSystem.maxTrackedConcurrentListings() >= 2)
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 3)
+      assert(plan.groups.flatMap(_.filePaths).map(path => new java.io.File(path).getName).sorted == Seq("a.csv", "b.csv", "c.csv"))
+    } finally {
+      TrackingListingFileSystem.clear()
+    }
+  }
+
   test("resolveConfiguredPreScanParallelism caps large explicit values to the fixed safety ceiling") {
     val key = "spark.privyspark.preScanParallelism"
     assert(PrivySparkApp.resolveConfiguredPreScanParallelism(128, 128, key) == PrivySparkApp.maxSafePreScanParallelism)
@@ -539,6 +596,42 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("name|email", true)))
     } finally {
       deleteRecursively(inputDir)
+    }
+  }
+
+  test("inferCsvSchemaSignature reads CSV head lines only once per file") {
+    val partialPath = "partial:///csv-schema-signature-header"
+
+    try {
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(
+        partialPath,
+        "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8)
+      )
+
+      assert(PrivySparkApp.inferCsvSchemaSignature(spark, partialPath) == Right(("name|email", true)))
+      assert(PartialReadFileSystem.openCount(partialPath) == 1)
+    } finally {
+      PartialReadFileSystem.clear()
+    }
+  }
+
+  test("csv head cache reuses detected lines across header helpers") {
+    val partialPath = "partial:///csv-head-cache"
+    val csvHeadCache = new PrivySparkApp.CsvHeadCache()
+
+    try {
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(
+        partialPath,
+        "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8)
+      )
+
+      assert(PrivySparkApp.detectCsvHasHeader(spark, partialPath, csvHeadCache))
+      assert(PrivySparkApp.inferCsvHeaderSignature(spark, partialPath, csvHeadCache) == Right("name|email"))
+      assert(PartialReadFileSystem.openCount(partialPath) == 1)
+    } finally {
+      PartialReadFileSystem.clear()
     }
   }
 
@@ -907,6 +1000,29 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure skips probe reads for known non-data extensions") {
+    val partialPath = "partial:///brochure.pdf"
+
+    try {
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(partialPath, "%PDF-1.7".getBytes(StandardCharsets.UTF_8))
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        partialPath,
+        partialPath,
+        "2026-04-16T00:00:00Z"
+      )
+
+      assert(plan.errors.map(_.file_identifier) == Seq("brochure.pdf"))
+      assert(plan.errors.head.error_message.contains("Unsupported file format"))
+      assert(plan.groups.isEmpty)
+      assert(PartialReadFileSystem.openCount(partialPath) == 0)
+    } finally {
+      PartialReadFileSystem.clear()
+    }
+  }
+
   test("scanDirectoryStructure records malformed json files without exposing Spark corrupt-record errors") {
     val inputDir = Files.createTempDirectory("privyspark-malformed-json-")
 
@@ -1007,6 +1123,99 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     } finally {
       deleteRecursively(inputDir)
     }
+  }
+
+  test("inferSchemaSignature reuses cached signatures across repeated reads") {
+    val partialPath = "partial:///schema-cache.json"
+    val schemaSignatureCache = new PrivySparkApp.SchemaSignatureCache()
+
+    try {
+      spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
+      PartialReadFileSystem.register(partialPath, "{\"email\":\"alice@example.com\"}\n".getBytes(StandardCharsets.UTF_8))
+
+      val first = PrivySparkApp.inferSchemaSignature(
+        spark,
+        "json",
+        partialPath,
+        schemaSigCache = schemaSignatureCache
+      )
+      val second = PrivySparkApp.inferSchemaSignature(
+        spark,
+        "json",
+        partialPath,
+        schemaSigCache = schemaSignatureCache
+      )
+
+      assert(first == Right("email"))
+      assert(second == Right("email"))
+      assert(PartialReadFileSystem.openCount(partialPath) == 1)
+    } finally {
+      PartialReadFileSystem.clear()
+    }
+  }
+
+  test("inferSchemaSignature cache keeps xlsx sheet schemas distinct") {
+    val inputDir = Files.createTempDirectory("privyspark-schema-cache-xlsx-")
+    val schemaSignatureCache = new PrivySparkApp.SchemaSignatureCache()
+
+    try {
+      val workbookPath = inputDir.resolve("contacts.xlsx")
+      val workbook = new XSSFWorkbook()
+      try {
+        val contactsSheet = workbook.createSheet("Contacts")
+        val contactsHeader = contactsSheet.createRow(0)
+        contactsHeader.createCell(0).setCellValue("email")
+        contactsHeader.createCell(1).setCellValue("phone")
+        val contactsRow = contactsSheet.createRow(1)
+        contactsRow.createCell(0).setCellValue("alice@example.com")
+        contactsRow.createCell(1).setCellValue("010-1111-2222")
+
+        val accountsSheet = workbook.createSheet("Accounts")
+        val accountsHeader = accountsSheet.createRow(0)
+        accountsHeader.createCell(0).setCellValue("account_id")
+        accountsHeader.createCell(1).setCellValue("status")
+        val accountsRow = accountsSheet.createRow(1)
+        accountsRow.createCell(0).setCellValue("acct-1")
+        accountsRow.createCell(1).setCellValue("active")
+
+        val outputStream = Files.newOutputStream(workbookPath)
+        try {
+          workbook.write(outputStream)
+        } finally {
+          outputStream.close()
+        }
+      } finally {
+        workbook.close()
+      }
+
+      val contactsSignature = PrivySparkApp.inferSchemaSignature(
+        spark,
+        "xlsx",
+        workbookPath.toString,
+        readOptions = PrivySparkApp.ScanReadOptions(sheetName = Some("Contacts")),
+        schemaSigCache = schemaSignatureCache
+      )
+      val accountsSignature = PrivySparkApp.inferSchemaSignature(
+        spark,
+        "xlsx",
+        workbookPath.toString,
+        readOptions = PrivySparkApp.ScanReadOptions(sheetName = Some("Accounts")),
+        schemaSigCache = schemaSignatureCache
+      )
+
+      assert(contactsSignature == Right("email|phone"))
+      assert(accountsSignature == Right("account_id|status"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("parse ok cache tracks validated files") {
+    val cache = new PrivySparkApp.ParseOkCache()
+
+    assert(!cache.isOk("/tmp/a.json"))
+    cache.markOk("/tmp/a.json")
+    assert(cache.isOk("/tmp/a.json"))
   }
 
   test("scanWithRules ignores malformed json payloads when valid rows are present") {
@@ -1982,6 +2191,45 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroup reuses the selected file sample after batch failure fallback") {
+    val inputDir = Files.createTempDirectory("privyspark-group-fallback-sampled-selection-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+
+    try {
+      val existingFile = groupedDir.resolve("part-a.csv")
+      val missingFile = groupedDir.resolve("part-missing.csv")
+
+      writeText(existingFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(existingFile.toString, missingFile.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-04-16T00:00:00Z",
+        fileSampleRatio = Some(0.5),
+        fileSampleMinFiles = 1,
+        selectedSourceKeys = Some(Seq(missingFile.toString))
+      )
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("users/part-missing.csv"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroup resplits a sampled parquet group when batched read fails") {
     val inputDir = Files.createTempDirectory("privyspark-sampled-schema-fallback-")
     val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
@@ -2369,6 +2617,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
             rules,
             sampleRatio = 0.5,
             fileSampleRatio = Some(0.2),
+            fileSampleMinFiles = 2,
             timestamp = "2026-04-13T00:00:00Z"
           )
 
@@ -2381,6 +2630,192 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(logs.contains("group_scan_row_sampling_ignored"))
       assert(logs.contains("file_sample_ratio=0.2"))
       assert(logs.contains("sample_ratio=0.5"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupBatch skips file sampling when the group is below the threshold") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-file-sampling-threshold-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+      val file3 = inputDir.resolve("part-0003.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+      writeText(file3,
+        "name,email\n" +
+          "carol,carol@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString, file3.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          val results = PrivySparkApp.scanGroupBatch(
+            spark,
+            inputDir.toString,
+            group,
+            rules,
+            sampleRatio = 1.0,
+            fileSampleRatio = Some(0.2),
+            fileSampleMinFiles = 10,
+            timestamp = "2026-04-16T00:00:00Z"
+          )
+
+          assert(results.size == 3)
+          assert(results.map(_.file_identifier).toSet == Set("part-0001.csv", "part-0002.csv", "part-0003.csv"))
+        }
+      }
+
+      assert(logs.contains("file_sample_skipped_reason=below_threshold"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupBatch logs file sampling as skipped when it keeps every file") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-file-sampling-noop-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+      val file3 = inputDir.resolve("part-0003.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+      writeText(file3,
+        "name,email\n" +
+          "carol,carol@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString, file3.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          PrivySparkApp.scanGroupBatch(
+            spark,
+            inputDir.toString,
+            group,
+            rules,
+            sampleRatio = 0.5,
+            fileSampleRatio = Some(1.0),
+            fileSampleMinFiles = 2,
+            timestamp = "2026-04-16T00:00:00Z"
+          )
+        }
+      }
+
+      assert(!logs.contains("group_scan_row_sampling_ignored"))
+      assert(!logs.contains("group_scan_file_sampling_applied"))
+      assert(logs.contains("group_scan_file_sampling_skipped"))
+      assert(logs.contains("file_sample_skipped_reason=no_reduction"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile applies file sampling when the threshold is exceeded") {
+    val inputDir = Files.createTempDirectory("privyspark-file-sampling-fallback-threshold-")
+    val timestamp = "2026-04-16T00:00:00Z"
+
+    try {
+      val file1 = inputDir.resolve("users-a.json")
+      val file2 = inputDir.resolve("users-b.json")
+      val file3 = inputDir.resolve("users-c.json")
+
+      writeText(file1, "{\"email\":\"alice@example.com\"}\n")
+      writeText(file2, "{\"email\":\"bob@example.com\"}\n")
+      writeText(file3, "{\"email\":\"carol@example.com\"}\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "json",
+        schemaSignature = "email",
+        filePaths = Seq(file1.toString, file2.toString, file3.toString)
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = timestamp,
+        fileSampleRatio = Some(0.2),
+        fileSampleMinFiles = 2
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 1)
+      assert(results.head.pii_type == "email")
+      assert(Set("users-a.json", "users-b.json", "users-c.json").contains(results.head.file_identifier))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile ignores row sampling when file sampling is applied") {
+    val inputDir = Files.createTempDirectory("privyspark-file-sampling-fallback-row-sampling-")
+    val timestamp = "2026-04-16T00:00:00Z"
+
+    try {
+      val file1 = inputDir.resolve("users-a.json")
+      val file2 = inputDir.resolve("users-b.json")
+      val file3 = inputDir.resolve("users-c.json")
+      val fileContents =
+        (1 to 20)
+          .map(index => s"""{"email":"user$index@example.com"}""")
+          .mkString("", "\n", "\n")
+
+      writeText(file1, fileContents)
+      writeText(file2, fileContents)
+      writeText(file3, fileContents)
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "json",
+        schemaSignature = "email",
+        filePaths = Seq(file1.toString, file2.toString, file3.toString)
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 0.5,
+        timestamp = timestamp,
+        fileSampleRatio = Some(0.2),
+        fileSampleMinFiles = 2
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 1)
+      assert(results.head.sampled_row_count == 20L)
+      assert(results.head.match_count == 20L)
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2891,6 +3326,65 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules skips obvious binary archive extensions before text fallback probing") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-binary-extension-skip-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "customers.csv" ->
+            ("name,email\n" +
+              "bob,bob@example.com\n"),
+          "photos/photo.jpg" ->
+            ("alice@example.com\n" +
+              "mallory@example.com\n")
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.zip!customers.csv", "email", 1L)))
+      assert(errors.map(_.file_identifier) == Seq("bundle.zip!photos/photo.jpg"))
+      assert(errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure skips zero-byte binary archive entries even when zip sizes are unknown") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-zero-byte-binary-entry-")
+
+    try {
+      createArchiveFileWithBytes(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "empty.jpg" -> Array.emptyByteArray,
+          "customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n").getBytes(StandardCharsets.UTF_8)
+        )
+      )
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-16T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "csv")
+      assert(plan.groups.head.logicalIdentifiersByKey.values.toSeq == Seq("bundle.zip!customers.csv"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure skips zero-byte archive entries") {
     val inputDir = Files.createTempDirectory("privyspark-zip-zero-byte-entry-")
 
@@ -3379,7 +3873,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("writeReports stores scan results and errors in csv output paths") {
+  test("writeReports materializes parquet outputs by default with current schema") {
     val outputDir = Files.createTempDirectory("privyspark-write-reports-")
 
     try {
@@ -3425,21 +3919,249 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
 
+      val resultParquetDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_results")
+      val errorParquetDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_errors")
+
+      assert(resultParquetDf.count() == 2L)
+      assert(errorParquetDf.count() == 1L)
+      assert(resultParquetDf.columns.toSet.contains("file_identifier"))
+      assert(resultParquetDf.columns.toSet.contains("sampled_row_count"))
+      assert(resultParquetDf.columns.toSet.contains("non_empty_match_ratio"))
+      assert(resultParquetDf.columns.toSet.contains("sample_raw_value"))
+      assert(resultParquetDf.columns.toSet.contains("sample_matched_fragment"))
+      assert(errorParquetDf.columns.toSet.contains("error_message"))
+      assert(countPartFiles(outputDir.resolve("parquet/scan_results")) == 1L)
+      assert(countPartFiles(outputDir.resolve("parquet/scan_errors")) == 1L)
+      assert(!Files.exists(outputDir.resolve("csv")))
+      assert(!Files.exists(outputDir.resolve("excel")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("writeReports materializes only selected csv and excel outputs and removes stale format directories") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-selected-formats-")
+
+    try {
+      val results = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 2L,
+          sampled_row_count = 5L,
+          match_ratio = 0.4,
+          non_empty_match_ratio = 0.5,
+          confidence = 0.4,
+          sample_raw_value = "alice@example.com",
+          sample_matched_fragment = "alice@example.com"
+        )
+      )
+
+      val errors = Seq(
+        ScanError(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "broken.csv",
+          error_message = "Unsupported file format"
+        )
+      )
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
+      assert(Files.exists(outputDir.resolve("parquet/scan_results")))
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, results, errors, Seq("csv", "excel"))
+
       val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
       val errorCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors")
 
-      assert(resultCsvDf.count() == 2L)
+      assert(resultCsvDf.count() == 1L)
       assert(errorCsvDf.count() == 1L)
-      assert(resultCsvDf.columns.toSet.contains("file_identifier"))
-      assert(resultCsvDf.columns.toSet.contains("sampled_row_count"))
-      assert(resultCsvDf.columns.toSet.contains("non_empty_match_ratio"))
       assert(resultCsvDf.columns.toSet.contains("sample_raw_value"))
-      assert(resultCsvDf.columns.toSet.contains("sample_matched_fragment"))
       assert(errorCsvDf.columns.toSet.contains("error_message"))
       assert(countPartFiles(outputDir.resolve("csv/scan_results")) == 1L)
       assert(countPartFiles(outputDir.resolve("csv/scan_errors")) == 1L)
-      assert(countPartFiles(outputDir.resolve("parquet/scan_results")) == 1L)
-      assert(countPartFiles(outputDir.resolve("parquet/scan_errors")) == 1L)
+      assert(!Files.exists(outputDir.resolve("parquet")))
+
+      val resultWorkbookRows = readWorkbookRows(outputDir.resolve("excel/scan_results.xlsx"), "scan_results")
+      val errorWorkbookRows = readWorkbookRows(outputDir.resolve("excel/scan_errors.xlsx"), "scan_errors")
+
+      assert(resultWorkbookRows.head.contains("file_identifier"))
+      assert(resultWorkbookRows.head.contains("sample_raw_value"))
+      assert(resultWorkbookRows(1).contains("part-0001.csv"))
+      assert(errorWorkbookRows.head.contains("error_message"))
+      assert(errorWorkbookRows(1).contains("broken.csv"))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("writeReports preserves the last successful outputs when promotion fails") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-promote-failure-")
+
+    try {
+      val initialResults = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 1L,
+          sampled_row_count = 1L,
+          match_ratio = 1.0,
+          non_empty_match_ratio = 1.0,
+          confidence = 1.0,
+          sample_raw_value = "alice@example.com",
+          sample_matched_fragment = "alice@example.com"
+        )
+      )
+      val replacementResults = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:01:00Z",
+          file_identifier = "part-0002.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 1L,
+          sampled_row_count = 1L,
+          match_ratio = 1.0,
+          non_empty_match_ratio = 1.0,
+          confidence = 1.0,
+          sample_raw_value = "bob@example.com",
+          sample_matched_fragment = "bob@example.com"
+        )
+      )
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
+
+      val error = intercept[RuntimeException] {
+        PrivySparkApp.writeReports(
+          spark,
+          outputDir.toString,
+          replacementResults,
+          Seq.empty,
+          Seq("csv"),
+          () => throw new RuntimeException("promote failed")
+        )
+      }
+
+      assert(error.getMessage.contains("promote failed"))
+      val preservedDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_results")
+      assert(preservedDf.count() == 1L)
+      assert(preservedDf.select("file_identifier").collect().map(_.getString(0)).toSeq == Seq("part-0001.csv"))
+      assert(!Files.exists(outputDir.resolve("csv")))
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("writeReports keeps backup staging when rollback cannot restore previous outputs") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-rollback-failure-")
+
+    try {
+      val initialResults = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 1L,
+          sampled_row_count = 1L,
+          match_ratio = 1.0,
+          non_empty_match_ratio = 1.0,
+          confidence = 1.0,
+          sample_raw_value = "alice@example.com",
+          sample_matched_fragment = "alice@example.com"
+        )
+      )
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
+
+      val error = intercept[IllegalStateException] {
+        PrivySparkApp.writeReports(
+          spark,
+          outputDir.toString,
+          initialResults,
+          Seq.empty,
+          Seq("csv"),
+          () => {
+            Files.write(outputDir.resolve("parquet"), "conflict".getBytes(StandardCharsets.UTF_8))
+            throw new RuntimeException("promote failed")
+          }
+        )
+      }
+
+      assert(error.getMessage.toLowerCase.contains("rollback"))
+      assert(Files.exists(outputDir.resolve("_report_staging")))
+      val stagingEntries = Files.walk(outputDir.resolve("_report_staging"))
+      try {
+        assert(stagingEntries.iterator().asScala.exists(path => path.toString.endsWith("backups/parquet/scan_results")))
+      } finally {
+        stagingEntries.close()
+      }
+    } finally {
+      deleteRecursively(outputDir)
+    }
+  }
+
+  test("writeReports preserves rollback-failed backup staging across retries until success") {
+    val outputDir = Files.createTempDirectory("privyspark-write-reports-rollback-retry-")
+
+    try {
+      val initialResults = Seq(
+        ScanResult(
+          dataset_path = "/data/input",
+          scan_timestamp = "2026-03-05T00:00:00Z",
+          file_identifier = "part-0001.csv",
+          column_name = "email",
+          pii_type = "email",
+          match_count = 1L,
+          sampled_row_count = 1L,
+          match_ratio = 1.0,
+          non_empty_match_ratio = 1.0,
+          confidence = 1.0,
+          sample_raw_value = "alice@example.com",
+          sample_matched_fragment = "alice@example.com"
+        )
+      )
+
+      PrivySparkApp.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
+
+      intercept[IllegalStateException] {
+        PrivySparkApp.writeReports(
+          spark,
+          outputDir.toString,
+          initialResults,
+          Seq.empty,
+          Seq("csv"),
+          () => {
+            Files.write(outputDir.resolve("parquet"), "conflict".getBytes(StandardCharsets.UTF_8))
+            throw new RuntimeException("promote failed")
+          }
+        )
+      }
+
+      intercept[RuntimeException] {
+        PrivySparkApp.writeReports(
+          spark,
+          outputDir.toString,
+          initialResults,
+          Seq.empty,
+          Seq("csv"),
+          () => throw new RuntimeException("retry failed")
+        )
+      }
+
+      val stagingEntries = Files.walk(outputDir.resolve("_report_staging"))
+      try {
+        assert(stagingEntries.iterator().asScala.exists(path => path.toString.endsWith("backups/parquet/scan_results")))
+      } finally {
+        stagingEntries.close()
+      }
     } finally {
       deleteRecursively(outputDir)
     }
@@ -3807,22 +4529,23 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(mergedResults == 2L)
       assert(mergedErrors == 0L)
       assert(!Files.exists(outputDir.resolve(s"_progress/${progressRun.runId}")))
-      val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
-      assert(resultCsvDf.count() == 2L)
-      assert(resultCsvDf.columns.toSet.contains("sample_raw_value"))
-      assert(resultCsvDf.columns.toSet.contains("sample_matched_fragment"))
-      assert(resultCsvDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_empty_match_ratio").collect().map { row =>
-        (row.getString(0), row.getString(1), row.getString(2), row.getString(3))
+      val resultParquetDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_results")
+      assert(resultParquetDf.count() == 2L)
+      assert(resultParquetDf.columns.toSet.contains("sample_raw_value"))
+      assert(resultParquetDf.columns.toSet.contains("sample_matched_fragment"))
+      assert(resultParquetDf.select("file_identifier", "sampled_row_count", "match_ratio", "non_empty_match_ratio").collect().map { row =>
+        (row.getString(0), row.getLong(1), row.getDouble(2), row.getDouble(3))
       }.toSet == Set(
-        ("part-0001.json", "3", "0.33", "0.5"),
-        ("part-0002.json", "3", "0.67", "1.0")
+        ("part-0001.json", 3L, 0.33, 0.5),
+        ("part-0002.json", 3L, 0.67, 1.0)
       ))
-      assert(resultCsvDf.select("sample_raw_value", "sample_matched_fragment").collect().forall { row =>
+      assert(resultParquetDf.select("sample_raw_value", "sample_matched_fragment").collect().forall { row =>
         val rawValue = row.getString(0)
         val fragment = row.getString(1)
         rawValue == fragment && fragment.endsWith("@example.com")
       })
-      assert(spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors").count() == 0L)
+      assert(spark.read.parquet(s"${outputDir.toString}/parquet/scan_errors").count() == 0L)
+      assert(!Files.exists(outputDir.resolve("csv")))
     } finally {
       deleteRecursively(inputDir)
       deleteRecursively(outputDir)
@@ -4168,6 +4891,29 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     outputStream.toByteArray
   }
 
+  private def readWorkbookRows(path: Path, sheetName: String): Seq[Seq[String]] = {
+    val inputStream = Files.newInputStream(path)
+    val formatter = new DataFormatter()
+    try {
+      val workbook = WorkbookFactory.create(inputStream)
+      try {
+        val sheet = workbook.getSheet(sheetName)
+        assert(sheet != null, s"expected workbook $path to contain sheet $sheetName")
+        (0 to sheet.getLastRowNum).flatMap { rowIndex =>
+          Option(sheet.getRow(rowIndex)).map { row =>
+            (0 until row.getLastCellNum).map { cellIndex =>
+              formatter.formatCellValue(row.getCell(cellIndex))
+            }
+          }
+        }
+      } finally {
+        workbook.close()
+      }
+    } finally {
+      inputStream.close()
+    }
+  }
+
   private def findDataFile(root: Path, extension: String): Option[Path] = {
     val stream = Files.walk(root)
     try {
@@ -4313,19 +5059,31 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
 object PartialReadFileSystem {
   private val fileContents = TrieMap.empty[String, Array[Byte]]
+  private val openCounts = TrieMap.empty[String, AtomicInteger]
   private def key(path: String): String = new org.apache.hadoop.fs.Path(path).toUri.getPath
   private def key(path: org.apache.hadoop.fs.Path): String = path.toUri.getPath
 
   def register(path: String, bytes: Array[Byte]): Unit = {
     fileContents.put(key(path), bytes.clone())
+    openCounts.remove(key(path))
+  }
+
+  def openCount(path: String): Int = {
+    openCounts.get(key(path)).map(_.get()).getOrElse(0)
   }
 
   def clear(): Unit = {
     fileContents.clear()
+    openCounts.clear()
   }
 
   private[privyspark] def contents(path: org.apache.hadoop.fs.Path): Array[Byte] = {
     fileContents.getOrElse(key(path), throw new java.io.FileNotFoundException(path.toString))
+  }
+
+  private[privyspark] def recordOpen(path: org.apache.hadoop.fs.Path): Unit = {
+    val normalized = key(path)
+    openCounts.getOrElseUpdate(normalized, new AtomicInteger(0)).incrementAndGet()
   }
 }
 
@@ -4336,6 +5094,7 @@ class PartialReadFileSystem extends org.apache.hadoop.fs.FileSystem {
   override def getUri: URI = fsUri
 
   override def open(path: org.apache.hadoop.fs.Path, bufferSize: Int): org.apache.hadoop.fs.FSDataInputStream = {
+    PartialReadFileSystem.recordOpen(path)
     val bytes = PartialReadFileSystem.contents(path)
     new org.apache.hadoop.fs.FSDataInputStream(new org.apache.hadoop.fs.FSInputStream {
       private var position = 0
@@ -4418,5 +5177,238 @@ class PartialReadFileSystem extends org.apache.hadoop.fs.FileSystem {
       0L,
       path.makeQualified(fsUri, workingDirectory)
     )
+  }
+}
+
+object TrackingListingFileSystem {
+  case class Child(path: String, isDirectory: Boolean)
+
+  private val directoryChildren = TrieMap.empty[String, Vector[Child]]
+  private val fileContents = TrieMap.empty[String, Array[Byte]]
+  private val delayedDirectories = TrieMap.empty[String, Long]
+  private val trackedDirectories = TrieMap.empty[String, Boolean]
+  private val listedStatusPaths = new ConcurrentLinkedQueue[String]()
+  private val currentTrackedListings = new AtomicInteger(0)
+  private val maxTrackedListings = new AtomicInteger(0)
+  private val lock = new AnyRef
+
+  private def key(path: String): String = key(new org.apache.hadoop.fs.Path(path))
+  private def key(path: org.apache.hadoop.fs.Path): String = path.toUri.getPath
+
+  private def addChild(parentKey: String, child: Child): Unit = lock.synchronized {
+    val existing = directoryChildren.getOrElse(parentKey, Vector.empty)
+    if (!existing.exists(_.path == child.path)) {
+      directoryChildren.put(parentKey, (existing :+ child).sortBy(_.path))
+    }
+  }
+
+  def normalize(path: String): String = key(path)
+
+  def registerDirectory(path: String, delayMs: Long = 0L, trackConcurrency: Boolean = false): Unit = {
+    val normalized = key(path)
+    directoryChildren.putIfAbsent(normalized, Vector.empty)
+    if (delayMs > 0L) {
+      delayedDirectories.put(normalized, delayMs)
+    } else {
+      delayedDirectories.remove(normalized)
+    }
+    if (trackConcurrency) {
+      trackedDirectories.put(normalized, true)
+    } else {
+      trackedDirectories.remove(normalized)
+    }
+    Option(new org.apache.hadoop.fs.Path(path).getParent)
+      .map(key)
+      .filter(directoryChildren.contains)
+      .foreach(parentKey => addChild(parentKey, Child(normalized, isDirectory = true)))
+  }
+
+  def registerFile(path: String, contents: String): Unit = {
+    val normalized = key(path)
+    fileContents.put(normalized, contents.getBytes(StandardCharsets.UTF_8))
+    Option(new org.apache.hadoop.fs.Path(path).getParent)
+      .map(key)
+      .foreach(parentKey => addChild(parentKey, Child(normalized, isDirectory = false)))
+  }
+
+  def clear(): Unit = {
+    directoryChildren.clear()
+    fileContents.clear()
+    delayedDirectories.clear()
+    trackedDirectories.clear()
+    listedStatusPaths.clear()
+    currentTrackedListings.set(0)
+    maxTrackedListings.set(0)
+  }
+
+  def listedPaths(): Seq[String] = listedStatusPaths.toArray(new Array[String](0)).toSeq
+
+  def maxTrackedConcurrentListings(): Int = maxTrackedListings.get()
+
+  private def updateMax(value: Int): Unit = {
+    var updated = false
+    while (!updated) {
+      val current = maxTrackedListings.get()
+      if (value <= current) {
+        updated = true
+      } else {
+        updated = maxTrackedListings.compareAndSet(current, value)
+      }
+    }
+  }
+
+  private[privyspark] def contents(path: org.apache.hadoop.fs.Path): Array[Byte] = {
+    fileContents.getOrElse(key(path), throw new java.io.FileNotFoundException(path.toString))
+  }
+
+  private[privyspark] def children(path: org.apache.hadoop.fs.Path): Vector[Child] = {
+    directoryChildren.getOrElse(key(path), throw new java.io.FileNotFoundException(path.toString))
+  }
+
+  private[privyspark] def isDirectory(path: org.apache.hadoop.fs.Path): Boolean = {
+    directoryChildren.contains(key(path))
+  }
+
+  private[privyspark] def isFile(path: org.apache.hadoop.fs.Path): Boolean = {
+    fileContents.contains(key(path))
+  }
+
+  private[privyspark] def delayMillis(path: org.apache.hadoop.fs.Path): Long = {
+    delayedDirectories.getOrElse(key(path), 0L)
+  }
+
+  private[privyspark] def shouldTrack(path: org.apache.hadoop.fs.Path): Boolean = {
+    trackedDirectories.contains(key(path))
+  }
+
+  private[privyspark] def recordListStatus(path: org.apache.hadoop.fs.Path): Unit = {
+    listedStatusPaths.add(key(path))
+  }
+
+  private[privyspark] def beginTrackedListing(path: org.apache.hadoop.fs.Path): Boolean = {
+    if (shouldTrack(path)) {
+      val running = currentTrackedListings.incrementAndGet()
+      updateMax(running)
+      true
+    } else {
+      false
+    }
+  }
+
+  private[privyspark] def endTrackedListing(tracked: Boolean): Unit = {
+    if (tracked) {
+      currentTrackedListings.decrementAndGet()
+    }
+  }
+}
+
+class TrackingListingFileSystem extends org.apache.hadoop.fs.FileSystem {
+  private val fsUri = URI.create("trackingfs:///")
+  private var workingDirectory: org.apache.hadoop.fs.Path = new org.apache.hadoop.fs.Path("/")
+
+  override def getUri: URI = fsUri
+
+  override def open(path: org.apache.hadoop.fs.Path, bufferSize: Int): org.apache.hadoop.fs.FSDataInputStream = {
+    val bytes = TrackingListingFileSystem.contents(path)
+    new org.apache.hadoop.fs.FSDataInputStream(new org.apache.hadoop.fs.FSInputStream {
+      private var position = 0
+
+      override def read(): Int = {
+        if (position >= bytes.length) -1
+        else {
+          val value = bytes(position) & 0xFF
+          position += 1
+          value
+        }
+      }
+
+      override def read(buffer: Array[Byte], offset: Int, length: Int): Int = {
+        if (position >= bytes.length) {
+          -1
+        } else {
+          val chunkSize = math.min(length, bytes.length - position)
+          System.arraycopy(bytes, position, buffer, offset, chunkSize)
+          position += chunkSize
+          chunkSize
+        }
+      }
+
+      override def seek(targetPos: Long): Unit = {
+        position = targetPos.toInt
+      }
+
+      override def getPos: Long = position.toLong
+
+      override def seekToNewSource(targetPos: Long): Boolean = false
+    })
+  }
+
+  override def create(
+    path: org.apache.hadoop.fs.Path,
+    permission: org.apache.hadoop.fs.permission.FsPermission,
+    overwrite: Boolean,
+    bufferSize: Int,
+    replication: Short,
+    blockSize: Long,
+    progress: org.apache.hadoop.util.Progressable
+  ): org.apache.hadoop.fs.FSDataOutputStream = {
+    throw new UnsupportedOperationException("create is not supported")
+  }
+
+  override def append(
+    path: org.apache.hadoop.fs.Path,
+    bufferSize: Int,
+    progress: org.apache.hadoop.util.Progressable
+  ): org.apache.hadoop.fs.FSDataOutputStream = {
+    throw new UnsupportedOperationException("append is not supported")
+  }
+
+  override def rename(src: org.apache.hadoop.fs.Path, dst: org.apache.hadoop.fs.Path): Boolean = false
+
+  override def delete(path: org.apache.hadoop.fs.Path, recursive: Boolean): Boolean = false
+
+  override def listStatus(path: org.apache.hadoop.fs.Path): Array[org.apache.hadoop.fs.FileStatus] = {
+    TrackingListingFileSystem.recordListStatus(path)
+    val tracked = TrackingListingFileSystem.beginTrackedListing(path)
+    try {
+      val delayMs = TrackingListingFileSystem.delayMillis(path)
+      if (delayMs > 0L) {
+        Thread.sleep(delayMs)
+      }
+      TrackingListingFileSystem.children(path).map { child =>
+        val qualifiedPath = new org.apache.hadoop.fs.Path(child.path).makeQualified(fsUri, workingDirectory)
+        if (child.isDirectory) {
+          new org.apache.hadoop.fs.FileStatus(0L, true, 1, 4096L, 0L, qualifiedPath)
+        } else {
+          val bytes = TrackingListingFileSystem.contents(new org.apache.hadoop.fs.Path(child.path))
+          new org.apache.hadoop.fs.FileStatus(bytes.length.toLong, false, 1, 4096L, 0L, qualifiedPath)
+        }
+      }.toArray
+    } finally {
+      TrackingListingFileSystem.endTrackedListing(tracked)
+    }
+  }
+
+  override def setWorkingDirectory(path: org.apache.hadoop.fs.Path): Unit = {
+    workingDirectory = path
+  }
+
+  override def getWorkingDirectory: org.apache.hadoop.fs.Path = workingDirectory
+
+  override def mkdirs(
+    path: org.apache.hadoop.fs.Path,
+    permission: org.apache.hadoop.fs.permission.FsPermission
+  ): Boolean = false
+
+  override def getFileStatus(path: org.apache.hadoop.fs.Path): org.apache.hadoop.fs.FileStatus = {
+    val qualifiedPath = path.makeQualified(fsUri, workingDirectory)
+    if (TrackingListingFileSystem.isDirectory(path)) {
+      new org.apache.hadoop.fs.FileStatus(0L, true, 1, 4096L, 0L, qualifiedPath)
+    } else if (TrackingListingFileSystem.isFile(path)) {
+      val bytes = TrackingListingFileSystem.contents(path)
+      new org.apache.hadoop.fs.FileStatus(bytes.length.toLong, false, 1, 4096L, 0L, qualifiedPath)
+    } else {
+      throw new java.io.FileNotFoundException(path.toString)
+    }
   }
 }

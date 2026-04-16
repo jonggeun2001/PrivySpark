@@ -11,17 +11,21 @@ PrivySpark performance usually breaks down into four stages:
 The actual bottleneck depends on input distribution. Small-file-heavy inputs tend to amplify pre-scan and partition fan-out cost, while wide schemas amplify detection expression cost.
 
 ## Optimizations Already Implemented
-- Pre-scan parallelism is reused for format probing and group schema split.
+- Pre-scan parallelism is reused for breadth-first directory discovery, format probing, and group schema split.
 - CSV body reads run with `inferSchema=false`.
 - `DetectionAggregator` uses batched aggregation instead of one Spark job per metric.
+- `driver_license_number` aggregation stays on Catalyst/codegen-friendly SQL expressions by using `regexp_extract_all` plus SQL validation predicates instead of a Scala UDF.
 - The legacy fallback threshold is raised to `50,000` expressions, and the fallback still uses smaller aggregation batches rather than per-metric counts.
+- Sample raw-value fallback is also batched: dataset-level fallback projects `when(...)` columns in chunks, and file-level fallback groups `first(when(...))` per file in chunks instead of launching one Spark job per metric.
 - `_progress` acts as the final merge source so long scans do not require the driver to retain all result row payloads in memory.
 - Sampled scan paths and final report writes do not use Spark storage caching. This is an intentional trade-off so dynamic allocation can release cached executors more aggressively on YARN.
+- Default driver-side parallelism now starts at `--pre-scan-parallelism 32`, `--group-parallelism 16`, and `--file-parallelism 8` for I/O-bound scan orchestration. The `pre-scan` safety cap remains `64`.
 
 ## Small-File-Heavy Inputs
-- `--pre-scan-parallelism` is the first lever for probe and schema-split latency.
+- `--pre-scan-parallelism` is the first lever for directory discovery, probe, and schema-split latency.
 - `--group-parallelism` and `--file-parallelism` increase driver-side concurrent submissions, but they do not directly guarantee executor distribution.
-- `--file-sample-ratio` can be more effective than `--sample-ratio` for small-file-heavy batch-capable groups because it reduces the number of files read at all.
+- `--file-sample-ratio` can be more effective than `--sample-ratio` for small-file-heavy inputs because it reduces the number of files read at all.
+- The default `--file-sample-min-files 10` means small groups are not sampled. Lower the threshold if you want file sampling to kick in for smaller groups.
 
 Uniform random file sampling is not only a performance feature. It also preserves file-level concentration risk better than size-weighted sampling, which would over-bias large files.
 
