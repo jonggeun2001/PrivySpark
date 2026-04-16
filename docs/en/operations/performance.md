@@ -19,6 +19,7 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 - Sample raw-value fallback is also batched: dataset-level fallback projects `when(...)` columns in chunks, and file-level fallback groups `first(when(...))` per file in chunks instead of launching one Spark job per metric.
 - `_progress` acts as the final merge source so long scans do not require the driver to retain all result row payloads in memory.
 - Sampled scan paths and final report writes do not use Spark storage caching. This is an intentional trade-off so dynamic allocation can release cached executors more aggressively on YARN.
+- Default driver-side parallelism now starts at `--pre-scan-parallelism 32`, `--group-parallelism 16`, and `--file-parallelism 8` for I/O-bound scan orchestration. The `pre-scan` safety cap remains `64`.
 
 ## Small-File-Heavy Inputs
 - `--pre-scan-parallelism` is the first lever for directory discovery, probe, and schema-split latency.

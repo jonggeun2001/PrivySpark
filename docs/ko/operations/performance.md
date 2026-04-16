@@ -19,6 +19,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - sample raw-value fallback도 배치화되어 있습니다. dataset 경로는 `when(...)` projection을 chunk 단위로 처리하고, file 경로는 파일별 `first(when(...))` 집계를 chunk 단위로 묶어서 메트릭마다 Spark job을 따로 내지 않습니다.
 - `_progress`를 최종 집계 소스로 사용해 long scan에서 driver가 모든 결과 row payload를 끝까지 들고 있지 않도록 합니다.
 - sampled scan과 최종 리포트 저장 경로는 Spark storage cache를 사용하지 않습니다. dynamic allocation 환경에서 cached executor가 YARN 자원을 오래 점유하지 않게 하기 위한 선택입니다.
+- 기본 driver-side 병렬도는 I/O 바운드 pre-scan fan-out을 기준으로 `--pre-scan-parallelism 32`, `--group-parallelism 16`, `--file-parallelism 8`에서 시작합니다. `pre-scan`은 안전 상한 `64`를 유지합니다.
 
 ## 작은 파일이 많은 입력
 - `--pre-scan-parallelism`은 디렉터리 discovery, 파일 probe, schema split 대기 시간을 줄이는 1차 옵션입니다.

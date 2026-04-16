@@ -232,13 +232,13 @@ object PrivySparkApp {
     "item"
   )
   private val PreScanParallelismConfKey = "spark.privyspark.preScanParallelism"
-  private val DefaultPreScanParallelism = 4
+  private val DefaultPreScanParallelism = 32
   // Allow higher-than-core I/O fan-out without letting a single scan create an unbounded number of driver threads.
   private val MaxSafePreScanParallelism = 64
   private val GroupParallelismConfKey = "spark.privyspark.groupParallelism"
-  private val DefaultGroupParallelism = 4
+  private val DefaultGroupParallelism = 16
   private val FileParallelismConfKey = "spark.privyspark.fileParallelism"
-  private val DefaultFileParallelism = 3
+  private val DefaultFileParallelism = 8
   private val RetriableFileReadErrorSnippets = Seq(
     "path does not exist",
     "file does not exist",
@@ -856,6 +856,14 @@ object PrivySparkApp {
 
   private[privyspark] def defaultPreScanParallelism: Int = {
     DefaultPreScanParallelism
+  }
+
+  private[privyspark] def defaultGroupParallelism: Int = {
+    DefaultGroupParallelism
+  }
+
+  private[privyspark] def defaultFileParallelism: Int = {
+    DefaultFileParallelism
   }
 
   private[privyspark] def maxSafePreScanParallelism: Int = {
