@@ -57,9 +57,9 @@ bin/privyspark-submit \
   --ruleset default \
   --sample-ratio 0.2 \
   --file-sample-ratio 0.1 \
-  --pre-scan-parallelism 6 \
-  --group-parallelism 8 \
-  --file-parallelism 4 \
+  --pre-scan-parallelism 32 \
+  --group-parallelism 16 \
+  --file-parallelism 8 \
   --ignore "_SUCCESS" \
   --ignore "backup/**"
 ```

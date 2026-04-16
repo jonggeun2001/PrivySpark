@@ -28,6 +28,14 @@ class ParallelismConfigSpec extends AnyFunSuite {
   }
 
   test("defaultPreScanParallelism keeps the fixed IO-oriented default") {
-    assert(PrivySparkApp.defaultPreScanParallelism == 4)
+    assert(PrivySparkApp.defaultPreScanParallelism == 32)
+  }
+
+  test("defaultGroupParallelism keeps the higher driver submission default") {
+    assert(PrivySparkApp.defaultGroupParallelism == 16)
+  }
+
+  test("defaultFileParallelism keeps the higher fallback scan default") {
+    assert(PrivySparkApp.defaultFileParallelism == 8)
   }
 }
