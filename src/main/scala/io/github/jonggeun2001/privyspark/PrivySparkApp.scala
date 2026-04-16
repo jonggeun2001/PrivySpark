@@ -135,8 +135,12 @@ object PrivySparkApp {
     private val cache = new ConcurrentHashMap[String, CachedSchemaSignature]()
     private val insertionOrder = new ConcurrentLinkedQueue[String]()
 
-    def getOrCompute(filePath: String, format: String)(loader: => CachedSchemaSignature): CachedSchemaSignature = {
-      val key = cacheKey(filePath, format)
+    def getOrCompute(
+      filePath: String,
+      format: String,
+      readOptions: ScanReadOptions = ScanReadOptions()
+    )(loader: => CachedSchemaSignature): CachedSchemaSignature = {
+      val key = cacheKey(filePath, format, readOptions)
       Option(cache.get(key)).getOrElse {
         val loaded = loader
         val existing = cache.putIfAbsent(key, loaded)
@@ -155,7 +159,8 @@ object PrivySparkApp {
       insertionOrder.clear()
     }
 
-    private def cacheKey(filePath: String, format: String): String = s"$format::$filePath"
+    private def cacheKey(filePath: String, format: String, readOptions: ScanReadOptions): String =
+      s"$format::$filePath::$readOptions"
 
     private def evictIfNeeded(): Unit = this.synchronized {
       while (cache.size() > SchemaSignatureCache.MaxEntries) {
@@ -2445,7 +2450,7 @@ object PrivySparkApp {
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
   ): Either[String, String] = {
     try {
-      val cached = schemaSigCache.getOrCompute(filePath, format) {
+      val cached = schemaSigCache.getOrCompute(filePath, format, readOptions) {
         val schemaSignature = withFileReadRetry(spark, Seq(filePath), "schema_detection") {
           val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
           val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
@@ -2769,6 +2774,7 @@ object PrivySparkApp {
       "mode" -> "file_scan"
     )
     val selectedSourceKeys = resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles)
+    val effectiveSampleRatio = if (selectedSourceKeys.size < group.filePaths.size) 1.0 else sampleRatio
     val parallelism = if (fileParallelism > 0) {
       resolveParallelism(selectedSourceKeys.size, fileParallelism)
     } else {
@@ -2801,7 +2807,7 @@ object PrivySparkApp {
           datasetPath,
           sourceKey,
           rules,
-          sampleRatio,
+          effectiveSampleRatio,
           timestamp,
           csvHasHeaderOverride,
           formatOverride = Some(group.format),

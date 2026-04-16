@@ -1154,6 +1154,62 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("inferSchemaSignature cache keeps xlsx sheet schemas distinct") {
+    val inputDir = Files.createTempDirectory("privyspark-schema-cache-xlsx-")
+    val schemaSignatureCache = new PrivySparkApp.SchemaSignatureCache()
+
+    try {
+      val workbookPath = inputDir.resolve("contacts.xlsx")
+      val workbook = new XSSFWorkbook()
+      try {
+        val contactsSheet = workbook.createSheet("Contacts")
+        val contactsHeader = contactsSheet.createRow(0)
+        contactsHeader.createCell(0).setCellValue("email")
+        contactsHeader.createCell(1).setCellValue("phone")
+        val contactsRow = contactsSheet.createRow(1)
+        contactsRow.createCell(0).setCellValue("alice@example.com")
+        contactsRow.createCell(1).setCellValue("010-1111-2222")
+
+        val accountsSheet = workbook.createSheet("Accounts")
+        val accountsHeader = accountsSheet.createRow(0)
+        accountsHeader.createCell(0).setCellValue("account_id")
+        accountsHeader.createCell(1).setCellValue("status")
+        val accountsRow = accountsSheet.createRow(1)
+        accountsRow.createCell(0).setCellValue("acct-1")
+        accountsRow.createCell(1).setCellValue("active")
+
+        val outputStream = Files.newOutputStream(workbookPath)
+        try {
+          workbook.write(outputStream)
+        } finally {
+          outputStream.close()
+        }
+      } finally {
+        workbook.close()
+      }
+
+      val contactsSignature = PrivySparkApp.inferSchemaSignature(
+        spark,
+        "xlsx",
+        workbookPath.toString,
+        readOptions = PrivySparkApp.ScanReadOptions(sheetName = Some("Contacts")),
+        schemaSigCache = schemaSignatureCache
+      )
+      val accountsSignature = PrivySparkApp.inferSchemaSignature(
+        spark,
+        "xlsx",
+        workbookPath.toString,
+        readOptions = PrivySparkApp.ScanReadOptions(sheetName = Some("Accounts")),
+        schemaSigCache = schemaSignatureCache
+      )
+
+      assert(contactsSignature == Right("email|phone"))
+      assert(accountsSignature == Right("account_id|status"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("parse ok cache tracks validated files") {
     val cache = new PrivySparkApp.ParseOkCache()
 
@@ -2626,6 +2682,51 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(results.size == 1)
       assert(results.head.pii_type == "email")
       assert(Set("users-a.json", "users-b.json", "users-c.json").contains(results.head.file_identifier))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile ignores row sampling when file sampling is applied") {
+    val inputDir = Files.createTempDirectory("privyspark-file-sampling-fallback-row-sampling-")
+    val timestamp = "2026-04-16T00:00:00Z"
+
+    try {
+      val file1 = inputDir.resolve("users-a.json")
+      val file2 = inputDir.resolve("users-b.json")
+      val file3 = inputDir.resolve("users-c.json")
+      val fileContents =
+        (1 to 20)
+          .map(index => s"""{"email":"user$index@example.com"}""")
+          .mkString("", "\n", "\n")
+
+      writeText(file1, fileContents)
+      writeText(file2, fileContents)
+      writeText(file3, fileContents)
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "json",
+        schemaSignature = "email",
+        filePaths = Seq(file1.toString, file2.toString, file3.toString)
+      )
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+
+      val (results, errors) = PrivySparkApp.scanGroupByFile(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 0.5,
+        timestamp = timestamp,
+        fileSampleRatio = Some(0.2),
+        fileSampleMinFiles = 2
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 1)
+      assert(results.head.sampled_row_count == 20L)
+      assert(results.head.match_count == 20L)
     } finally {
       deleteRecursively(inputDir)
     }
