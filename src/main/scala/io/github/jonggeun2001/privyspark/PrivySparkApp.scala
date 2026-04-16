@@ -1527,12 +1527,23 @@ object PrivySparkApp {
                           }
                         }
                       case None if FormatDetector.shouldSkipProbe(normalizedEntryName) =>
-                        archiveErrors += ScanError(
-                          datasetPath,
-                          timestamp,
-                          childLogicalIdentifier,
-                          s"Unsupported file format: $childLogicalIdentifier"
-                        )
+                        val declaredEmpty = entry.getSize == 0L || entry.getCompressedSize == 0L
+                        val firstByte = if (declaredEmpty) -1 else zipInputStream.read()
+                        if (firstByte >= 0) {
+                          archiveErrors += ScanError(
+                            datasetPath,
+                            timestamp,
+                            childLogicalIdentifier,
+                            s"Unsupported file format: $childLogicalIdentifier"
+                          )
+                        } else {
+                          logDebug(
+                            "archive_entry_skipped",
+                            "archive" -> logicalIdentifier,
+                            "entry" -> childLogicalIdentifier,
+                            "reason" -> "zero_byte"
+                          )
+                        }
                       case None =>
                         val probeBuffer = new java.io.ByteArrayOutputStream()
                         val buffer = new Array[Byte](8192)
@@ -2586,7 +2597,8 @@ object PrivySparkApp {
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
     progressRun: Option[ProgressRun] = None,
-    csvHeadCache: CsvHeadCache = new CsvHeadCache()
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    selectedSourceKeys: Option[Seq[String]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logDebug(
       "group_scan_start",
@@ -2629,6 +2641,8 @@ object PrivySparkApp {
     }
 
     if (!supportsBatchScan(group)) {
+      val effectiveSelectedSourceKeys =
+        selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
       val fallbackResult = scanGroupByFile(
         spark,
         datasetPath,
@@ -2640,7 +2654,8 @@ object PrivySparkApp {
         progressRun,
         csvHeadCache,
         fileSampleRatio,
-        fileSampleMinFiles
+        fileSampleMinFiles,
+        selectedSourceKeys = Some(effectiveSelectedSourceKeys)
       )
       logDebug(
         "group_scan_complete",
@@ -2654,8 +2669,21 @@ object PrivySparkApp {
       return fallbackResult
     }
 
+    val effectiveSelectedSourceKeys =
+      selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
+
     try {
-      val results = scanGroupBatch(spark, datasetPath, group, rules, sampleRatio, timestamp, fileSampleRatio, fileSampleMinFiles)
+      val results = scanGroupBatch(
+        spark,
+        datasetPath,
+        group,
+        rules,
+        sampleRatio,
+        timestamp,
+        fileSampleRatio,
+        fileSampleMinFiles,
+        selectedSourceKeys = Some(effectiveSelectedSourceKeys)
+      )
       progressRun.foreach { run =>
         persistProgressRecords(
           spark.sparkContext.hadoopConfiguration,
@@ -2741,7 +2769,8 @@ object PrivySparkApp {
             progressRun,
             csvHeadCache,
             fileSampleRatio,
-            fileSampleMinFiles
+            fileSampleMinFiles,
+            selectedSourceKeys = Some(effectiveSelectedSourceKeys)
           )
           logDebug(
             "group_scan_complete",
@@ -2768,7 +2797,8 @@ object PrivySparkApp {
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     fileSampleRatio: Option[Double] = None,
-    fileSampleMinFiles: Int = 10
+    fileSampleMinFiles: Int = 10,
+    selectedSourceKeys: Option[Seq[String]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     logWarn(
       "group_scan_fallback_execute",
@@ -2780,12 +2810,13 @@ object PrivySparkApp {
       "file_sample_min_files" -> fileSampleMinFiles,
       "mode" -> "file_scan"
     )
-    val selectedSourceKeys = resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles)
-    val effectiveSampleRatio = if (selectedSourceKeys.size < group.filePaths.size) 1.0 else sampleRatio
+    val effectiveSelectedSourceKeys =
+      selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
+    val effectiveSampleRatio = if (effectiveSelectedSourceKeys.size < group.filePaths.size) 1.0 else sampleRatio
     val parallelism = if (fileParallelism > 0) {
-      resolveParallelism(selectedSourceKeys.size, fileParallelism)
+      resolveParallelism(effectiveSelectedSourceKeys.size, fileParallelism)
     } else {
-      resolveFileParallelism(spark, selectedSourceKeys.size)
+      resolveFileParallelism(spark, effectiveSelectedSourceKeys.size)
     }
     logDebug(
       "group_scan_fallback_execute",
@@ -2793,7 +2824,7 @@ object PrivySparkApp {
       "format" -> group.format,
       "schema" -> group.schemaSignature,
       "files" -> group.filePaths.size,
-      "selected_files" -> selectedSourceKeys.size,
+      "selected_files" -> effectiveSelectedSourceKeys.size,
       "file_sample_ratio" -> fileSampleRatio.getOrElse("none"),
       "file_sample_min_files" -> fileSampleMinFiles,
       "use_directory_identifier" -> group.useDirectoryIdentifier,
@@ -2801,7 +2832,7 @@ object PrivySparkApp {
     )
     val successfulFileMetrics = ArrayBuffer.empty[FileScanMetrics]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
-    executeInParallel(parallelism, selectedSourceKeys.map { sourceKey =>
+    executeInParallel(parallelism, effectiveSelectedSourceKeys.map { sourceKey =>
       () => {
         val physicalPath = resolvePhysicalPath(group, sourceKey)
         val readOptions = resolveReadOptions(group, sourceKey)
@@ -2985,7 +3016,8 @@ object PrivySparkApp {
     sampleRatio: Double,
     timestamp: String,
     fileSampleRatio: Option[Double] = None,
-    fileSampleMinFiles: Int = 10
+    fileSampleMinFiles: Int = 10,
+    selectedSourceKeys: Option[Seq[String]] = None
   ): Seq[ScanResult] = {
     logDebug(
       "group_scan_batch_start",
@@ -2998,9 +3030,10 @@ object PrivySparkApp {
       "file_sample_min_files" -> fileSampleMinFiles,
       "use_directory_identifier" -> group.useDirectoryIdentifier
     )
-    val selectedSourceKeys = resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles)
-    val fileSamplingApplied = selectedSourceKeys.size < group.filePaths.size
-    val physicalPaths = selectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
+    val effectiveSelectedSourceKeys =
+      selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
+    val fileSamplingApplied = effectiveSelectedSourceKeys.size < group.filePaths.size
+    val physicalPaths = effectiveSelectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
       val effectiveRules = effectiveRulesForFormat(group.format, rules)
       val baseDf = readSource(spark, group.format, physicalPaths, group.csvHasHeader)

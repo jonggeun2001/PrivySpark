@@ -2191,6 +2191,45 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroup reuses the selected file sample after batch failure fallback") {
+    val inputDir = Files.createTempDirectory("privyspark-group-fallback-sampled-selection-")
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+
+    try {
+      val existingFile = groupedDir.resolve("part-a.csv")
+      val missingFile = groupedDir.resolve("part-missing.csv")
+
+      writeText(existingFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(existingFile.toString, missingFile.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = PrivySparkApp.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-04-16T00:00:00Z",
+        fileSampleRatio = Some(0.5),
+        fileSampleMinFiles = 1,
+        selectedSourceKeys = Some(Seq(missingFile.toString))
+      )
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("users/part-missing.csv"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroup resplits a sampled parquet group when batched read fails") {
     val inputDir = Files.createTempDirectory("privyspark-sampled-schema-fallback-")
     val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
@@ -3311,6 +3350,36 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         Set(("bundle.zip!customers.csv", "email", 1L)))
       assert(errors.map(_.file_identifier) == Seq("bundle.zip!photos/photo.jpg"))
       assert(errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure skips zero-byte binary archive entries even when zip sizes are unknown") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-zero-byte-binary-entry-")
+
+    try {
+      createArchiveFileWithBytes(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "empty.jpg" -> Array.emptyByteArray,
+          "customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n").getBytes(StandardCharsets.UTF_8)
+        )
+      )
+
+      val plan = PrivySparkApp.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-16T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "csv")
+      assert(plan.groups.head.logicalIdentifiersByKey.values.toSeq == Seq("bundle.zip!customers.csv"))
     } finally {
       deleteRecursively(inputDir)
     }
