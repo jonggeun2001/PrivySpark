@@ -70,7 +70,8 @@ object PrivySparkApp {
     sampledRowCount: Long,
     nonEmptyValueCounts: Map[String, Long],
     matchCounts: Seq[MatchCount],
-    sampleValues: Map[String, DetectionAggregator.SampleValue]
+    sampleValues: Map[String, DetectionAggregator.SampleValue],
+    scanTimestamp: String
   )
   private[privyspark] final class CsvHeadCache {
     private val cachedLinesByFile = new ConcurrentHashMap[String, Seq[String]]()
@@ -771,7 +772,7 @@ object PrivySparkApp {
 
   private def buildScanResults(
     datasetPath: String,
-    timestamp: String,
+    scanTimestamp: String,
     fileIdentifier: String,
     sampledRowCount: Long,
     nonEmptyValueCounts: Map[String, Long],
@@ -788,7 +789,7 @@ object PrivySparkApp {
         val sampleValue = sampleValues.get(matchCount.metricAlias)
         ScanResult(
           dataset_path = datasetPath,
-          scan_timestamp = timestamp,
+          scan_timestamp = scanTimestamp,
           file_identifier = fileIdentifier,
           column_name = matchCount.columnName,
           pii_type = matchCount.piiType,
@@ -803,6 +804,8 @@ object PrivySparkApp {
       }
     }
   }
+
+  private def currentScanTimestamp(): String = Instant.now().toString
 
   private def roundProbability(value: Double): Double = {
     BigDecimal.decimal(value)
@@ -2874,7 +2877,7 @@ object PrivySparkApp {
               if (!group.useDirectoryIdentifier) {
                 val fileResults = buildScanResults(
                   datasetPath,
-                  timestamp,
+                  fileMetrics.scanTimestamp,
                   fileMetrics.fileIdentifier,
                   fileMetrics.sampledRowCount,
                   fileMetrics.nonEmptyValueCounts,
@@ -2934,7 +2937,7 @@ object PrivySparkApp {
 
       buildScanResults(
         datasetPath,
-        timestamp,
+        currentScanTimestamp(),
         resolveDirectoryIdentifier(datasetPath, group.directoryPath),
         sampledRowCount,
         successfulFileMetrics
@@ -2974,7 +2977,7 @@ object PrivySparkApp {
       successfulFileMetrics.flatMap { fileMetrics =>
         buildScanResults(
           datasetPath,
-          timestamp,
+          fileMetrics.scanTimestamp,
           fileMetrics.fileIdentifier,
           fileMetrics.sampledRowCount,
           fileMetrics.nonEmptyValueCounts,
@@ -3080,9 +3083,10 @@ object PrivySparkApp {
           } else {
             val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
             val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts)
+            val groupScanTimestamp = currentScanTimestamp()
             val results = buildScanResults(
               datasetPath,
-              timestamp,
+              groupScanTimestamp,
               resolveDirectoryIdentifier(datasetPath, group.directoryPath),
               sampledRowCount,
               DetectionAggregator.countNonEmpty(sampledDf, matchCounts.map(_.columnName).distinct),
@@ -3131,11 +3135,12 @@ object PrivySparkApp {
             val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules)
             val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(sampledDf, columnName, effectiveRules, matchCountsByFile)
             val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
+            val groupScanTimestamp = currentScanTimestamp()
             val results = matchCountsByFile.flatMap { matchCount =>
               sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
                 buildScanResults(
                   datasetPath,
-                  timestamp,
+                  groupScanTimestamp,
                   resolveLogicalIdentifierForPhysicalPath(group, datasetPath, matchCount.fileIdentifier),
                   sampledRowCount,
                   Map(matchCount.columnName -> nonEmptyCountsByFile.getOrElse((matchCount.fileIdentifier, matchCount.columnName), sampledRowCount)),
@@ -3203,7 +3208,7 @@ object PrivySparkApp {
 
         if (sampledRowCount == 0L) {
           logDebug("scan_file_complete", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "matches" -> 0)
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, Map.empty, Seq.empty, Map.empty))
+          Right(FileScanMetrics(fileIdentifier, sampledRowCount, Map.empty, Seq.empty, Map.empty, currentScanTimestamp()))
         } else {
           val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
           val nonEmptyValueCounts = DetectionAggregator.countNonEmpty(
@@ -3217,7 +3222,7 @@ object PrivySparkApp {
             "file_identifier" -> fileIdentifier,
             "matches" -> matchCounts.size
           )
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, nonEmptyValueCounts, matchCounts, sampleValues))
+          Right(FileScanMetrics(fileIdentifier, sampledRowCount, nonEmptyValueCounts, matchCounts, sampleValues, currentScanTimestamp()))
         }
       }
     } catch {
@@ -3239,7 +3244,7 @@ object PrivySparkApp {
     scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp).map { fileMetrics =>
       buildScanResults(
         datasetPath,
-        timestamp,
+        fileMetrics.scanTimestamp,
         fileMetrics.fileIdentifier,
         fileMetrics.sampledRowCount,
         fileMetrics.nonEmptyValueCounts,

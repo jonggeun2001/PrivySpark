@@ -28,6 +28,8 @@
 - `sample_raw_value`
 - `sample_matched_fragment`
 
+`scan_results.scan_timestamp`는 CLI 시작 시각 고정값이 아니라, 각 결과 row가 실제로 만들어진 시점의 UTC ISO-8601 시각입니다. 따라서 장시간 스캔이나 다중 그룹 스캔에서는 결과 row마다 값이 달라질 수 있습니다.
+
 ## `file_identifier` 규칙
 - 기본은 입력 경로 기준 상대경로입니다.
 - 동일 스키마가 exact split으로 확인되고, pre-scan 오류가 없고, 다중 파일 그룹의 디렉토리 승격이 허용된 경우에만 디렉토리 식별자로 승격합니다.

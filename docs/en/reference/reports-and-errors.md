@@ -28,6 +28,8 @@
 - `sample_raw_value`
 - `sample_matched_fragment`
 
+`scan_results.scan_timestamp` is the UTC ISO-8601 time when each result row is actually materialized, not a fixed CLI start timestamp. Long-running scans and multi-group scans can therefore contain different values across result rows.
+
 ## `file_identifier` Rules
 - The default is the input-relative path.
 - Promotion to a directory-level identifier only happens when exact split confirms identical schemas, there are no pre-scan errors, and directory-level aggregation is allowed for the multi-file group.
