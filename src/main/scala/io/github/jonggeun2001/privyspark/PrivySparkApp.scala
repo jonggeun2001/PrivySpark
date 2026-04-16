@@ -1526,6 +1526,13 @@ object PrivySparkApp {
                               }
                           }
                         }
+                      case None if FormatDetector.shouldSkipProbe(normalizedEntryName) =>
+                        archiveErrors += ScanError(
+                          datasetPath,
+                          timestamp,
+                          childLogicalIdentifier,
+                          s"Unsupported file format: $childLogicalIdentifier"
+                        )
                       case None =>
                         val probeBuffer = new java.io.ByteArrayOutputStream()
                         val buffer = new Array[Byte](8192)

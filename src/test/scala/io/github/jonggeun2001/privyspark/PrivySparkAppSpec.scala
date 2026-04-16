@@ -3237,6 +3237,35 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules skips obvious binary archive extensions before text fallback probing") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-binary-extension-skip-")
+    val timestamp = "2026-04-10T00:00:00Z"
+
+    try {
+      createArchiveFile(
+        inputDir.resolve("bundle.zip"),
+        Seq(
+          "customers.csv" ->
+            ("name,email\n" +
+              "bob,bob@example.com\n"),
+          "photos/photo.jpg" ->
+            ("alice@example.com\n" +
+              "mallory@example.com\n")
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.zip!customers.csv", "email", 1L)))
+      assert(errors.map(_.file_identifier) == Seq("bundle.zip!photos/photo.jpg"))
+      assert(errors.head.error_message.contains("Unsupported file format"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure skips zero-byte archive entries") {
     val inputDir = Files.createTempDirectory("privyspark-zip-zero-byte-entry-")
 
