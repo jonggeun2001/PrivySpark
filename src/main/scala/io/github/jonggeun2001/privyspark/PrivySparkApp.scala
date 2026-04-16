@@ -3404,29 +3404,43 @@ object PrivySparkApp {
     fileSampleRatio match {
       case Some(ratio) if group.filePaths.size > fileSampleMinFiles =>
         val sampledKeys = selectSampledFileKeys(group.filePaths, ratio)
-        if (sampleRatio < 1.0) {
-          logWarn(
-            "group_scan_row_sampling_ignored",
+        if (sampledKeys.size < group.filePaths.size) {
+          if (sampleRatio < 1.0) {
+            logWarn(
+              "group_scan_row_sampling_ignored",
+              "directory" -> group.directoryPath,
+              "format" -> group.format,
+              "schema" -> group.schemaSignature,
+              "sample_ratio" -> sampleRatio,
+              "file_sample_ratio" -> ratio,
+              "file_sample_min_files" -> fileSampleMinFiles,
+              "selected_files" -> sampledKeys.size,
+              "total_files" -> group.filePaths.size
+            )
+          }
+          logDebug(
+            "group_scan_file_sampling_applied",
             "directory" -> group.directoryPath,
             "format" -> group.format,
             "schema" -> group.schemaSignature,
-            "sample_ratio" -> sampleRatio,
             "file_sample_ratio" -> ratio,
             "file_sample_min_files" -> fileSampleMinFiles,
             "selected_files" -> sampledKeys.size,
             "total_files" -> group.filePaths.size
           )
+        } else {
+          logDebug(
+            "group_scan_file_sampling_skipped",
+            "directory" -> group.directoryPath,
+            "format" -> group.format,
+            "schema" -> group.schemaSignature,
+            "file_sample_ratio" -> ratio,
+            "file_sample_min_files" -> fileSampleMinFiles,
+            "selected_files" -> sampledKeys.size,
+            "total_files" -> group.filePaths.size,
+            "file_sample_skipped_reason" -> "no_reduction"
+          )
         }
-        logDebug(
-          "group_scan_file_sampling_applied",
-          "directory" -> group.directoryPath,
-          "format" -> group.format,
-          "schema" -> group.schemaSignature,
-          "file_sample_ratio" -> ratio,
-          "file_sample_min_files" -> fileSampleMinFiles,
-          "selected_files" -> sampledKeys.size,
-          "total_files" -> group.filePaths.size
-        )
         sampledKeys
       case Some(ratio) =>
         logDebug(

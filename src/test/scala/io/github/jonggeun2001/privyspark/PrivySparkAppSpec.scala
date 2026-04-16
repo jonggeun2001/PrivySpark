@@ -2646,6 +2646,56 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroupBatch logs file sampling as skipped when it keeps every file") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-file-sampling-noop-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+      val file3 = inputDir.resolve("part-0003.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+      writeText(file3,
+        "name,email\n" +
+          "carol,carol@example.com\n")
+
+      val group = PrivySparkApp.ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString, file3.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          PrivySparkApp.scanGroupBatch(
+            spark,
+            inputDir.toString,
+            group,
+            rules,
+            sampleRatio = 0.5,
+            fileSampleRatio = Some(1.0),
+            fileSampleMinFiles = 2,
+            timestamp = "2026-04-16T00:00:00Z"
+          )
+        }
+      }
+
+      assert(!logs.contains("group_scan_row_sampling_ignored"))
+      assert(!logs.contains("group_scan_file_sampling_applied"))
+      assert(logs.contains("group_scan_file_sampling_skipped"))
+      assert(logs.contains("file_sample_skipped_reason=no_reduction"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroupByFile applies file sampling when the threshold is exceeded") {
     val inputDir = Files.createTempDirectory("privyspark-file-sampling-fallback-threshold-")
     val timestamp = "2026-04-16T00:00:00Z"
