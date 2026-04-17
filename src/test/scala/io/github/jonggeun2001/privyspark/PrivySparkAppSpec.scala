@@ -9,6 +9,12 @@ import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
 import io.github.jonggeun2001.privyspark.report.ReportWriter
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.{DriverLogger, ParallelismConfig}
+import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
+import org.apache.commons.compress.archivers.tar.{TarArchiveEntry, TarArchiveOutputStream}
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream
+import org.apache.commons.compress.compressors.zstandard.ZstdCompressorOutputStream
 import org.apache.poi.ss.usermodel.{DataFormatter, WorkbookFactory}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
@@ -18,7 +24,7 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
-import java.io.{BufferedWriter, ByteArrayOutputStream, OutputStreamWriter, PrintStream}
+import java.io.{BufferedWriter, ByteArrayOutputStream, IOException, OutputStreamWriter, PrintStream}
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
@@ -3228,6 +3234,200 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules scans gzip-compressed csv files via direct reader passthrough") {
+    val inputDir = Files.createTempDirectory("privyspark-gzip-csv-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      val compressedCsvPath = createGzipFile(
+        inputDir.resolve("customers.csv.gz"),
+        "name,email\n" +
+          "alice,alice@example.com\n" +
+          "bob,bob@example.com\n"
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(compressedCsvPath, compressedCsvPath, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("customers.csv.gz", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules expands tar.gz archives and keeps nested identifiers") {
+    val inputDir = Files.createTempDirectory("privyspark-targz-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      createTarArchiveFile(
+        inputDir.resolve("bundle.tar.gz"),
+        Seq(
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n" +
+              "bob,bob@example.com\n")
+        ),
+        codec = Some("gz")
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.tar.gz!nested/customers.csv", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("archive close failures stay scoped to scan errors instead of aborting sibling scans") {
+    val inputDir = Files.createTempDirectory("privyspark-targz-close-failure-")
+    val timestamp = "2026-04-17T00:00:00Z"
+    spark.sparkContext.hadoopConfiguration.set("fs.closefail.impl", classOf[CloseFailureLocalFileSystem].getName)
+
+    try {
+      val archiveFile = inputDir.resolve("bundle.tar.gz")
+      createTarArchiveFile(
+        archiveFile,
+        Seq(
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n")
+        ),
+        codec = Some("gz")
+      )
+      writeText(
+        inputDir.resolve("customers.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n"
+      )
+
+      val inputPath = s"closefail://${inputDir.toAbsolutePath.toString}"
+      val archivePath = s"closefail://${archiveFile.toAbsolutePath.toString}"
+      CloseFailureLocalFileSystem.registerFailOnClose(archivePath)
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputPath, inputPath, rules, timestamp)
+
+      assert(results.exists(result =>
+        result.file_identifier == "customers.csv" &&
+          result.column_name == "email" &&
+          result.match_count == 1L
+      ))
+      assert(errors.exists(error =>
+        error.file_identifier == "bundle.tar.gz" &&
+          error.error_message.contains("Archive read failed") &&
+          error.error_message.contains("simulated archive close failure")
+      ))
+    } finally {
+      CloseFailureLocalFileSystem.clear()
+      spark.sparkContext.hadoopConfiguration.unset("fs.closefail.impl")
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules expands 7z archives and keeps nested identifiers") {
+    val inputDir = Files.createTempDirectory("privyspark-7z-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      createSevenZArchiveFile(
+        inputDir.resolve("bundle.7z"),
+        Seq(
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n" +
+              "bob,bob@example.com\n")
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.7z!nested/customers.csv", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules expands rar archives and keeps nested identifiers") {
+    val inputDir = Files.createTempDirectory("privyspark-rar-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      copyClasspathResource("/archive-fixtures/rar/test.rar", inputDir.resolve("bundle.rar"))
+
+      val rules = Seq(PiiRule("baz", "\\bbaz\\b"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.rar!foo/bar.txt", "value", 1L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules reports password protected rar archives in scan errors") {
+    val inputDir = Files.createTempDirectory("privyspark-rar-password-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      copyClasspathResource("/archive-fixtures/rar/rar4-password-junrar.rar", inputDir.resolve("bundle.rar"))
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("bundle.rar"))
+      assert(errors.head.error_message.contains("Password-protected archive is not supported"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules reports multi-volume rar archives in scan errors") {
+    val inputDir = Files.createTempDirectory("privyspark-rar-multivolume-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      copyClasspathResource("/archive-fixtures/rar/test-documents.part1.rar", inputDir.resolve("bundle.part1.rar"))
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("bundle.part1.rar"))
+      assert(errors.head.error_message.contains("Multi-volume archive is not supported"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules reports password protected zip archives in scan errors") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-password-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      copyClasspathResource("/archive-fixtures/zip/encrypted.zip", inputDir.resolve("bundle.zip"))
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("bundle.zip"))
+      assert(errors.head.error_message.contains("Password-protected archive is not supported"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure ignores archive entries under ignored archive subdirectories") {
     val inputDir = Files.createTempDirectory("privyspark-zip-ignore-entry-")
     var plan: DirectoryScanPlan = null
@@ -4951,6 +5151,76 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     outputStream.toByteArray
   }
 
+  private def createGzipFile(path: Path, content: String): String = {
+    val outputStream = new GzipCompressorOutputStream(Files.newOutputStream(path))
+    try {
+      outputStream.write(content.getBytes(StandardCharsets.UTF_8))
+    } finally {
+      outputStream.close()
+    }
+    path.toString
+  }
+
+  private def createTarArchiveFile(path: Path, entries: Seq[(String, String)], codec: Option[String] = None): String = {
+    val rawOutputStream = Files.newOutputStream(path)
+    val compressedOutputStream = codec match {
+      case Some("gz") => new GzipCompressorOutputStream(rawOutputStream)
+      case Some("bz2") => new BZip2CompressorOutputStream(rawOutputStream)
+      case Some("xz") => new XZCompressorOutputStream(rawOutputStream)
+      case Some("zst") => new ZstdCompressorOutputStream(rawOutputStream)
+      case None => rawOutputStream
+      case Some(other) => throw new IllegalArgumentException(s"Unsupported tar test codec: $other")
+    }
+    val tarOutputStream = new TarArchiveOutputStream(compressedOutputStream)
+    tarOutputStream.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
+    try {
+      entries.foreach {
+        case (entryName, content) =>
+          val bytes = content.getBytes(StandardCharsets.UTF_8)
+          val entry = new TarArchiveEntry(entryName)
+          entry.setSize(bytes.length.toLong)
+          tarOutputStream.putArchiveEntry(entry)
+          tarOutputStream.write(bytes)
+          tarOutputStream.closeArchiveEntry()
+      }
+      tarOutputStream.finish()
+    } finally {
+      tarOutputStream.close()
+    }
+    path.toString
+  }
+
+  private def createSevenZArchiveFile(path: Path, entries: Seq[(String, String)]): String = {
+    val outputFile = new SevenZOutputFile(path.toFile)
+    try {
+      entries.foreach {
+        case (entryName, content) =>
+          val bytes = content.getBytes(StandardCharsets.UTF_8)
+          val entry = outputFile.createArchiveEntry(path.toFile, entryName)
+          entry.setSize(bytes.length.toLong)
+          outputFile.putArchiveEntry(entry)
+          outputFile.write(bytes)
+          outputFile.closeArchiveEntry()
+      }
+      outputFile.finish()
+    } finally {
+      outputFile.close()
+    }
+    path.toString
+  }
+
+  private def copyClasspathResource(resourcePath: String, destination: Path): String = {
+    val inputStream = Option(getClass.getResourceAsStream(resourcePath)).getOrElse {
+      fail(s"Missing classpath resource: $resourcePath")
+    }
+    try {
+      Files.copy(inputStream, destination)
+    } finally {
+      inputStream.close()
+    }
+    destination.toString
+  }
+
   private def readWorkbookRows(path: Path, sheetName: String): Seq[Seq[String]] = {
     val inputStream = Files.newInputStream(path)
     val formatter = new DataFormatter()
@@ -5237,6 +5507,64 @@ class PartialReadFileSystem extends org.apache.hadoop.fs.FileSystem {
       0L,
       path.makeQualified(fsUri, workingDirectory)
     )
+  }
+}
+
+object CloseFailureLocalFileSystem {
+  private val FileSystemUri = URI.create("closefail:///")
+  private val failOnClosePaths = TrieMap.empty[String, Boolean]
+
+  private def key(path: String): String = new org.apache.hadoop.fs.Path(path).toUri.getPath
+  private def key(path: org.apache.hadoop.fs.Path): String = path.toUri.getPath
+
+  def registerFailOnClose(path: String): Unit = {
+    failOnClosePaths.put(key(path), true)
+  }
+
+  def clear(): Unit = {
+    failOnClosePaths.clear()
+  }
+
+  private[privyspark] def shouldFailOnClose(path: org.apache.hadoop.fs.Path): Boolean = {
+    failOnClosePaths.contains(key(path))
+  }
+}
+
+class CloseFailureLocalFileSystem extends org.apache.hadoop.fs.RawLocalFileSystem {
+  override def getUri: URI = CloseFailureLocalFileSystem.FileSystemUri
+
+  override def getHomeDirectory: org.apache.hadoop.fs.Path = {
+    makeQualified(new org.apache.hadoop.fs.Path(System.getProperty("user.home")))
+  }
+
+  override def open(path: org.apache.hadoop.fs.Path, bufferSize: Int): org.apache.hadoop.fs.FSDataInputStream = {
+    val delegate = super.open(path, bufferSize)
+    if (!CloseFailureLocalFileSystem.shouldFailOnClose(path)) {
+      delegate
+    } else {
+      new org.apache.hadoop.fs.FSDataInputStream(new org.apache.hadoop.fs.FSInputStream {
+        private var closeFailureRaised = false
+
+        override def read(): Int = delegate.read()
+
+        override def read(buffer: Array[Byte], offset: Int, length: Int): Int =
+          delegate.read(buffer, offset, length)
+
+        override def seek(targetPos: Long): Unit = delegate.seek(targetPos)
+
+        override def getPos: Long = delegate.getPos
+
+        override def seekToNewSource(targetPos: Long): Boolean = delegate.seekToNewSource(targetPos)
+
+        override def close(): Unit = {
+          delegate.close()
+          if (!closeFailureRaised) {
+            closeFailureRaised = true
+            throw new IOException("simulated archive close failure")
+          }
+        }
+      })
+    }
   }
 }
 

@@ -29,6 +29,10 @@ dependencies {
 
     implementation("org.apache.spark:spark-avro_2.12:$sparkVersion")
     implementation("com.crealytics:spark-excel_2.12:3.5.1_0.20.4")
+    implementation("org.apache.commons:commons-compress:1.26.2")
+    implementation("org.tukaani:xz:1.10")
+    implementation("com.github.luben:zstd-jni:1.5.6-3")
+    implementation("com.github.junrar:junrar:7.5.5")
 
     implementation("com.github.scopt:scopt_2.12:4.1.0")
     implementation("org.yaml:snakeyaml:2.2")

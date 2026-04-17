@@ -7,6 +7,51 @@ import org.scalatestplus.junit.JUnitRunner
 
 @RunWith(classOf[JUnitRunner])
 class FormatDetectorSpec extends AnyFunSuite {
+  test("classifies direct compressed data files") {
+    val csv = FormatDetector.detect("/data/input.csv.gz").get
+    assert(csv.baseFormat.contains("csv"))
+    assert(csv.codec.contains("gz"))
+    assert(!csv.isArchive)
+
+    val json = FormatDetector.detect("/data/input.json.bz2").get
+    assert(json.baseFormat.contains("json"))
+    assert(json.codec.contains("bz2"))
+    assert(!json.isArchive)
+  }
+
+  test("does not classify compressed columnar files as direct passthrough inputs") {
+    assert(FormatDetector.detect("/data/input.parquet.xz").isEmpty)
+    assert(FormatDetector.detect("/data/input.orc.gz").isEmpty)
+    assert(FormatDetector.detect("/data/input.avro.zst").isEmpty)
+    assert(FormatDetector.detect("/data/input.json.zst").isEmpty)
+    assert(FormatDetector.detect("/data/input.jsonl.xz").isEmpty)
+  }
+
+  test("does not classify compressed workbooks as direct passthrough inputs") {
+    assert(FormatDetector.detect("/data/input.xlsx.gz").isEmpty)
+    assert(FormatDetector.infer("/data/input.xlsx.gz").isEmpty)
+  }
+
+  test("classifies archive families including compressed tar aliases") {
+    val tarZst = FormatDetector.detect("/data/input.tar.zst").get
+    assert(tarZst.archiveFormat.contains("tar"))
+    assert(tarZst.codec.contains("zst"))
+    assert(tarZst.isArchive)
+
+    val tgz = FormatDetector.detect("/data/input.tgz").get
+    assert(tgz.archiveFormat.contains("tar"))
+    assert(tgz.codec.contains("gz"))
+    assert(tgz.isArchive)
+
+    val sevenZip = FormatDetector.detect("/data/input.7z").get
+    assert(sevenZip.archiveFormat.contains("7z"))
+    assert(sevenZip.isArchive)
+
+    val rar = FormatDetector.detect("/data/input.rar").get
+    assert(rar.archiveFormat.contains("rar"))
+    assert(rar.isArchive)
+  }
+
   test("infers csv format") {
     assert(FormatDetector.infer("/data/input.csv").contains("csv"))
   }
@@ -52,6 +97,8 @@ class FormatDetectorSpec extends AnyFunSuite {
     assert(FormatDetector.shouldSkipProbe("/data/photo.jpg"))
     assert(!FormatDetector.shouldSkipProbe("/data/input.csv"))
     assert(!FormatDetector.shouldSkipProbe("/data/input.json"))
+    assert(!FormatDetector.shouldSkipProbe("/data/input.csv.gz"))
+    assert(!FormatDetector.shouldSkipProbe("/data/input.parquet.zst"))
     assert(!FormatDetector.shouldSkipProbe("/data/app.log"))
     assert(!FormatDetector.shouldSkipProbe("/data/input.dat"))
   }

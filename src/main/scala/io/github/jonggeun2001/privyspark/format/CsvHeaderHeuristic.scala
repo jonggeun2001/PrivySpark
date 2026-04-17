@@ -129,8 +129,10 @@ private[privyspark] object CsvHeaderHeuristic {
   ): Seq[String] = {
     RetryIO.withFileReadRetry(spark, Seq(filePath), "csv_line_sample") {
       val path = new Path(filePath)
-      val fs = path.getFileSystem(spark.sparkContext.hadoopConfiguration)
-      val reader = new BufferedReader(new InputStreamReader(fs.open(path), StandardCharsets.UTF_8))
+      val reader = new BufferedReader(new InputStreamReader(
+        CompressionStreams.openDirectInputStream(spark.sparkContext.hadoopConfiguration, path.toString),
+        StandardCharsets.UTF_8
+      ))
       try {
         val lines = ArrayBuffer.empty[String]
         var line: String = reader.readLine()

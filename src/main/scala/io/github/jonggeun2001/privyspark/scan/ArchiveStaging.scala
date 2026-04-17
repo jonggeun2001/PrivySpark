@@ -6,7 +6,10 @@ import org.apache.hadoop.fs.Path
 private[privyspark] object ArchiveStaging {
   val ZipFormat = "zip"
   val JarFormat = "jar"
-  val ArchiveFormats = Set(ZipFormat, JarFormat)
+  val TarFormat = "tar"
+  val SevenZFormat = "7z"
+  val RarFormat = "rar"
+  val ArchiveFormats = Set(ZipFormat, JarFormat, TarFormat, SevenZFormat, RarFormat)
   val MaxArchiveExpansionDepth = 1
 
   def normalizeArchiveEntryName(entryName: String): String = {
