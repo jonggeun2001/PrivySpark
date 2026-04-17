@@ -18,6 +18,7 @@ import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.nio.file.attribute.{FileTime, PosixFilePermissions}
+import java.time.Instant
 import java.util.Comparator
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
@@ -4708,6 +4709,35 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     } finally {
       deleteRecursively(inputDir)
       deleteRecursively(outputDir)
+    }
+  }
+
+  test("scanWithRules stamps scan results with actual scan time instead of the requested start timestamp") {
+    val inputDir = Files.createTempDirectory("privyspark-scan-timestamp-actual-")
+
+    try {
+      val file = inputDir.resolve("users.csv")
+      writeText(file,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val requestedTimestamp = "2000-01-01T00:00:00Z"
+      val beforeScan = Instant.now()
+
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, requestedTimestamp)
+
+      val afterScan = Instant.now()
+
+      assert(errors.isEmpty)
+      assert(results.nonEmpty)
+      assert(results.forall(_.scan_timestamp != requestedTimestamp))
+      assert(results.forall { result =>
+        val actualTimestamp = Instant.parse(result.scan_timestamp)
+        !actualTimestamp.isBefore(beforeScan) && !actualTimestamp.isAfter(afterScan)
+      })
+    } finally {
+      deleteRecursively(inputDir)
     }
   }
 

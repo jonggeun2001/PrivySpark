@@ -44,7 +44,8 @@ private[privyspark] final case class FileScanMetrics(
   sampledRowCount: Long,
   nonEmptyValueCounts: Map[String, Long],
   matchCounts: Seq[MatchCount],
-  sampleValues: Map[String, SampleValue]
+  sampleValues: Map[String, SampleValue],
+  scanTimestamp: String
 )
 
 private[privyspark] final case class CachedSchemaSignature(signature: String, csvHasHeader: Boolean)
