@@ -655,13 +655,13 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     ))
   }
 
-  test("sampleMatches keeps driver license samples aligned with the matched regex fragment") {
-    val rawValue = "이전 번호는 11-12-345678-90이고 현재 번호는 서울 07 - 111111 - 10 입니다"
+  test("sampleMatches keeps the first regex-matched driver license fragment") {
+    val rawValue = "이전 번호는 27-12-345678-90이고 현재 번호는 11-12-345678-90 입니다"
     val df = Seq(rawValue).toDF("driver_license")
     val rules = Seq(
       PiiRule(
         "driver_license_number",
-        "(?<![가-힣A-Za-z0-9])서울\\s*[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2}(?![가-힣A-Za-z0-9])"
+        "(?:27|11)-[0-9]{2}-[0-9]{6}-[0-9]{2}"
       )
     )
 
@@ -669,10 +669,10 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
 
     assert(matchCounts.size == 1)
-    assert(samples(matchCounts.head.metricAlias).sampleMatchedFragment == "서울 07 - 111111 - 10")
+    assert(samples(matchCounts.head.metricAlias).sampleMatchedFragment == "27-12-345678-90")
   }
 
-  test("counts driver license numbers only when the regex-matched fragment is valid") {
+  test("counts driver license numbers when the configured regex matches a fragment") {
     val rawValue = "이전 번호는 11-12-345678-90이고 현재 번호는 27-12-345678-90 입니다"
     val df = Seq(rawValue).toDF("driver_license")
     val rules = Seq(
@@ -680,11 +680,12 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val actual = DetectionAggregator.aggregate(df, rules)
+    val expected = Seq(MatchCount("driver_license", "driver_license_number", 1L))
 
-    assert(actual.isEmpty)
+    assert(sortByKey(actual) == sortByKey(expected))
   }
 
-  test("counts driver license numbers only when strict validator accepts the candidate") {
+  test("counts driver license rows based on regex-only matches") {
     val df = Seq(
       ("11-12-345678-90"),
       ("1212345678"),
@@ -699,12 +700,12 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val rules = Seq(
       PiiRule(
         "driver_license_number",
-        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
+        "(?:(?<![0-9])(?:(?<![0-9]{2}-)[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
       )
     )
 
     val actual = sortByKey(DetectionAggregator.aggregate(df, rules))
-    val expected = Seq(MatchCount("driver_license", "driver_license_number", 5L))
+    val expected = Seq(MatchCount("driver_license", "driver_license_number", 4L))
 
     assert(actual == expected)
   }
@@ -717,7 +718,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val rules = Seq(
       PiiRule(
         "driver_license_number",
-        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
+        "(?:(?<![0-9])(?:(?<![0-9]{2}-)[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
       )
     )
 
@@ -746,11 +747,11 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val rules = Seq(
       PiiRule(
         "driver_license_number",
-        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
+        "(?:(?<![0-9])(?:(?<![0-9]{2}-)[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))"
       ),
       PiiRule(
         "driver_license_number",
-        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))",
+        "(?:(?<![0-9])(?:(?<![0-9]{2}-)[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))",
         matchType = PiiRuleMatchType.FullColumn,
         columnHints = Seq("full")
       )
@@ -770,7 +771,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(sortByKey(batched) == sortByKey(fallback))
   }
 
-  test("driver license aggregation accepts a later valid regex match after an earlier invalid one") {
+  test("driver license aggregation counts a row when the configured regex matches anywhere in the value") {
     val df = Seq(
       "이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90"
     ).toDF("driver_license")
@@ -798,7 +799,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val rules = Seq(
       PiiRule(
         "driver_license_number",
-        "(?:(?<![0-9])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))",
+        "(?:(?<![0-9])(?:(?<![0-9]{2}-)[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))",
         matchType = PiiRuleMatchType.FullColumn
       )
     )
