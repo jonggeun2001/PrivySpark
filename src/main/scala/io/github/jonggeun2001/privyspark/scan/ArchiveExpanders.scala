@@ -85,152 +85,169 @@ private[privyspark] object ArchiveExpanders {
       val normalizedEntryName = normalizeArchiveEntryName(entryName)
       val childLogicalIdentifier = s"$logicalIdentifier!$normalizedEntryName"
 
-      if (declaredSize == 0L) {
-        DriverLogger.debug(
-          "archive_entry_skipped",
-          "archive" -> logicalIdentifier,
-          "entry" -> childLogicalIdentifier,
-          "reason" -> "zero_byte"
-        )
-        return
-      }
+      try {
+        if (declaredSize == 0L) {
+          DriverLogger.debug(
+            "archive_entry_skipped",
+            "archive" -> logicalIdentifier,
+            "entry" -> childLogicalIdentifier,
+            "reason" -> "zero_byte"
+          )
+          return
+        }
 
-      safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
-        case None =>
-          val firstChunk = readFirstChunk(entryInputStream)
-          if (firstChunk.isEmpty) {
-            DriverLogger.debug(
-              "archive_entry_skipped",
-              "archive" -> logicalIdentifier,
-              "entry" -> childLogicalIdentifier,
-              "reason" -> "zero_byte"
-            )
-          } else {
-            drainInputStream(entryInputStream)
-            addArchiveError(childLogicalIdentifier, s"Unsafe archive entry path: $normalizedEntryName")
-          }
-        case Some(targetPath) =>
-          ignoreMatcher.matched(childLogicalIdentifier, datasetPath) match {
-            case Some(pattern) =>
-              ignoredArchiveEntries.incrementAndGet()
-              drainInputStream(entryInputStream)
+        safeResolveArchiveEntryPath(stagingRoot, normalizedEntryName) match {
+          case None =>
+            val firstChunk = readFirstChunk(entryInputStream)
+            if (firstChunk.isEmpty) {
               DriverLogger.debug(
                 "archive_entry_skipped",
                 "archive" -> logicalIdentifier,
                 "entry" -> childLogicalIdentifier,
-                "reason" -> "ignored",
-                "pattern" -> pattern
+                "reason" -> "zero_byte"
               )
-            case None =>
-              val firstChunk = readFirstChunk(entryInputStream)
-              if (firstChunk.isEmpty) {
+            } else {
+              drainInputStream(entryInputStream)
+              addArchiveError(childLogicalIdentifier, s"Unsafe archive entry path: $normalizedEntryName")
+            }
+
+          case Some(targetPath) =>
+            ignoreMatcher.matched(childLogicalIdentifier, datasetPath) match {
+              case Some(pattern) =>
+                ignoredArchiveEntries.incrementAndGet()
+                drainInputStream(entryInputStream)
                 DriverLogger.debug(
                   "archive_entry_skipped",
                   "archive" -> logicalIdentifier,
                   "entry" -> childLogicalIdentifier,
-                  "reason" -> "zero_byte"
+                  "reason" -> "ignored",
+                  "pattern" -> pattern
                 )
-              } else {
-                val pathFormat = FormatDetector.infer(normalizedEntryName)
-                val shouldRejectNestedArchive = pathFormat.exists(ArchiveFormats.contains) && archiveExpansionDepth >= MaxArchiveExpansionDepth
-                val shouldRejectProbe = pathFormat.isEmpty && FormatDetector.shouldSkipProbe(normalizedEntryName)
-                val initialBytes =
-                  if (pathFormat.isDefined) {
-                    Some(firstChunk)
-                  } else if (shouldRejectProbe) {
-                    None
-                  } else {
-                    val (probeBytes, detectedFormat) = probeEntryContent(firstChunk, entryInputStream)
-                    if (detectedFormat.isDefined) Some(probeBytes) else None
-                  }
 
-                if (shouldRejectNestedArchive) {
-                  drainInputStream(entryInputStream)
-                  addArchiveError(childLogicalIdentifier, s"Nested archive expansion is not supported: $childLogicalIdentifier")
-                } else if (shouldRejectProbe || initialBytes.isEmpty) {
-                  drainInputStream(entryInputStream)
-                  addArchiveError(childLogicalIdentifier, s"Unsupported file format: $childLogicalIdentifier")
+              case None =>
+                val firstChunk = readFirstChunk(entryInputStream)
+                if (firstChunk.isEmpty) {
+                  DriverLogger.debug(
+                    "archive_entry_skipped",
+                    "archive" -> logicalIdentifier,
+                    "entry" -> childLogicalIdentifier,
+                    "reason" -> "zero_byte"
+                  )
                 } else {
-                  val bytesToMaterialize = initialBytes.get
-                  val stagingResult = for {
-                    _ <- ensureArchiveStagingReady()
-                    _ <- reserveStagedTargetPath(normalizedEntryName, targetPath)
-                    _ <- ensureArchiveEntryParent(fs, targetPath)
-                  } yield ()
+                  val pathFormat = FormatDetector.infer(normalizedEntryName)
+                  val shouldRejectNestedArchive =
+                    pathFormat.exists(ArchiveFormats.contains) && archiveExpansionDepth >= MaxArchiveExpansionDepth
+                  val shouldRejectProbe =
+                    pathFormat.isEmpty && FormatDetector.shouldSkipProbe(normalizedEntryName)
+                  val initialBytes =
+                    if (pathFormat.isDefined) {
+                      Some(firstChunk)
+                    } else if (shouldRejectProbe) {
+                      None
+                    } else {
+                      val (probeBytes, detectedFormat) = probeEntryContent(firstChunk, entryInputStream)
+                      if (detectedFormat.isDefined) Some(probeBytes) else None
+                    }
 
-                  stagingResult match {
-                    case Left(errorMessage) =>
-                      drainInputStream(entryInputStream)
-                      addArchiveError(childLogicalIdentifier, errorMessage)
-                    case Right(_) =>
-                      var materializedSuccessfully = false
-                      var cleanupPartialTarget = false
-                      var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
-                      try {
-                        outputStream = fs.create(targetPath, true)
-                        outputStream.write(bytesToMaterialize)
-                        copyRemaining(entryInputStream, outputStream)
-                        materializedSuccessfully = true
-                      } catch {
-                        case NonFatal(e) =>
-                          cleanupPartialTarget = true
-                          addArchiveError(
-                            childLogicalIdentifier,
-                            s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
-                          )
-                      } finally {
-                        if (outputStream != null) {
-                          try {
-                            outputStream.close()
-                          } catch {
-                            case NonFatal(e) =>
-                              materializedSuccessfully = false
-                              cleanupPartialTarget = true
-                              addArchiveError(
-                                childLogicalIdentifier,
-                                s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
-                              )
-                          }
-                        }
-                        if (cleanupPartialTarget) {
-                          try {
-                            if (fs.exists(targetPath) && !fs.delete(targetPath, false)) {
-                              addArchiveError(
-                                childLogicalIdentifier,
-                                s"Archive entry cleanup failed: ${targetPath.toString}"
-                              )
+                  if (shouldRejectNestedArchive) {
+                    drainInputStream(entryInputStream)
+                    addArchiveError(
+                      childLogicalIdentifier,
+                      s"Nested archive expansion is not supported: $childLogicalIdentifier"
+                    )
+                  } else if (shouldRejectProbe || initialBytes.isEmpty) {
+                    drainInputStream(entryInputStream)
+                    addArchiveError(childLogicalIdentifier, s"Unsupported file format: $childLogicalIdentifier")
+                  } else {
+                    val bytesToMaterialize = initialBytes.get
+                    val stagingResult = for {
+                      _ <- ensureArchiveStagingReady()
+                      _ <- reserveStagedTargetPath(normalizedEntryName, targetPath)
+                      _ <- ensureArchiveEntryParent(fs, targetPath)
+                    } yield ()
+
+                    stagingResult match {
+                      case Left(errorMessage) =>
+                        drainInputStream(entryInputStream)
+                        addArchiveError(childLogicalIdentifier, errorMessage)
+
+                      case Right(_) =>
+                        var materializedSuccessfully = false
+                        var cleanupPartialTarget = false
+                        var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
+
+                        try {
+                          outputStream = fs.create(targetPath, true)
+                          outputStream.write(bytesToMaterialize)
+                          copyRemaining(entryInputStream, outputStream)
+                          materializedSuccessfully = true
+                        } catch {
+                          case NonFatal(e) =>
+                            cleanupPartialTarget = true
+                            addArchiveError(
+                              childLogicalIdentifier,
+                              s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+                            )
+                        } finally {
+                          if (outputStream != null) {
+                            try {
+                              outputStream.close()
+                            } catch {
+                              case NonFatal(e) =>
+                                materializedSuccessfully = false
+                                cleanupPartialTarget = true
+                                addArchiveError(
+                                  childLogicalIdentifier,
+                                  s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+                                )
                             }
-                          } catch {
-                            case NonFatal(e) =>
-                              addArchiveError(
-                                childLogicalIdentifier,
-                                s"Archive entry cleanup failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
-                              )
+                          }
+
+                          if (cleanupPartialTarget) {
+                            try {
+                              if (fs.exists(targetPath) && !fs.delete(targetPath, false)) {
+                                addArchiveError(
+                                  childLogicalIdentifier,
+                                  s"Archive entry cleanup failed: ${targetPath.toString}"
+                                )
+                              }
+                            } catch {
+                              case NonFatal(e) =>
+                                addArchiveError(
+                                  childLogicalIdentifier,
+                                  s"Archive entry cleanup failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+                                )
+                            }
                           }
                         }
-                      }
 
-                      if (materializedSuccessfully) {
-                        val (childEntries, childErrors, childIgnoredEntries) = SourceExpansion.expandPhysicalSource(
-                          conf,
-                          datasetPath,
-                          timestamp,
-                          targetPath.toString,
-                          childLogicalIdentifier,
-                          logicalIdentifier,
-                          stagingPaths,
-                          ignoreMatcher = ignoreMatcher,
-                          archiveExpansionDepth = archiveExpansionDepth,
-                          forceDisableDirectoryIdentifier = true
-                        )
-                        extractedEntries ++= childEntries
-                        archiveErrors ++= childErrors
-                        ignoredArchiveEntries.addAndGet(childIgnoredEntries)
-                      }
+                        if (materializedSuccessfully) {
+                          val (childEntries, childErrors, childIgnoredEntries) =
+                            SourceExpansion.expandPhysicalSource(
+                              conf,
+                              datasetPath,
+                              timestamp,
+                              targetPath.toString,
+                              childLogicalIdentifier,
+                              logicalIdentifier,
+                              stagingPaths,
+                              ignoreMatcher = ignoreMatcher,
+                              archiveExpansionDepth = archiveExpansionDepth,
+                              forceDisableDirectoryIdentifier = true
+                            )
+                          extractedEntries ++= childEntries
+                          archiveErrors ++= childErrors
+                          ignoredArchiveEntries.addAndGet(childIgnoredEntries)
+                        }
+                    }
                   }
                 }
-              }
-          }
+            }
+        }
+      } catch {
+        case NonFatal(e) =>
+          drainInputStreamQuietly(entryInputStream)
+          addArchiveReadError(archiveErrors, datasetPath, timestamp, childLogicalIdentifier, e)
       }
     }
 
@@ -281,11 +298,14 @@ private[privyspark] object ArchiveExpanders {
           } else {
             entries.foreach { entry =>
               if (!entry.isDirectory) {
-                val entryInputStream = zipFile.getInputStream(entry)
-                try {
+                withArchiveEntryInputStream(
+                  entry.getName,
+                  logicalIdentifier,
+                  archiveErrors,
+                  datasetPath,
+                  timestamp
+                )(zipFile.getInputStream(entry)) { entryInputStream =>
                   processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
-                } finally {
-                  entryInputStream.close()
                 }
               }
             }
@@ -369,11 +389,14 @@ private[privyspark] object ArchiveExpanders {
           archiveFile = SevenZFile.builder().setFile(localArchivePath.toFile).get()
           var entry = archiveFile.getNextEntry
           while (entry != null) {
-            val entryInputStream = archiveFile.getInputStream(entry)
-            try {
+            withArchiveEntryInputStream(
+              entry.getName,
+              logicalIdentifier,
+              archiveErrors,
+              datasetPath,
+              timestamp
+            )(archiveFile.getInputStream(entry)) { entryInputStream =>
               processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
-            } finally {
-              entryInputStream.close()
             }
             entry = archiveFile.getNextEntry
           }
@@ -436,11 +459,14 @@ private[privyspark] object ArchiveExpanders {
           } else {
             fileHeaders.foreach { header =>
               if (!header.isDirectory) {
-                val entryInputStream = archive.getInputStream(header)
-                try {
+                withArchiveEntryInputStream(
+                  header.getFileName,
+                  logicalIdentifier,
+                  archiveErrors,
+                  datasetPath,
+                  timestamp
+                )(archive.getInputStream(header)) { entryInputStream =>
                   processEntry(header.getFileName, false, header.getFullUnpackSize, entryInputStream)
-                } finally {
-                  entryInputStream.close()
                 }
               }
             }
@@ -561,6 +587,52 @@ private[privyspark] object ArchiveExpanders {
     }
   }
 
+  private def drainInputStreamQuietly(inputStream: InputStream): Unit = {
+    try {
+      drainInputStream(inputStream)
+    } catch {
+      case NonFatal(_) =>
+    }
+  }
+
+  private def withArchiveEntryInputStream(
+    entryName: String,
+    logicalIdentifier: String,
+    archiveErrors: ArrayBuffer[ScanError],
+    datasetPath: String,
+    timestamp: String
+  )(openInputStream: => InputStream)(processEntry: InputStream => Unit): Unit = {
+    val childLogicalIdentifier = archiveEntryLogicalIdentifier(logicalIdentifier, entryName)
+    var entryInputStream: InputStream = null
+
+    try {
+      entryInputStream = openInputStream
+      processEntry(entryInputStream)
+    } catch {
+      case NonFatal(e) =>
+        addArchiveReadError(archiveErrors, datasetPath, timestamp, childLogicalIdentifier, e)
+    } finally {
+      closeArchiveEntryInputStream(entryInputStream, archiveErrors, datasetPath, timestamp, childLogicalIdentifier)
+    }
+  }
+
+  private def closeArchiveEntryInputStream(
+    entryInputStream: InputStream,
+    archiveErrors: ArrayBuffer[ScanError],
+    datasetPath: String,
+    timestamp: String,
+    childLogicalIdentifier: String
+  ): Unit = {
+    if (entryInputStream != null) {
+      try {
+        entryInputStream.close()
+      } catch {
+        case NonFatal(e) =>
+          addArchiveReadError(archiveErrors, datasetPath, timestamp, childLogicalIdentifier, e)
+      }
+    }
+  }
+
   private def closeArchiveResources(
     resources: Seq[Closeable],
     archiveErrors: ArrayBuffer[ScanError],
@@ -590,6 +662,25 @@ private[privyspark] object ArchiveExpanders {
         case NonFatal(_) =>
       }
     }
+  }
+
+  private def addArchiveReadError(
+    archiveErrors: ArrayBuffer[ScanError],
+    datasetPath: String,
+    timestamp: String,
+    fileIdentifier: String,
+    error: Throwable
+  ): Unit = {
+    archiveErrors += ScanError(
+      datasetPath,
+      timestamp,
+      fileIdentifier,
+      s"Archive read failed: ${Option(error.getMessage).getOrElse(error.getClass.getSimpleName)}"
+    )
+  }
+
+  private def archiveEntryLogicalIdentifier(logicalIdentifier: String, entryName: String): String = {
+    s"$logicalIdentifier!${normalizeArchiveEntryName(entryName)}"
   }
 
 }
