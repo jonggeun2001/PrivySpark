@@ -6,11 +6,14 @@
 - Continue processing as much as possible even when some files or groups fail.
 
 ## Components
-- `Cli.scala`: CLI arguments and default execution options
-- `FormatDetector.scala`: first-stage format detection by extension
+- `cli/Cli.scala`: CLI arguments and default execution options
+- `format/FormatDetector.scala`: first-stage format detection by extension
+- `format/CompressionStreams.scala`: codec wrapping for direct compressed text-style files and compressed tar streams
 - `RulesetLoader.scala`: built-in and external ruleset loading and validation
-- `DriverLogger.scala`: driver log level parsing and structured log format
-- `DetectionAggregator.scala`: metric aggregation and fallback strategies
+- `util/DriverLogger.scala`: driver log level parsing and structured log format
+- `detect/DetectionAggregator.scala`: metric aggregation and fallback strategies
+- `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: input expansion, grouping, and scan execution
+- `report/ReportWriter.scala`: final report writing and format-specific outputs
 - `PrivySparkApp.scala`: input expansion, grouping, exact split, scan orchestration, progress/final report writing
 - `Models.scala`: result, error, and ruleset models
 
@@ -22,7 +25,7 @@
 1. validate input path
 2. load ruleset and pre-validate regexes
 3. collect physical files and apply ignore-pattern filtering
-4. expand archive entries and workbook sheets, probe magic bytes, normalize text fallback, and filter ignored archive entries
+4. expand archive entries and workbook sheets, pass through direct compressed text-style inputs, probe magic bytes, normalize text fallback, and filter ignored archive entries
 5. build first-pass groups by `(directory, format)`
 6. sample a representative file for schema detection
 7. perform schema-aware split and determine whether directory identifiers are safe

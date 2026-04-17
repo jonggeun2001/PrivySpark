@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
+import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanner}
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
@@ -98,7 +99,7 @@ class SampleDatasetGeneratorSpec extends AnyFunSuite with BeforeAndAfterAll {
     rules: Seq[PiiRule],
     timestamp: String
   ): (Seq[ScanResult], Seq[ScanError]) = {
-    val plan = PrivySparkApp.scanDirectoryStructure(
+    val plan = DirectoryScanner.scanDirectoryStructure(
       spark,
       inputPath,
       datasetPath,
@@ -109,7 +110,7 @@ class SampleDatasetGeneratorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
 
     plan.groups.foreach { group =>
-      val (groupResults, groupErrors) = PrivySparkApp.scanGroup(
+      val (groupResults, groupErrors) = GroupScanner.scanGroup(
         spark,
         datasetPath,
         group,

@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.format.ByteProbe
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.prop.TableDrivenPropertyChecks._
@@ -24,7 +25,7 @@ class LooksLikeTextSpec extends AnyFunSuite {
   test("looksLikeText classifies utf-8 text and suspicious control bytes") {
     forAll(cases) { (label: String, bytes: Array[Byte], expected: Boolean) =>
       assert(
-        PrivySparkApp.looksLikeText(bytes, false) == expected,
+        ByteProbe.looksLikeText(bytes, false) == expected,
         label
       )
     }

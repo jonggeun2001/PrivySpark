@@ -1,5 +1,7 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.cli.CliConfig
+import io.github.jonggeun2001.privyspark.util.ParallelismConfig
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
@@ -15,7 +17,13 @@ class ParallelismConfigSpec extends AnyFunSuite {
       fileParallelism = Some(5)
     )
 
-    assert(PrivySparkApp.resolveCliParallelism(config) == (9, 7, 5))
+    assert(
+      ParallelismConfig.resolveCliParallelism(
+        config.preScanParallelism,
+        config.groupParallelism,
+        config.fileParallelism
+      ) == (9, 7, 5)
+    )
   }
 
   test("resolveCliParallelism returns fallback markers when CLI values are absent") {
@@ -24,18 +32,24 @@ class ParallelismConfigSpec extends AnyFunSuite {
       outputPath = "/data/output"
     )
 
-    assert(PrivySparkApp.resolveCliParallelism(config) == (-1, -1, -1))
+    assert(
+      ParallelismConfig.resolveCliParallelism(
+        config.preScanParallelism,
+        config.groupParallelism,
+        config.fileParallelism
+      ) == (-1, -1, -1)
+    )
   }
 
   test("defaultPreScanParallelism keeps the fixed IO-oriented default") {
-    assert(PrivySparkApp.defaultPreScanParallelism == 32)
+    assert(ParallelismConfig.defaultPreScanParallelism == 32)
   }
 
   test("defaultGroupParallelism keeps the higher driver submission default") {
-    assert(PrivySparkApp.defaultGroupParallelism == 16)
+    assert(ParallelismConfig.defaultGroupParallelism == 16)
   }
 
   test("defaultFileParallelism keeps the higher fallback scan default") {
-    assert(PrivySparkApp.defaultFileParallelism == 8)
+    assert(ParallelismConfig.defaultFileParallelism == 8)
   }
 }

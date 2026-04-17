@@ -1,7 +1,7 @@
 # Rulesets and Detection
 
 ## Detection Model
-- PrivySpark uses regex-based candidate detection plus strict validators for selected PII types.
+- PrivySpark uses ruleset regexes directly for both aggregation and sample extraction.
 - Results are aggregated at column level or file level.
 - Invalid regexes fail immediately during ruleset loading.
 
@@ -45,7 +45,7 @@ Rulesets are validated before scanning so long-running jobs do not fail late bec
 - `resident_registration_number`: supports hyphenated and compact forms, including a 1-digit gender/century short form.
 - `resident_registration_number`: the default ruleset only constrains month `01`-`12` and day `01`-`31`, and rejects matches inside longer numeric tokens.
 - `foreign_registration_number`: mirrors the resident-registration month/day constraints and only allows foreign-registration codes `5`-`8` in the seventh digit.
-- `driver_license_number`: accepts legacy hyphenated 10-digit numbers, current 12-digit numbers, and pre-July-2-2014 Korean region-name formats such as `서울 00 - 123456 - 01` and `부산0012345601`. Current numeric region codes are still limited to `11`-`26`, `28`, and Korean region-name forms are limited to the KoROAD notice list: `서울`, `부산`, `경기`, `강원`, `충북`, `충남`, `전북`, `전남`, `경북`, `경남`, `제주`, `대구`, `인천`, `광주`, `대전`, and `울산`. The default ruleset intentionally excludes bare legacy 10-digit numeric values to reduce `full_column` false positives against other 10-digit identifiers. The aggregation path reapplies the same validator rules through a `regexp_extract_all`-based SQL expression, and the sample-extraction path still rechecks the final fragment with the strict validator.
+- `driver_license_number`: accepts legacy hyphenated 10-digit numbers, current 12-digit numbers, and pre-July-2-2014 Korean region-name formats such as `서울 00 - 123456 - 01` and `부산0012345601`. Current numeric region codes are still limited to `11`-`26`, `28`, and Korean region-name forms are limited to the KoROAD notice list: `서울`, `부산`, `경기`, `강원`, `충북`, `충남`, `전북`, `전남`, `경북`, `경남`, `제주`, `대구`, `인천`, `광주`, `대전`, and `울산`. The default ruleset intentionally excludes bare legacy 10-digit numeric values to reduce `full_column` false positives against other 10-digit identifiers, and it blocks legacy hyphenated matches only when they would start inside an invalid current-format prefix such as `27-12-345678-90`. Runtime detection now follows the configured regex directly for both aggregation and sample extraction.
 - `address`: remains relatively conservative because Korean address strings vary heavily in real datasets. Tightening it too aggressively would increase misses faster than it reduces false positives.
 - `bank_account_number`: keeps hyphenated account-number detection, but tightens segment lengths to avoid obvious date-like patterns such as `YYYY-MM-DD`.
 - `credit_card_number`: is limited to common 16-digit issuer prefixes, keeps Mastercard 2-series inside the `2221`-`2720` range, and avoids matches inside larger numeric tokens.

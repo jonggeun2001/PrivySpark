@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.cli.PathValidator
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner

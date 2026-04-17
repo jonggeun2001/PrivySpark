@@ -6,11 +6,14 @@
 - 일부 파일 또는 그룹 실패가 있어도 가능한 범위를 계속 처리합니다.
 
 ## 구현 컴포넌트
-- `Cli.scala`: 실행 인자와 기본 실행 옵션
-- `FormatDetector.scala`: 확장자 기반 1차 포맷 식별
+- `cli/Cli.scala`: 실행 인자와 기본 실행 옵션
+- `format/FormatDetector.scala`: 확장자 기반 1차 포맷 식별
+- `format/CompressionStreams.scala`: direct compressed text-style file과 compressed tar stream의 codec wrapping
 - `RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
-- `DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
-- `DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
+- `util/DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
+- `detect/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
+- `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: 입력 확장, 그룹화, 스캔 실행
+- `report/ReportWriter.scala`: 최종 리포트 저장과 포맷별 산출물 생성
 - `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, progress/최종 리포트 저장
 - `Models.scala`: 결과/오류/규칙 모델
 
@@ -22,7 +25,7 @@
 1. 입력 경로 검증
 2. ruleset 로드와 regex 사전 검증
 3. 물리 파일 수집과 ignore 패턴 필터
-4. archive 엔트리 확장, workbook 시트 확장, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화, archive entry ignore 필터
+4. archive 엔트리 확장, workbook 시트 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화, archive entry ignore 필터
 5. `(directory, format)` 기준 1차 그룹화
 6. 대표 파일 기준 스키마 샘플링
 7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정

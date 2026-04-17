@@ -5,13 +5,14 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 ## Scope
 - The product exposes a single entrypoint: `privyspark scan`.
 - Input paths must be absolute paths or URIs.
-- Supported formats are `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, and `jar`.
+- Supported formats are `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, and archive families `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, and `rar`.
+- Direct text-style data files (`csv`, `json/jsonl/ndjson`) wrapped by `gzip` or `bzip2` are passed through to Spark/Hadoop readers using the original path.
 - Files without extensions and unsupported extensions are probed for `parquet`/`orc` magic bytes first. Text-like inputs are normalized into the internal `text` format.
 - Only binary-looking unsupported inputs are recorded as `Unsupported file format`.
 - `--ignore` and `--ignore-file` define scan exclusions by basename or input-root-relative path.
 
 ## Detection Model
-- Detection uses ruleset-based regexes plus strict validators for selected PII types.
+- Detection uses ruleset-based regexes directly.
 - Invalid regexes are rejected during ruleset loading before the scan starts.
 - Aggregated results include `match_count`, `sampled_row_count`, `match_ratio`, `non_empty_match_ratio`, `confidence`, `sample_raw_value`, and `sample_matched_fragment`.
 - `sample_raw_value` stores only the matched fragment plus up to 50 characters of surrounding context on each side, not the entire cell value.

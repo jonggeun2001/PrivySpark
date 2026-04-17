@@ -3,6 +3,7 @@
 ## 프로젝트 구조 및 모듈 구성
 - `src/main/scala/io/github/jonggeun2001/privyspark`: 앱 코드
   - `PrivySparkApp.scala`: 엔트리포인트
+  - `cli/`, `scan/`, `format/`, `detect/`, `report/`, `fsio/`, `util/`: 역할별 서브패키지
   - `config/RulesetLoader.scala`: 외부 규칙셋 로더
   - `model/Models.scala`: 리포트/규칙 데이터 모델
 - `src/test/scala/io/github/jonggeun2001/privyspark`: 단위 테스트

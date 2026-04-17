@@ -28,6 +28,8 @@
 - `sample_raw_value`
 - `sample_matched_fragment`
 
+`scan_results.scan_timestamp`는 CLI 시작 시각 고정값이 아니라, 각 결과 row가 실제로 만들어진 시점의 UTC ISO-8601 시각입니다. 따라서 장시간 스캔이나 다중 그룹 스캔에서는 결과 row마다 값이 달라질 수 있습니다.
+
 ## `file_identifier` 규칙
 - 기본은 입력 경로 기준 상대경로입니다.
 - 동일 스키마가 exact split으로 확인되고, pre-scan 오류가 없고, 다중 파일 그룹의 디렉토리 승격이 허용된 경우에만 디렉토리 식별자로 승격합니다.
@@ -44,8 +46,8 @@
 - `sampled_row_count`는 실제 탐지에 사용된 샘플링 후 행 수입니다.
 - `non_empty_match_ratio`는 해당 컬럼에서 비어 있지 않은 값만 분모로 사용한 비율입니다.
 - 비어 있는 값은 `null`이거나 `trim(column)` 결과가 blank인 값입니다.
-- `full_column`도 `match_count` 기준만 달라질 뿐, `match_ratio`와 `confidence`의 분모는 동일하게 샘플링된 행 수입니다.
-- `confidence`는 현재 구현에서 `match_ratio`와 동일한 값입니다.
+- `full_column`도 `match_count` 기준만 달라질 뿐, `confidence`는 여전히 해당 컬럼의 non-empty 값 기준으로 계산됩니다.
+- `confidence`는 `match_count / non_empty_count`의 95% Wilson score 신뢰구간 하한(z=1.96)입니다. 표본이 작을수록 보수적으로 낮아지고, 표본이 커질수록 `non_empty_match_ratio`에 수렴합니다.
 - `sample_matched_fragment`는 실제 regex/validator가 검출한 원문 조각 1건입니다.
 - `sample_raw_value`는 그 조각이 포함된 셀에서 앞뒤 최대 50자 문맥만 잘라 저장한 값입니다.
 - 두 값 모두 소수점 둘째 자리까지 반올림합니다.
@@ -53,7 +55,7 @@
 ## 오류 리포트
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
 - 파일 교체/삭제로 인한 읽기 오류는 재시도 후 실패 시 기록합니다.
-- 손상 JSON, nested archive, unsafe archive path, 매직바이트 불일치 무확장자/미지원 확장자 입력 등은 명시적 오류로 기록합니다.
+- 손상 JSON, nested archive, unsafe archive path, password-protected archive, multi-volume RAR, RAR5 archive, 매직바이트 불일치 무확장자/미지원 확장자 입력 등은 명시적 오류로 기록합니다.
 
 ## 진행 중 progress 경로
 - 진행 중 임시 shard는 `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, `meta/completions/*.jsonl`에 기록될 수 있습니다.

@@ -14,7 +14,7 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 - Pre-scan parallelism is reused for breadth-first directory discovery, format probing, and group schema split.
 - CSV body reads run with `inferSchema=false`.
 - `DetectionAggregator` uses batched aggregation instead of one Spark job per metric.
-- `driver_license_number` aggregation stays on Catalyst/codegen-friendly SQL expressions by using `regexp_extract_all` plus SQL validation predicates instead of a Scala UDF.
+- `driver_license_number` now uses the same regex-based predicate path as other rules, so aggregation and sampling stay on Catalyst/codegen-friendly expressions without a per-type Scala UDF or extra validation pass.
 - The legacy fallback threshold is raised to `50,000` expressions, and the fallback still uses smaller aggregation batches rather than per-metric counts.
 - Sample raw-value fallback is also batched: dataset-level fallback projects `when(...)` columns in chunks, and file-level fallback groups `first(when(...))` per file in chunks instead of launching one Spark job per metric.
 - `_progress` acts as the final merge source so long scans do not require the driver to retain all result row payloads in memory.

@@ -18,6 +18,15 @@ final case class PiiRule(
   matchType: String = PiiRuleMatchType.Value
 )
 
+private[privyspark] final case class MatchCount(
+  columnName: String,
+  piiType: String,
+  count: Long,
+  metricAlias: String = ""
+)
+
+private[privyspark] final case class SampleValue(sampleRawValue: String, sampleMatchedFragment: String)
+
 final case class ScanResult(
   dataset_path: String,
   scan_timestamp: String,

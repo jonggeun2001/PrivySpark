@@ -1,7 +1,8 @@
 # 입력 포맷과 정규화
 
 ## 지원 입력
-- 확장자 기반 우선 지원: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`
+- 확장자 기반 우선 지원: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`, `tar`, `tar.gz`, `tgz`, `tar.bz2`, `tbz2`, `tar.xz`, `txz`, `tar.zst`, `tzst`, `7z`, `rar`
+- direct text-style data file(`csv`, `json`, `jsonl`, `ndjson`)에 붙은 outer compression wrapper `gz`, `bz2`는 원본 경로 그대로 Spark/Hadoop reader에 전달합니다. 예: `customers.csv.gz`, `events.json.bz2`
 - 무확장자 파일과 대부분의 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 먼저 판별합니다. 다만 `pdf`, `jpg` 같은 명확한 비데이터 바이너리 확장자는 probe 없이 바로 미지원 입력으로 분류합니다.
 - 매직바이트가 일치하지 않더라도 UTF-8 텍스트처럼 보이는 입력은 내부 `text` 포맷으로 정규화해 Spark `text` reader의 단일 `value` 컬럼으로 스캔합니다.
 - UTF-8 텍스트 안에서 ASCII 정보 구분자(`0x1C`-`0x1F`, 예: RS 구분 파일)가 자주 등장해도 text fallback 입력으로 처리합니다.
@@ -12,12 +13,13 @@
 이 text fallback을 둔 이유는 확장자만으로 텍스트 로그나 덤프를 배제하면 실제 운영 입력을 지나치게 많이 놓치기 때문입니다. 반대로 아무 바이너리나 텍스트로 강제 처리하면 노이즈가 커지므로, 매직바이트와 UTF-8 probe를 함께 사용해 경계를 분리합니다.
 
 ## Archive 처리
-- `zip`, `jar`는 내부 엔트리를 선스캔한 뒤 지원 포맷 파일만 staging 후 스캔합니다.
+- `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`는 내부 엔트리를 선스캔한 뒤 staging 후 스캔합니다.
 - archive 확장은 1단계까지만 허용합니다.
-- nested `zip`/`jar` 엔트리는 재귀 처리하지 않고 오류로 남깁니다.
+- nested archive 엔트리는 재귀 처리하지 않고 오류로 남깁니다.
 - 0바이트 archive entry는 staging이나 오류 리포트 없이 건너뜁니다.
 - ignore 패턴에 매칭된 archive entry는 `archive_entry_skipped reason=ignored` 로그만 남기고 staging하지 않습니다.
 - archive 내부 식별자는 `<archive>!<entry>` 형식을 사용합니다.
+- password-protected archive, multi-volume RAR, RAR5 archive는 staging 없이 `scan_errors`에 명시적으로 남깁니다.
 
 ## Excel 처리
 - `xlsx`는 workbook을 시트 단위 논리 입력으로 확장합니다.

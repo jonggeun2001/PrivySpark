@@ -1,4 +1,4 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.cli
 
 import java.nio.file.Paths
 

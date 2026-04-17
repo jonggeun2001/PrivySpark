@@ -28,6 +28,8 @@
 - `sample_raw_value`
 - `sample_matched_fragment`
 
+`scan_results.scan_timestamp` is the UTC ISO-8601 time when each result row is actually materialized, not a fixed CLI start timestamp. Long-running scans and multi-group scans can therefore contain different values across result rows.
+
 ## `file_identifier` Rules
 - The default is the input-relative path.
 - Promotion to a directory-level identifier only happens when exact split confirms identical schemas, there are no pre-scan errors, and directory-level aggregation is allowed for the multi-file group.
@@ -44,8 +46,8 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 - `sampled_row_count` is the post-sampling row count that was actually scanned.
 - `non_empty_match_ratio` uses only non-empty values in the column as its denominator.
 - Empty means `null` or a value whose `trim(column)` is blank.
-- `full_column` only changes how `match_count` is computed. The denominator for `match_ratio` and `confidence` still uses sampled row count.
-- `confidence` currently equals `match_ratio`.
+- `full_column` only changes how `match_count` is computed. `confidence` is still calculated against non-empty values for the column.
+- `confidence` is the lower bound of the 95% Wilson score interval (z=1.96) for `match_count / non_empty_count`. Smaller samples are penalized more conservatively, and larger samples converge toward `non_empty_match_ratio`.
 - `sample_matched_fragment` stores one raw fragment that actually matched the regex and validator path.
 - `sample_raw_value` stores only the matched fragment plus up to 50 characters of surrounding context on each side.
 - Both values are rounded to two decimal places.
@@ -53,7 +55,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 ## Error Reports
 - File and group failures are accumulated without aborting the entire scan.
 - Read errors caused by file replacement or deletion are retried before being recorded.
-- Corrupt JSON, nested archives, unsafe archive paths, and unsupported inputs that fail magic-byte/text fallback are recorded as explicit errors.
+- Corrupt JSON, nested archives, unsafe archive paths, password-protected archives, multi-volume RAR archives, RAR5 archives, and unsupported inputs that fail magic-byte/text fallback are recorded as explicit errors.
 
 ## In-Progress `_progress` Path
 - Intermediate shards may be written under `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, and `meta/completions/*.jsonl`.
