@@ -1,14 +1,15 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.scan
 
-import io.github.jonggeun2001.privyspark.DetectionAggregator.MatchCount
-import io.github.jonggeun2001.privyspark.ByteProbe.detectPhysicalFormat
-import io.github.jonggeun2001.privyspark.CsvInference._
-import io.github.jonggeun2001.privyspark.DirectoryScanner.splitGroupBySchema
-import io.github.jonggeun2001.privyspark.ParallelismConfig._
-import io.github.jonggeun2001.privyspark.PathIdentifiers._
-import io.github.jonggeun2001.privyspark.RetryIO.withFileReadRetry
-import io.github.jonggeun2001.privyspark.SourceExpansion.supportsBatchScan
-import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, PiiRule, ProgressRun, ScanError, ScanGroup, ScanReadOptions, ScanResult}
+import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
+import io.github.jonggeun2001.privyspark.format.ByteProbe.detectPhysicalFormat
+import io.github.jonggeun2001.privyspark.format.CsvInference._
+import io.github.jonggeun2001.privyspark.scan.DirectoryScanner.splitGroupBySchema
+import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
+import io.github.jonggeun2001.privyspark.util.PathIdentifiers._
+import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
+import io.github.jonggeun2001.privyspark.scan.SourceExpansion.supportsBatchScan
+import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, PiiRule, ProgressRun, SampleValue, ScanError, ScanGroup, ScanReadOptions, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{col, input_file_name}
@@ -30,7 +31,7 @@ private[privyspark] object GroupScanner {
     sampledRowCount: Long,
     nonEmptyValueCounts: Map[String, Long],
     matchCounts: Seq[MatchCount],
-    sampleValues: Map[String, DetectionAggregator.SampleValue] = Map.empty
+    sampleValues: Map[String, SampleValue] = Map.empty
   ): Seq[ScanResult] = {
     if (sampledRowCount <= 0L) {
       Seq.empty

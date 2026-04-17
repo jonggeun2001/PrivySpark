@@ -1,4 +1,4 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.format
 
 import io.github.jonggeun2001.privyspark.model.ProbeSample
 import org.apache.hadoop.fs.Path

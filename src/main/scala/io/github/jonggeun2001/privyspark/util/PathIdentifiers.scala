@@ -1,4 +1,4 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.util
 
 import io.github.jonggeun2001.privyspark.model.{ScanGroup, ScanReadOptions}
 import org.apache.hadoop.fs.Path

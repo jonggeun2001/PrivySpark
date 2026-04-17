@@ -1,4 +1,4 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.format
 
 object FormatDetector {
   private val ProbeSkipExtensions = Set(

@@ -1,8 +1,9 @@
 package io.github.jonggeun2001.privyspark.progress
 
-import io.github.jonggeun2001.privyspark.JsonCodec._
+import io.github.jonggeun2001.privyspark.report.JsonCodec._
 import io.github.jonggeun2001.privyspark.model.{ActiveRunMarker, ProgressRun, ProgressRunMetadata, ScanError, ScanResult}
-import io.github.jonggeun2001.privyspark.{DriverLogger, ReportWriter}
+import io.github.jonggeun2001.privyspark.report.ReportWriter
+import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, Encoders, Row, SparkSession}

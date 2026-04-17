@@ -1,11 +1,13 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.scan
 
-import io.github.jonggeun2001.privyspark.ArchiveStaging._
-import io.github.jonggeun2001.privyspark.ByteProbe._
-import io.github.jonggeun2001.privyspark.CsvInference.XlsxFormat
-import io.github.jonggeun2001.privyspark.WorkbookHelpers.listVisibleWorkbookSheets
+import io.github.jonggeun2001.privyspark.scan.ArchiveStaging._
+import io.github.jonggeun2001.privyspark.format.ByteProbe._
+import io.github.jonggeun2001.privyspark.format.FormatDetector
+import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
+import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.listVisibleWorkbookSheets
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanFileEntry, ScanGroup, ScanReadOptions}
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, PathIdentifiers}
 import org.apache.hadoop.fs.Path
 
 import java.io.ByteArrayOutputStream

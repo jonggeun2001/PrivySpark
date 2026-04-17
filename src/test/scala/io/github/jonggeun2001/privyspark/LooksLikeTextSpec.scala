@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.format.ByteProbe
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.prop.TableDrivenPropertyChecks._

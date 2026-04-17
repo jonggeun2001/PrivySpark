@@ -1,9 +1,10 @@
 package io.github.jonggeun2001.privyspark.progress
 
-import io.github.jonggeun2001.privyspark.JsonCodec.{activeRunMetadataJson, progressRunMetadataJson}
-import io.github.jonggeun2001.privyspark.OutputFormats
-import io.github.jonggeun2001.privyspark.ReportWriter
+import io.github.jonggeun2001.privyspark.report.JsonCodec.{activeRunMetadataJson, progressRunMetadataJson}
+import io.github.jonggeun2001.privyspark.report.OutputFormats
+import io.github.jonggeun2001.privyspark.report.ReportWriter
 import io.github.jonggeun2001.privyspark.model.{ProgressRun, ScanError}
+import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.{Encoders, SparkSession}
 
@@ -63,7 +64,7 @@ private[privyspark] object ProgressRunManager {
       )
       deleteOwnedPreparingRunMarker(conf, preparingRunPath, progressRun.runId)
 
-      io.github.jonggeun2001.privyspark.DriverLogger.debug(
+      DriverLogger.debug(
         "progress_run_prepared",
         "run_id" -> progressRun.runId,
         "root_path" -> progressRun.rootPath,
@@ -96,7 +97,7 @@ private[privyspark] object ProgressRunManager {
     outputFormats: Seq[String]
   ): (Long, Long) = {
     val normalizedOutputFormats = OutputFormats.requireSupported(outputFormats)
-    io.github.jonggeun2001.privyspark.DriverLogger.debug(
+    DriverLogger.debug(
       "progress_merge_start",
       "run_id" -> progressRun.runId,
       "results_path" -> progressRun.resultsPath,
@@ -109,7 +110,7 @@ private[privyspark] object ProgressRunManager {
     val errorCount = errorDf.count()
     ReportWriter.writeReports(spark, outputRoot, resultDf, errorDf, normalizedOutputFormats, () => ())
     ProgressIO.deleteProgressRun(spark.sparkContext.hadoopConfiguration, progressRun)
-    io.github.jonggeun2001.privyspark.DriverLogger.debug(
+    DriverLogger.debug(
       "progress_merge_complete",
       "run_id" -> progressRun.runId,
       "results" -> resultCount,
@@ -176,7 +177,7 @@ private[privyspark] object ProgressRunManager {
     if (fs.exists(preparingMarkerPath)) {
       val preparingModifiedAt = fs.getFileStatus(preparingMarkerPath).getModificationTime
       if (System.currentTimeMillis() - preparingModifiedAt > PreparingRunStaleThresholdMillis) {
-        io.github.jonggeun2001.privyspark.DriverLogger.warn(
+        DriverLogger.warn(
           "progress_cleanup_stale",
           "path" -> rootPath,
           "reason" -> "stale_preparing_run_marker"
@@ -194,7 +195,7 @@ private[privyspark] object ProgressRunManager {
     val activeMarkerPath = new Path(activeRunPath)
     if (!fs.exists(activeMarkerPath)) {
       if (!ProgressIO.progressRootHasRunMetadata(fs, root)) {
-        io.github.jonggeun2001.privyspark.DriverLogger.warn(
+        DriverLogger.warn(
           "progress_cleanup_stale",
           "path" -> rootPath,
           "reason" -> "missing_active_run_marker_without_run_metadata"
@@ -203,7 +204,7 @@ private[privyspark] object ProgressRunManager {
       } else {
         val rootModifiedAt = fs.getFileStatus(root).getModificationTime
         if (System.currentTimeMillis() - rootModifiedAt > ActiveRunStaleThresholdMillis) {
-          io.github.jonggeun2001.privyspark.DriverLogger.warn(
+          DriverLogger.warn(
             "progress_cleanup_stale",
             "path" -> rootPath,
             "reason" -> "missing_active_run_marker"
@@ -218,7 +219,7 @@ private[privyspark] object ProgressRunManager {
 
     ProgressIO.readActiveRunMarker(conf, activeRunPath) match {
       case Some(marker) if marker.state == "FAILED" || isStaleActiveRun(marker.lastHeartbeatEpochMillis) =>
-        io.github.jonggeun2001.privyspark.DriverLogger.warn(
+        DriverLogger.warn(
           "progress_cleanup_stale",
           "path" -> rootPath,
           "run_id" -> marker.runId,
@@ -230,7 +231,7 @@ private[privyspark] object ProgressRunManager {
         throw new IllegalStateException(s"Active progress run already exists under output root: $rootPath (run_id=${marker.runId})")
       case None =>
         if (ProgressIO.progressRootHasFailedRunMetadata(conf, root)) {
-          io.github.jonggeun2001.privyspark.DriverLogger.warn(
+          DriverLogger.warn(
             "progress_cleanup_stale",
             "path" -> rootPath,
             "reason" -> "failed_run_metadata_with_unreadable_active_run_marker"
@@ -239,7 +240,7 @@ private[privyspark] object ProgressRunManager {
         } else {
           val markerModifiedAt = fs.getFileStatus(activeMarkerPath).getModificationTime
           if (System.currentTimeMillis() - markerModifiedAt > ActiveRunStaleThresholdMillis) {
-            io.github.jonggeun2001.privyspark.DriverLogger.warn(
+            DriverLogger.warn(
               "progress_cleanup_stale",
               "path" -> rootPath,
               "reason" -> "stale_unreadable_active_run_marker"
@@ -268,7 +269,7 @@ private[privyspark] object ProgressRunManager {
           writeActiveRunMarker(conf, progressRun, state, overwrite = true, errorMessage)
         case None if failedRunMetadata && state == "RUNNING" =>
         case None if runMetadata.exists(_.runId == progressRun.runId) =>
-          io.github.jonggeun2001.privyspark.DriverLogger.warn(
+          DriverLogger.warn(
             "progress_active_run_marker_self_healed",
             "run_id" -> progressRun.runId,
             "path" -> progressRun.activeRunPath,

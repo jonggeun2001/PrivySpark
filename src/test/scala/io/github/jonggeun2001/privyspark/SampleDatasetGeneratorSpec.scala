@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
+import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanner}
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll

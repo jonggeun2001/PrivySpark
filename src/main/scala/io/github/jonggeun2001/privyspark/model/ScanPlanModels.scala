@@ -1,8 +1,5 @@
 package io.github.jonggeun2001.privyspark.model
 
-import io.github.jonggeun2001.privyspark.DetectionAggregator.MatchCount
-import io.github.jonggeun2001.privyspark.DetectionAggregator.SampleValue
-
 private[privyspark] final case class ScanReadOptions(sheetName: Option[String] = None)
 
 private[privyspark] final case class ScanFileEntry(

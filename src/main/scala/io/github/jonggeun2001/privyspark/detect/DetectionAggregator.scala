@@ -1,6 +1,7 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.detect
 
-import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
+import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType, SampleValue}
+import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.spark.sql.functions.{col, exists, first, length, lit, regexp_extract_all, regexp_replace, substring, sum => sparkSum, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{Column, DataFrame}
@@ -9,9 +10,7 @@ import java.util.regex.Pattern
 import scala.util.control.NonFatal
 
 object DetectionAggregator {
-  final case class MatchCount(columnName: String, piiType: String, count: Long, metricAlias: String = "")
   final case class FileMatchCount(fileIdentifier: String, columnName: String, piiType: String, count: Long, metricAlias: String = "")
-  final case class SampleValue(sampleRawValue: String, sampleMatchedFragment: String)
   final case class AggregationConfig(maxExpressionsPerAgg: Int = 400, legacyFallbackThreshold: Int = 50000)
 
   private final case class Metric(

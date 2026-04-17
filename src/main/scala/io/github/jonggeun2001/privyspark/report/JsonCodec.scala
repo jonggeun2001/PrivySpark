@@ -1,4 +1,4 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.report
 
 import io.github.jonggeun2001.privyspark.model.{ProgressRun, ScanError, ScanResult}
 
