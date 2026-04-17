@@ -20,7 +20,7 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(rules.exists(_.piiType == "email"))
     assert(rules.exists(_.piiType == "passport_number"))
     assert(driverLicenseRule.nonEmpty)
-    assert(driverLicenseRule.get.regex == "(?:(?<![0-9-])(?:[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))")
+    assert(driverLicenseRule.get.regex == "(?:(?<![0-9])(?:(?<![0-9]{2}-)[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))")
     assert(foreignRegistrationNumberRule.nonEmpty)
     assert(foreignRegistrationNumberRule.get.regex == "(?<![0-9])[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])(?:-[5-8][0-9]{6}|[5-8][0-9]{6})(?![0-9])")
     assert(passportRule.nonEmpty)
@@ -97,7 +97,9 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(!fullMatchRegex.matcher("27-12-345678-90").matches())
     assert(!fullMatchRegex.matcher("271234567890").matches())
     assert(!fullMatchRegex.matcher("세종 07 - 111111 - 10").matches())
+    assert(!regex.findFirstIn("이전 번호 27-12-345678-90").nonEmpty)
     assert(regex.findFirstIn("이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90").contains("11-12-345678-90"))
+    assert(regex.findFirstIn("번호:-12-345678-90").contains("12-345678-90"))
     assert(regex.findFirstIn("메모: 서울 07 - 111111 - 10 재발급").contains("서울 07 - 111111 - 10"))
     assert(!regex.findFirstIn("1112345678901").nonEmpty)
   }
