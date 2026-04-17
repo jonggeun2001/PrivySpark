@@ -284,9 +284,7 @@ private[privyspark] object ArchiveExpanders {
         try {
           zipFile = new ZipFile(localArchivePath)
           val entries = zipFile.getEntries.asScala.toSeq
-          val hasEncryptedEntry = entries.exists { entry =>
-            Option(entry.getGeneralPurposeBit).exists(_.usesEncryption()) || !zipFile.canReadEntryData(entry)
-          }
+          val hasEncryptedEntry = entries.exists(entry => Option(entry.getGeneralPurposeBit).exists(_.usesEncryption()))
 
           if (hasEncryptedEntry) {
             archiveErrors += ScanError(
@@ -298,14 +296,24 @@ private[privyspark] object ArchiveExpanders {
           } else {
             entries.foreach { entry =>
               if (!entry.isDirectory) {
-                withArchiveEntryInputStream(
-                  entry.getName,
-                  logicalIdentifier,
-                  archiveErrors,
-                  datasetPath,
-                  timestamp
-                )(zipFile.getInputStream(entry)) { entryInputStream =>
-                  processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
+                val childLogicalIdentifier = archiveEntryLogicalIdentifier(logicalIdentifier, entry.getName)
+                if (!zipFile.canReadEntryData(entry)) {
+                  archiveErrors += ScanError(
+                    datasetPath,
+                    timestamp,
+                    childLogicalIdentifier,
+                    s"Archive read failed: Unsupported ZIP feature: $childLogicalIdentifier"
+                  )
+                } else {
+                  withArchiveEntryInputStream(
+                    entry.getName,
+                    logicalIdentifier,
+                    archiveErrors,
+                    datasetPath,
+                    timestamp
+                  )(zipFile.getInputStream(entry)) { entryInputStream =>
+                    processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
+                  }
                 }
               }
             }
@@ -384,35 +392,44 @@ private[privyspark] object ArchiveExpanders {
   ): Unit = {
     try {
       withLocalArchiveFile(conf, archivePath) { localArchivePath =>
-        var archiveFile: SevenZFile = null
-        try {
-          archiveFile = SevenZFile.builder().setFile(localArchivePath.toFile).get()
-          var entry = archiveFile.getNextEntry
-          while (entry != null) {
-            withArchiveEntryInputStream(
-              entry.getName,
-              logicalIdentifier,
-              archiveErrors,
-              datasetPath,
-              timestamp
-            )(archiveFile.getInputStream(entry)) { entryInputStream =>
-              processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
+        if (isPasswordProtectedSevenZArchive(localArchivePath)) {
+          archiveErrors += ScanError(
+            datasetPath,
+            timestamp,
+            logicalIdentifier,
+            s"Password-protected archive is not supported: $logicalIdentifier"
+          )
+        } else {
+          var archiveFile: SevenZFile = null
+          try {
+            archiveFile = SevenZFile.builder().setFile(localArchivePath.toFile).get()
+            var entry = archiveFile.getNextEntry
+            while (entry != null) {
+              withArchiveEntryInputStream(
+                entry.getName,
+                logicalIdentifier,
+                archiveErrors,
+                datasetPath,
+                timestamp
+              )(archiveFile.getInputStream(entry)) { entryInputStream =>
+                processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
+              }
+              entry = archiveFile.getNextEntry
             }
-            entry = archiveFile.getNextEntry
-          }
-        } catch {
-          case _: PasswordRequiredException =>
-            archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"Password-protected archive is not supported: $logicalIdentifier")
-          case NonFatal(e) =>
-            archiveErrors += ScanError(
-              datasetPath,
-              timestamp,
-              logicalIdentifier,
-              s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
-            )
-        } finally {
-          if (archiveFile != null) {
-            archiveFile.close()
+          } catch {
+            case _: PasswordRequiredException =>
+              archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"Password-protected archive is not supported: $logicalIdentifier")
+            case NonFatal(e) =>
+              archiveErrors += ScanError(
+                datasetPath,
+                timestamp,
+                logicalIdentifier,
+                s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+              )
+          } finally {
+            if (archiveFile != null) {
+              archiveFile.close()
+            }
           }
         }
       }
@@ -609,6 +626,8 @@ private[privyspark] object ArchiveExpanders {
       entryInputStream = openInputStream
       processEntry(entryInputStream)
     } catch {
+      case e: PasswordRequiredException =>
+        throw e
       case NonFatal(e) =>
         addArchiveReadError(archiveErrors, datasetPath, timestamp, childLogicalIdentifier, e)
     } finally {
@@ -629,6 +648,31 @@ private[privyspark] object ArchiveExpanders {
       } catch {
         case NonFatal(e) =>
           addArchiveReadError(archiveErrors, datasetPath, timestamp, childLogicalIdentifier, e)
+      }
+    }
+  }
+
+  private def isPasswordProtectedSevenZArchive(localArchivePath: java.nio.file.Path): Boolean = {
+    var archiveFile: SevenZFile = null
+
+    try {
+      archiveFile = SevenZFile.builder().setFile(localArchivePath.toFile).get()
+      archiveFile.getEntries.asScala.foreach { entry =>
+        if (!entry.isDirectory && entry.hasStream()) {
+          val entryInputStream = archiveFile.getInputStream(entry)
+          try {
+            entryInputStream.read()
+          } finally {
+            entryInputStream.close()
+          }
+        }
+      }
+      false
+    } catch {
+      case _: PasswordRequiredException => true
+    } finally {
+      if (archiveFile != null) {
+        archiveFile.close()
       }
     }
   }
