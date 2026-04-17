@@ -522,21 +522,58 @@ private[privyspark] object ArchiveExpanders {
     val fs = sourcePath.getFileSystem(conf)
     val tempDirectory = NioFiles.createTempDirectory("privyspark-archive-")
     val localArchivePath = tempDirectory.resolve(sourcePath.getName)
-    val inputStream = fs.open(sourcePath)
+    var inputStream: InputStream = null
+    var result: Option[T] = None
+    var failure: Throwable = null
+
+    def recordFailure(error: Throwable): Unit = {
+      if (failure == null) {
+        failure = error
+      } else if (failure ne error) {
+        failure.addSuppressed(error)
+      }
+    }
+
+    def attempt(action: => Unit): Unit = {
+      try {
+        action
+      } catch {
+        case error: Throwable =>
+          recordFailure(error)
+      }
+    }
 
     try {
-      val outputStream = NioFiles.newOutputStream(localArchivePath)
+      inputStream = fs.open(sourcePath)
+      var outputStream: OutputStream = null
+
       try {
+        outputStream = NioFiles.newOutputStream(localArchivePath)
         copyRemaining(inputStream, outputStream)
+        result = Some(block(localArchivePath))
+      } catch {
+        case error: Throwable =>
+          recordFailure(error)
       } finally {
-        outputStream.close()
+        if (outputStream != null) {
+          attempt(outputStream.close())
+        }
       }
-      block(localArchivePath)
+    } catch {
+      case error: Throwable =>
+        recordFailure(error)
     } finally {
-      inputStream.close()
-      NioFiles.deleteIfExists(localArchivePath)
-      NioFiles.deleteIfExists(tempDirectory)
+      if (inputStream != null) {
+        attempt(inputStream.close())
+      }
+      attempt(NioFiles.deleteIfExists(localArchivePath))
+      attempt(NioFiles.deleteIfExists(tempDirectory))
     }
+
+    if (failure != null) {
+      throw failure
+    }
+    result.get
   }
 
   private def readFirstChunk(inputStream: InputStream): Array[Byte] = {
