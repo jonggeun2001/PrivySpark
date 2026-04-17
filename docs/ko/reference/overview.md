@@ -11,7 +11,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 - `--ignore`, `--ignore-file`은 파일명 또는 입력 루트 기준 상대 경로로 스캔 제외 대상을 정의합니다.
 
 ## 탐지 모델
-- 탐지는 ruleset 기반 regex와 타입별 strict validator 조합으로 수행합니다.
+- 탐지는 ruleset 기반 regex 결과를 그대로 사용합니다.
 - invalid regex는 ruleset 로드 단계에서 즉시 거부합니다.
 - 집계 결과는 `match_count`, `sampled_row_count`, `match_ratio`, `non_empty_match_ratio`, `confidence`, `sample_raw_value`, `sample_matched_fragment`를 포함합니다.
 - `sample_raw_value`는 매치가 발생한 셀의 전체 원문이 아니라, 매치 조각 기준 앞뒤 최대 50자 문맥만 저장합니다.
