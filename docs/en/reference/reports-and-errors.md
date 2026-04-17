@@ -55,7 +55,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 ## Error Reports
 - File and group failures are accumulated without aborting the entire scan.
 - Read errors caused by file replacement or deletion are retried before being recorded.
-- Corrupt JSON, nested archives, unsafe archive paths, and unsupported inputs that fail magic-byte/text fallback are recorded as explicit errors.
+- Corrupt JSON, nested archives, unsafe archive paths, password-protected archives, multi-volume RAR archives, RAR5 archives, and unsupported inputs that fail magic-byte/text fallback are recorded as explicit errors.
 
 ## In-Progress `_progress` Path
 - Intermediate shards may be written under `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, and `meta/completions/*.jsonl`.

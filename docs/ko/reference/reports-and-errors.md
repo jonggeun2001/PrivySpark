@@ -55,7 +55,7 @@
 ## 오류 리포트
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
 - 파일 교체/삭제로 인한 읽기 오류는 재시도 후 실패 시 기록합니다.
-- 손상 JSON, nested archive, unsafe archive path, 매직바이트 불일치 무확장자/미지원 확장자 입력 등은 명시적 오류로 기록합니다.
+- 손상 JSON, nested archive, unsafe archive path, password-protected archive, multi-volume RAR, RAR5 archive, 매직바이트 불일치 무확장자/미지원 확장자 입력 등은 명시적 오류로 기록합니다.
 
 ## 진행 중 progress 경로
 - 진행 중 임시 shard는 `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, `meta/completions/*.jsonl`에 기록될 수 있습니다.

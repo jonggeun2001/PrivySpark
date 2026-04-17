@@ -9,6 +9,12 @@ import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
 import io.github.jonggeun2001.privyspark.report.ReportWriter
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.{DriverLogger, ParallelismConfig}
+import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
+import org.apache.commons.compress.archivers.tar.{TarArchiveEntry, TarArchiveOutputStream}
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream
+import org.apache.commons.compress.compressors.zstandard.ZstdCompressorOutputStream
 import org.apache.poi.ss.usermodel.{DataFormatter, WorkbookFactory}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
@@ -3228,6 +3234,136 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules scans gzip-compressed csv files via direct reader passthrough") {
+    val inputDir = Files.createTempDirectory("privyspark-gzip-csv-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      val compressedCsvPath = createGzipFile(
+        inputDir.resolve("customers.csv.gz"),
+        "name,email\n" +
+          "alice,alice@example.com\n" +
+          "bob,bob@example.com\n"
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(compressedCsvPath, compressedCsvPath, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("customers.csv.gz", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules expands tar.gz archives and keeps nested identifiers") {
+    val inputDir = Files.createTempDirectory("privyspark-targz-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      createTarArchiveFile(
+        inputDir.resolve("bundle.tar.gz"),
+        Seq(
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n" +
+              "bob,bob@example.com\n")
+        ),
+        codec = Some("gz")
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.tar.gz!nested/customers.csv", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules expands 7z archives and keeps nested identifiers") {
+    val inputDir = Files.createTempDirectory("privyspark-7z-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      createSevenZArchiveFile(
+        inputDir.resolve("bundle.7z"),
+        Seq(
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n" +
+              "bob,bob@example.com\n")
+        )
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.7z!nested/customers.csv", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules expands rar archives and keeps nested identifiers") {
+    val inputDir = Files.createTempDirectory("privyspark-rar-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      copyClasspathResource("/archive-fixtures/rar/test.rar", inputDir.resolve("bundle.rar"))
+
+      val rules = Seq(PiiRule("baz", "\\bbaz\\b"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("bundle.rar!foo/bar.txt", "value", 1L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules reports password protected rar archives in scan errors") {
+    val inputDir = Files.createTempDirectory("privyspark-rar-password-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      copyClasspathResource("/archive-fixtures/rar/rar4-password-junrar.rar", inputDir.resolve("bundle.rar"))
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("bundle.rar"))
+      assert(errors.head.error_message.contains("Password-protected archive is not supported"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules reports multi-volume rar archives in scan errors") {
+    val inputDir = Files.createTempDirectory("privyspark-rar-multivolume-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      copyClasspathResource("/archive-fixtures/rar/test-documents.part1.rar", inputDir.resolve("bundle.part1.rar"))
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("bundle.part1.rar"))
+      assert(errors.head.error_message.contains("Multi-volume archive is not supported"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure ignores archive entries under ignored archive subdirectories") {
     val inputDir = Files.createTempDirectory("privyspark-zip-ignore-entry-")
     var plan: DirectoryScanPlan = null
@@ -4949,6 +5085,76 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       zipOutputStream.close()
     }
     outputStream.toByteArray
+  }
+
+  private def createGzipFile(path: Path, content: String): String = {
+    val outputStream = new GzipCompressorOutputStream(Files.newOutputStream(path))
+    try {
+      outputStream.write(content.getBytes(StandardCharsets.UTF_8))
+    } finally {
+      outputStream.close()
+    }
+    path.toString
+  }
+
+  private def createTarArchiveFile(path: Path, entries: Seq[(String, String)], codec: Option[String] = None): String = {
+    val rawOutputStream = Files.newOutputStream(path)
+    val compressedOutputStream = codec match {
+      case Some("gz") => new GzipCompressorOutputStream(rawOutputStream)
+      case Some("bz2") => new BZip2CompressorOutputStream(rawOutputStream)
+      case Some("xz") => new XZCompressorOutputStream(rawOutputStream)
+      case Some("zst") => new ZstdCompressorOutputStream(rawOutputStream)
+      case None => rawOutputStream
+      case Some(other) => throw new IllegalArgumentException(s"Unsupported tar test codec: $other")
+    }
+    val tarOutputStream = new TarArchiveOutputStream(compressedOutputStream)
+    tarOutputStream.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
+    try {
+      entries.foreach {
+        case (entryName, content) =>
+          val bytes = content.getBytes(StandardCharsets.UTF_8)
+          val entry = new TarArchiveEntry(entryName)
+          entry.setSize(bytes.length.toLong)
+          tarOutputStream.putArchiveEntry(entry)
+          tarOutputStream.write(bytes)
+          tarOutputStream.closeArchiveEntry()
+      }
+      tarOutputStream.finish()
+    } finally {
+      tarOutputStream.close()
+    }
+    path.toString
+  }
+
+  private def createSevenZArchiveFile(path: Path, entries: Seq[(String, String)]): String = {
+    val outputFile = new SevenZOutputFile(path.toFile)
+    try {
+      entries.foreach {
+        case (entryName, content) =>
+          val bytes = content.getBytes(StandardCharsets.UTF_8)
+          val entry = outputFile.createArchiveEntry(path.toFile, entryName)
+          entry.setSize(bytes.length.toLong)
+          outputFile.putArchiveEntry(entry)
+          outputFile.write(bytes)
+          outputFile.closeArchiveEntry()
+      }
+      outputFile.finish()
+    } finally {
+      outputFile.close()
+    }
+    path.toString
+  }
+
+  private def copyClasspathResource(resourcePath: String, destination: Path): String = {
+    val inputStream = Option(getClass.getResourceAsStream(resourcePath)).getOrElse {
+      fail(s"Missing classpath resource: $resourcePath")
+    }
+    try {
+      Files.copy(inputStream, destination)
+    } finally {
+      inputStream.close()
+    }
+    destination.toString
   }
 
   private def readWorkbookRows(path: Path, sheetName: String): Seq[Seq[String]] = {
