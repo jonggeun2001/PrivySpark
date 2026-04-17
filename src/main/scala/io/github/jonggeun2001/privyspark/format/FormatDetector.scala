@@ -43,7 +43,8 @@ object FormatDetector {
     ".rar" -> ("rar", None)
   )
 
-  private val CodecSuffixes = Seq(".gz" -> "gz", ".bz2" -> "bz2", ".xz" -> "xz", ".zst" -> "zst")
+  private val DirectCodecSuffixes = Seq(".gz" -> "gz", ".bz2" -> "bz2")
+  private val ArchiveCodecSuffixes = Seq(".gz" -> "gz", ".bz2" -> "bz2", ".xz" -> "xz", ".zst" -> "zst")
 
   def infer(filePath: String): Option[String] = {
     detect(filePath).flatMap(detected => detected.archiveFormat.orElse(detected.baseFormat))
@@ -56,16 +57,23 @@ object FormatDetector {
       case (suffix, (archiveFormat, codec)) if lower.endsWith(suffix) =>
         DetectedInput(baseFormat = None, codec = codec, archiveFormat = Some(archiveFormat), isArchive = true)
     }.orElse {
-      CodecSuffixes.collectFirst(Function.unlift {
+      DirectCodecSuffixes.collectFirst(Function.unlift {
+        case (suffix, codec) if lower.endsWith(suffix) =>
+          val withoutCodec = lower.dropRight(suffix.length)
+          CodecPassthroughFormatsBySuffix.collectFirst {
+            case (baseSuffix, baseFormat) if withoutCodec.endsWith(baseSuffix) =>
+              DetectedInput(baseFormat = Some(baseFormat), codec = Some(codec), archiveFormat = None, isArchive = false)
+          }
+        case _ => None
+      })
+    }.orElse {
+      ArchiveCodecSuffixes.collectFirst(Function.unlift {
         case (suffix, codec) if lower.endsWith(suffix) =>
           val withoutCodec = lower.dropRight(suffix.length)
           if (withoutCodec.endsWith(".tar")) {
             Some(DetectedInput(baseFormat = None, codec = Some(codec), archiveFormat = Some("tar"), isArchive = true))
           } else {
-            CodecPassthroughFormatsBySuffix.collectFirst {
-              case (baseSuffix, baseFormat) if withoutCodec.endsWith(baseSuffix) =>
-                DetectedInput(baseFormat = Some(baseFormat), codec = Some(codec), archiveFormat = None, isArchive = false)
-            }
+            None
           }
         case _ => None
       })

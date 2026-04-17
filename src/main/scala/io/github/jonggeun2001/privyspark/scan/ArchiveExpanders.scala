@@ -289,14 +289,17 @@ private[privyspark] object ArchiveExpanders {
   ): Unit = {
     val sourcePath = new Path(archivePath)
     val fs = sourcePath.getFileSystem(conf)
-    val rawInputStream = fs.open(sourcePath)
-    val archiveInputStream = CompressionStreams.wrapInputStream(
-      rawInputStream,
-      FormatDetector.detect(archivePath).flatMap(_.codec)
-    )
-    val tarInputStream = new TarArchiveInputStream(archiveInputStream)
+    var rawInputStream: InputStream = null
+    var archiveInputStream: InputStream = null
+    var tarInputStream: TarArchiveInputStream = null
 
     try {
+      rawInputStream = fs.open(sourcePath)
+      archiveInputStream = CompressionStreams.wrapInputStream(
+        rawInputStream,
+        FormatDetector.detect(archivePath).flatMap(_.codec)
+      )
+      tarInputStream = new TarArchiveInputStream(archiveInputStream)
       var entry = tarInputStream.getNextEntry
       while (entry != null) {
         processEntry(entry.getName, entry.isDirectory, entry.getSize, tarInputStream)
@@ -311,7 +314,13 @@ private[privyspark] object ArchiveExpanders {
           s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
         )
     } finally {
-      tarInputStream.close()
+      if (tarInputStream != null) {
+        tarInputStream.close()
+      } else if (archiveInputStream != null) {
+        archiveInputStream.close()
+      } else if (rawInputStream != null) {
+        rawInputStream.close()
+      }
     }
   }
 
@@ -324,35 +333,45 @@ private[privyspark] object ArchiveExpanders {
     timestamp: String,
     logicalIdentifier: String
   ): Unit = {
-    withLocalArchiveFile(conf, archivePath) { localArchivePath =>
-      var archiveFile: SevenZFile = null
-      try {
-        archiveFile = SevenZFile.builder().setFile(localArchivePath.toFile).get()
-        var entry = archiveFile.getNextEntry
-        while (entry != null) {
-          val entryInputStream = archiveFile.getInputStream(entry)
-          try {
-            processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
-          } finally {
-            entryInputStream.close()
+    try {
+      withLocalArchiveFile(conf, archivePath) { localArchivePath =>
+        var archiveFile: SevenZFile = null
+        try {
+          archiveFile = SevenZFile.builder().setFile(localArchivePath.toFile).get()
+          var entry = archiveFile.getNextEntry
+          while (entry != null) {
+            val entryInputStream = archiveFile.getInputStream(entry)
+            try {
+              processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
+            } finally {
+              entryInputStream.close()
+            }
+            entry = archiveFile.getNextEntry
           }
-          entry = archiveFile.getNextEntry
-        }
-      } catch {
-        case _: PasswordRequiredException =>
-          archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"Password-protected archive is not supported: $logicalIdentifier")
-        case NonFatal(e) =>
-          archiveErrors += ScanError(
-            datasetPath,
-            timestamp,
-            logicalIdentifier,
-            s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
-          )
-      } finally {
-        if (archiveFile != null) {
-          archiveFile.close()
+        } catch {
+          case _: PasswordRequiredException =>
+            archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"Password-protected archive is not supported: $logicalIdentifier")
+          case NonFatal(e) =>
+            archiveErrors += ScanError(
+              datasetPath,
+              timestamp,
+              logicalIdentifier,
+              s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+            )
+        } finally {
+          if (archiveFile != null) {
+            archiveFile.close()
+          }
         }
       }
+    } catch {
+      case NonFatal(e) =>
+        archiveErrors += ScanError(
+          datasetPath,
+          timestamp,
+          logicalIdentifier,
+          s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+        )
     }
   }
 
@@ -365,52 +384,62 @@ private[privyspark] object ArchiveExpanders {
     timestamp: String,
     logicalIdentifier: String
   ): Unit = {
-    withLocalArchiveFile(conf, archivePath) { localArchivePath =>
-      var archive: Archive = null
-      try {
-        archive = new Archive(localArchivePath.toFile)
-        val fileHeaders = archive.getFileHeaders.asScala.toSeq
-        val mainHeader = Option(archive.getMainHeader)
-        val passwordProtected =
-          archive.isPasswordProtected ||
-            archive.isEncrypted ||
-            mainHeader.exists(_.isEncrypted) ||
-            fileHeaders.exists(_.isEncrypted)
-        val multiVolume =
-          mainHeader.exists(_.isMultiVolume) ||
-            fileHeaders.exists(header => header.isSplitAfter || header.isSplitBefore)
+    try {
+      withLocalArchiveFile(conf, archivePath) { localArchivePath =>
+        var archive: Archive = null
+        try {
+          archive = new Archive(localArchivePath.toFile)
+          val fileHeaders = archive.getFileHeaders.asScala.toSeq
+          val mainHeader = Option(archive.getMainHeader)
+          val passwordProtected =
+            archive.isPasswordProtected ||
+              archive.isEncrypted ||
+              mainHeader.exists(_.isEncrypted) ||
+              fileHeaders.exists(_.isEncrypted)
+          val multiVolume =
+            mainHeader.exists(_.isMultiVolume) ||
+              fileHeaders.exists(header => header.isSplitAfter || header.isSplitBefore)
 
-        if (passwordProtected) {
-          archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"Password-protected archive is not supported: $logicalIdentifier")
-        } else if (multiVolume) {
-          archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"Multi-volume archive is not supported: $logicalIdentifier")
-        } else {
-          fileHeaders.foreach { header =>
-            if (!header.isDirectory) {
-              val entryInputStream = archive.getInputStream(header)
-              try {
-                processEntry(header.getFileName, false, header.getFullUnpackSize, entryInputStream)
-              } finally {
-                entryInputStream.close()
+          if (passwordProtected) {
+            archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"Password-protected archive is not supported: $logicalIdentifier")
+          } else if (multiVolume) {
+            archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"Multi-volume archive is not supported: $logicalIdentifier")
+          } else {
+            fileHeaders.foreach { header =>
+              if (!header.isDirectory) {
+                val entryInputStream = archive.getInputStream(header)
+                try {
+                  processEntry(header.getFileName, false, header.getFullUnpackSize, entryInputStream)
+                } finally {
+                  entryInputStream.close()
+                }
               }
             }
           }
-        }
-      } catch {
-        case _: UnsupportedRarV5Exception =>
-          archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"RAR5 archives are not supported: $logicalIdentifier")
-        case NonFatal(e) =>
-          archiveErrors += ScanError(
-            datasetPath,
-            timestamp,
-            logicalIdentifier,
-            s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
-          )
-      } finally {
-        if (archive != null) {
-          archive.close()
+        } catch {
+          case _: UnsupportedRarV5Exception =>
+            archiveErrors += ScanError(datasetPath, timestamp, logicalIdentifier, s"RAR5 archives are not supported: $logicalIdentifier")
+          case NonFatal(e) =>
+            archiveErrors += ScanError(
+              datasetPath,
+              timestamp,
+              logicalIdentifier,
+              s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+            )
+        } finally {
+          if (archive != null) {
+            archive.close()
+          }
         }
       }
+    } catch {
+      case NonFatal(e) =>
+        archiveErrors += ScanError(
+          datasetPath,
+          timestamp,
+          logicalIdentifier,
+          s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+        )
     }
   }
 

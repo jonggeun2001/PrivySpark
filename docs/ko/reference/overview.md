@@ -6,7 +6,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 - 실행 명령은 `privyspark scan` 단일 진입점입니다.
 - 입력 경로는 절대경로 또는 URI만 허용합니다.
 - 지원 포맷은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`와 archive 계열 `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`입니다.
-- `gzip`, `bzip2`, `xz`, `zstd`로 감싼 direct text-style data file(`csv`, `json/jsonl/ndjson`)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
+- `gzip`, `bzip2`로 감싼 direct text-style data file(`csv`, `json/jsonl/ndjson`)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
 - 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 검사하고, 텍스트처럼 보이면 내부 `text` 포맷으로 정규화해 스캔합니다.
 - 바이너리처럼 보이는 미지원 입력만 `Unsupported file format` 오류로 기록합니다.
 - `--ignore`, `--ignore-file`은 파일명 또는 입력 루트 기준 상대 경로로 스캔 제외 대상을 정의합니다.

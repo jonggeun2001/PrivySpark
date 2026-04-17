@@ -13,21 +13,18 @@ class FormatDetectorSpec extends AnyFunSuite {
     assert(csv.codec.contains("gz"))
     assert(!csv.isArchive)
 
-    val json = FormatDetector.detect("/data/input.json.zst").get
+    val json = FormatDetector.detect("/data/input.json.bz2").get
     assert(json.baseFormat.contains("json"))
-    assert(json.codec.contains("zst"))
+    assert(json.codec.contains("bz2"))
     assert(!json.isArchive)
-
-    val jsonl = FormatDetector.detect("/data/input.jsonl.xz").get
-    assert(jsonl.baseFormat.contains("json"))
-    assert(jsonl.codec.contains("xz"))
-    assert(!jsonl.isArchive)
   }
 
   test("does not classify compressed columnar files as direct passthrough inputs") {
     assert(FormatDetector.detect("/data/input.parquet.xz").isEmpty)
     assert(FormatDetector.detect("/data/input.orc.gz").isEmpty)
     assert(FormatDetector.detect("/data/input.avro.zst").isEmpty)
+    assert(FormatDetector.detect("/data/input.json.zst").isEmpty)
+    assert(FormatDetector.detect("/data/input.jsonl.xz").isEmpty)
   }
 
   test("does not classify compressed workbooks as direct passthrough inputs") {

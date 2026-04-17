@@ -10,7 +10,7 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 ## 핵심 기능
 - 입력 경로는 절대경로 또는 URI만 허용합니다.
 - 지원 입력은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`와 archive 계열 `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`입니다.
-- `gzip`, `bzip2`, `xz`, `zstd`로 감싼 direct text-style data file(`*.csv.gz`, `*.json.zst`, `*.jsonl.xz` 등)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
+- `gzip`, `bzip2`로 감싼 direct text-style data file(`*.csv.gz`, `*.json.bz2` 등)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
 - 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 판별하고, 바이너리처럼 보이지 않는 UTF-8 텍스트는 내부 `text` 포맷으로 정규화해 스캔합니다.
 - 0바이트 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 건너뜁니다.
 - password-protected archive, multi-volume RAR, RAR5 archive는 `scan_errors`에 명시적으로 기록합니다.
