@@ -24,7 +24,7 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
-import java.io.{BufferedWriter, ByteArrayOutputStream, OutputStreamWriter, PrintStream}
+import java.io.{BufferedWriter, ByteArrayOutputStream, IOException, OutputStreamWriter, PrintStream}
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
@@ -3284,6 +3284,52 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("archive close failures stay scoped to scan errors instead of aborting sibling scans") {
+    val inputDir = Files.createTempDirectory("privyspark-targz-close-failure-")
+    val timestamp = "2026-04-17T00:00:00Z"
+    spark.sparkContext.hadoopConfiguration.set("fs.closefail.impl", classOf[CloseFailureLocalFileSystem].getName)
+
+    try {
+      val archiveFile = inputDir.resolve("bundle.tar.gz")
+      createTarArchiveFile(
+        archiveFile,
+        Seq(
+          "nested/customers.csv" ->
+            ("name,email\n" +
+              "alice,alice@example.com\n")
+        ),
+        codec = Some("gz")
+      )
+      writeText(
+        inputDir.resolve("customers.csv"),
+        "name,email\n" +
+          "bob,bob@example.com\n"
+      )
+
+      val inputPath = s"closefail://${inputDir.toAbsolutePath.toString}"
+      val archivePath = s"closefail://${archiveFile.toAbsolutePath.toString}"
+      CloseFailureLocalFileSystem.registerFailOnClose(archivePath)
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputPath, inputPath, rules, timestamp)
+
+      assert(results.exists(result =>
+        result.file_identifier == "customers.csv" &&
+          result.column_name == "email" &&
+          result.match_count == 1L
+      ))
+      assert(errors.exists(error =>
+        error.file_identifier == "bundle.tar.gz" &&
+          error.error_message.contains("Archive read failed") &&
+          error.error_message.contains("simulated archive close failure")
+      ))
+    } finally {
+      CloseFailureLocalFileSystem.clear()
+      spark.sparkContext.hadoopConfiguration.unset("fs.closefail.impl")
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules expands 7z archives and keeps nested identifiers") {
     val inputDir = Files.createTempDirectory("privyspark-7z-fixture-")
     val timestamp = "2026-04-17T00:00:00Z"
@@ -5461,6 +5507,64 @@ class PartialReadFileSystem extends org.apache.hadoop.fs.FileSystem {
       0L,
       path.makeQualified(fsUri, workingDirectory)
     )
+  }
+}
+
+object CloseFailureLocalFileSystem {
+  private val FileSystemUri = URI.create("closefail:///")
+  private val failOnClosePaths = TrieMap.empty[String, Boolean]
+
+  private def key(path: String): String = new org.apache.hadoop.fs.Path(path).toUri.getPath
+  private def key(path: org.apache.hadoop.fs.Path): String = path.toUri.getPath
+
+  def registerFailOnClose(path: String): Unit = {
+    failOnClosePaths.put(key(path), true)
+  }
+
+  def clear(): Unit = {
+    failOnClosePaths.clear()
+  }
+
+  private[privyspark] def shouldFailOnClose(path: org.apache.hadoop.fs.Path): Boolean = {
+    failOnClosePaths.contains(key(path))
+  }
+}
+
+class CloseFailureLocalFileSystem extends org.apache.hadoop.fs.RawLocalFileSystem {
+  override def getUri: URI = CloseFailureLocalFileSystem.FileSystemUri
+
+  override def getHomeDirectory: org.apache.hadoop.fs.Path = {
+    makeQualified(new org.apache.hadoop.fs.Path(System.getProperty("user.home")))
+  }
+
+  override def open(path: org.apache.hadoop.fs.Path, bufferSize: Int): org.apache.hadoop.fs.FSDataInputStream = {
+    val delegate = super.open(path, bufferSize)
+    if (!CloseFailureLocalFileSystem.shouldFailOnClose(path)) {
+      delegate
+    } else {
+      new org.apache.hadoop.fs.FSDataInputStream(new org.apache.hadoop.fs.FSInputStream {
+        private var closeFailureRaised = false
+
+        override def read(): Int = delegate.read()
+
+        override def read(buffer: Array[Byte], offset: Int, length: Int): Int =
+          delegate.read(buffer, offset, length)
+
+        override def seek(targetPos: Long): Unit = delegate.seek(targetPos)
+
+        override def getPos: Long = delegate.getPos
+
+        override def seekToNewSource(targetPos: Long): Boolean = delegate.seekToNewSource(targetPos)
+
+        override def close(): Unit = {
+          delegate.close()
+          if (!closeFailureRaised) {
+            closeFailureRaised = true
+            throw new IOException("simulated archive close failure")
+          }
+        }
+      })
+    }
   }
 }
 

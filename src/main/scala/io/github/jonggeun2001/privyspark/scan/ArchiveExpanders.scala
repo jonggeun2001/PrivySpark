@@ -15,7 +15,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipFile
 import org.apache.hadoop.fs.Path
 
-import java.io.{ByteArrayOutputStream, InputStream, OutputStream}
+import java.io.{ByteArrayOutputStream, Closeable, InputStream, OutputStream}
 import java.nio.file.{Files => NioFiles}
 import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.JavaConverters._
@@ -343,13 +343,13 @@ private[privyspark] object ArchiveExpanders {
           s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
         )
     } finally {
-      if (tarInputStream != null) {
-        tarInputStream.close()
-      } else if (archiveInputStream != null) {
-        archiveInputStream.close()
-      } else if (rawInputStream != null) {
-        rawInputStream.close()
-      }
+      closeArchiveResources(
+        Seq(tarInputStream, archiveInputStream, rawInputStream),
+        archiveErrors,
+        datasetPath,
+        timestamp,
+        logicalIdentifier
+      )
     }
   }
 
@@ -558,6 +558,37 @@ private[privyspark] object ArchiveExpanders {
     var bytesRead = readChunk(inputStream, buffer)
     while (bytesRead >= 0) {
       bytesRead = readChunk(inputStream, buffer)
+    }
+  }
+
+  private def closeArchiveResources(
+    resources: Seq[Closeable],
+    archiveErrors: ArrayBuffer[ScanError],
+    datasetPath: String,
+    timestamp: String,
+    logicalIdentifier: String
+  ): Unit = {
+    val distinctResources = resources.foldLeft(Vector.empty[Closeable]) {
+      case (acc, null) => acc
+      case (acc, resource) if acc.exists(existing => existing eq resource) => acc
+      case (acc, resource) => acc :+ resource
+    }
+
+    var closeFailureRecorded = false
+    distinctResources.foreach { resource =>
+      try {
+        resource.close()
+      } catch {
+        case NonFatal(e) if !closeFailureRecorded =>
+          closeFailureRecorded = true
+          archiveErrors += ScanError(
+            datasetPath,
+            timestamp,
+            logicalIdentifier,
+            s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+          )
+        case NonFatal(_) =>
+      }
     }
   }
 
