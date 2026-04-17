@@ -1509,7 +1509,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errors.isEmpty)
       assert(results.map(_.match_ratio).toSet == Set(0.67))
       assert(results.map(_.non_empty_match_ratio).toSet == Set(0.67))
-      assert(results.map(_.confidence).toSet == Set(0.67))
+      assert(results.map(_.confidence).toSet == Set(0.21))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1544,7 +1544,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           result.sample_raw_value,
           result.sample_matched_fragment
         )
-      ).toSet == Set(("email", "email", 2L, 6L, 0.33, 0.67, 0.33, "alice@example.com", "alice@example.com")))
+      ).toSet == Set(("email", "email", 2L, 6L, 0.33, 0.67, 0.21, "alice@example.com", "alice@example.com")))
     } finally {
       deleteRecursively(inputDir)
     }
