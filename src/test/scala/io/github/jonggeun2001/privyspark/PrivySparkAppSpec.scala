@@ -2,7 +2,8 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
-import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, ScanError, ScanResult}
+import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult}
+import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
 import org.apache.poi.ss.usermodel.{DataFormatter, WorkbookFactory}
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.sql.SparkSession
@@ -73,7 +74,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
     }
 
-    val results = PrivySparkApp.executeInParallel(2, Seq(
+    val results = ParallelismConfig.executeInParallel(2, Seq(
       () => {
         val running = currentRunning.incrementAndGet()
         trackRunning(running)
@@ -111,8 +112,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   test("renderConfiguredParallelism labels unset values as spark_conf_or_default") {
-    assert(PrivySparkApp.renderConfiguredParallelism(None) == "spark_conf_or_default")
-    assert(PrivySparkApp.renderConfiguredParallelism(Some(6)) == "6")
+    assert(ParallelismConfig.renderConfiguredParallelism(None) == "spark_conf_or_default")
+    assert(ParallelismConfig.renderConfiguredParallelism(Some(6)) == "6")
   }
 
   test("splitGroupBySchema exact mode splits same directory files by schema signature") {
@@ -128,13 +129,13 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,phone\n" +
           "bob,010-1234-5678\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "",
         filePaths = Seq(emailFile.toString, phoneFile.toString)
       )
-      val (splitGroups, splitErrors) = PrivySparkApp.splitGroupBySchema(
+      val (splitGroups, splitErrors) = DirectoryScanner.splitGroupBySchema(
         spark,
         inputDir.toString,
         "2026-03-05T00:00:00Z",
@@ -161,7 +162,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "bob,bob@example.com\n")
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -191,7 +192,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "bob,bob@example.com\n")
       writeBytes(inputDir.resolve("_SUCCESS"), Array.emptyByteArray)
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -212,7 +213,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   test("scanDirectoryStructure ignores matching discovered files before pre-scan grouping") {
     val inputDir = Files.createTempDirectory("privyspark-ignore-plan-")
     val backupDir = Files.createDirectories(inputDir.resolve("backup"))
-    var plan: PrivySparkApp.DirectoryScanPlan = null
+    var plan: DirectoryScanPlan = null
 
     try {
       writeText(inputDir.resolve("data.csv"),
@@ -225,7 +226,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          plan = PrivySparkApp.scanDirectoryStructure(
+          plan = DirectoryScanner.scanDirectoryStructure(
             spark,
             inputDir.toString,
             inputDir.toString,
@@ -255,14 +256,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   test("scanDirectoryStructure ignores a matching single input file before pre-scan") {
     val inputDir = Files.createTempDirectory("privyspark-ignore-single-file-")
     val inputFile = inputDir.resolve("_SUCCESS")
-    var plan: PrivySparkApp.DirectoryScanPlan = null
+    var plan: DirectoryScanPlan = null
 
     try {
       writeText(inputFile, "done\n")
 
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          plan = PrivySparkApp.scanDirectoryStructure(
+          plan = DirectoryScanner.scanDirectoryStructure(
             spark,
             inputFile.toString,
             inputFile.toString,
@@ -293,7 +294,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "alice,alice@example.com\n")
       Files.setPosixFilePermissions(ignoredDir, PosixFilePermissions.fromString("---------"))
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -339,7 +340,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       Files.move(findDataFile(rightWriteDir, ".parquet").get, groupedDir.resolve("part-b.parquet"))
       writeBytes(groupedDir.resolve("_SUCCESS"), Array.emptyByteArray)
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         groupedDir.toString,
         groupedDir.toString,
@@ -370,7 +371,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          PrivySparkApp.scanDirectoryStructure(
+          DirectoryScanner.scanDirectoryStructure(
             spark,
             inputDir.toString,
             inputDir.toString,
@@ -415,14 +416,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      val serialPlan = PrivySparkApp.scanDirectoryStructure(
+      val serialPlan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
         "2026-04-10T00:00:00Z",
         preScanParallelism = 1
       )
-      val parallelPlan = PrivySparkApp.scanDirectoryStructure(
+      val parallelPlan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -467,7 +468,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\ncarol,carol@example.com\n"
       )
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         rootPath,
         rootPath,
@@ -496,7 +497,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   test("resolveConfiguredPreScanParallelism caps large explicit values to the fixed safety ceiling") {
     val key = "spark.privyspark.preScanParallelism"
-    assert(PrivySparkApp.resolveConfiguredPreScanParallelism(128, 128, key) == PrivySparkApp.maxSafePreScanParallelism)
+    assert(ParallelismConfig.resolveConfiguredPreScanParallelism(128, 128, key) == ParallelismConfig.maxSafePreScanParallelism)
   }
 
   test("scanDirectoryStructure keeps a sampled multi-file directory group on file identifiers until exact split confirms schema") {
@@ -511,7 +512,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "bob,bob@example.com\n")
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -540,13 +541,13 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "email,name\n" +
           "bob@example.com,bob\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "",
         filePaths = Seq(firstFile.toString, secondFile.toString)
       )
-      val (splitGroups, splitErrors) = PrivySparkApp.splitGroupBySchema(
+      val (splitGroups, splitErrors) = DirectoryScanner.splitGroupBySchema(
         spark,
         inputDir.toString,
         "2026-03-05T00:00:00Z",
@@ -562,7 +563,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   test("parseHeaderFields handles quoted commas and escaped quotes") {
-    val fields = PrivySparkApp.parseHeaderFields("\"Last, First\",\"He said \"\"Hello\"\"\",email")
+    val fields = CsvHeaderHeuristic.parseHeaderFields("\"Last, First\",\"He said \"\"Hello\"\"\",email")
 
     assert(fields == Seq("Last, First", "He said \"Hello\"", "email"))
   }
@@ -576,8 +577,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "\"Last, First\",\"He said \"\"Hello\"\"\",email\n" +
           "\"Alice, Kim\",greeting,alice@example.com\n")
 
-      val fastPathSignature = PrivySparkApp.inferCsvHeaderSignature(spark, file.toString)
-      val sparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", file.toString)
+      val fastPathSignature = CsvHeaderHeuristic.inferCsvHeaderSignature(spark, file.toString)
+      val sparkSignature = CsvInference.inferSchemaSignature(spark, "csv", file.toString)
 
       assert(fastPathSignature == sparkSignature)
     } finally {
@@ -594,7 +595,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "alice,alice@example.com\n")
 
-      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("name|email", true)))
+      assert(CsvInference.inferCsvSchemaSignature(spark, file.toString) == Right(("name|email", true)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -610,7 +611,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8)
       )
 
-      assert(PrivySparkApp.inferCsvSchemaSignature(spark, partialPath) == Right(("name|email", true)))
+      assert(CsvInference.inferCsvSchemaSignature(spark, partialPath) == Right(("name|email", true)))
       assert(PartialReadFileSystem.openCount(partialPath) == 1)
     } finally {
       PartialReadFileSystem.clear()
@@ -619,7 +620,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   test("csv head cache reuses detected lines across header helpers") {
     val partialPath = "partial:///csv-head-cache"
-    val csvHeadCache = new PrivySparkApp.CsvHeadCache()
+    val csvHeadCache = new CsvHeadCache()
 
     try {
       spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
@@ -628,8 +629,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8)
       )
 
-      assert(PrivySparkApp.detectCsvHasHeader(spark, partialPath, csvHeadCache))
-      assert(PrivySparkApp.inferCsvHeaderSignature(spark, partialPath, csvHeadCache) == Right("name|email"))
+      assert(CsvInference.detectCsvHasHeader(spark, partialPath, csvHeadCache))
+      assert(CsvHeaderHeuristic.inferCsvHeaderSignature(spark, partialPath, csvHeadCache) == Right("name|email"))
       assert(PartialReadFileSystem.openCount(partialPath) == 1)
     } finally {
       PartialReadFileSystem.clear()
@@ -645,7 +646,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,city\n" +
           "alice,seoul\n")
 
-      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+      assert(CsvInference.detectCsvHasHeader(spark, file.toString))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -660,7 +661,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "foo,bar\n" +
           "alice,bob\n")
 
-      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+      assert(CsvInference.detectCsvHasHeader(spark, file.toString))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -675,7 +676,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "address1,address2\n" +
           "home,office\n")
 
-      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
+      assert(CsvInference.detectCsvHasHeader(spark, file.toString))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -690,8 +691,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "이름,이메일\n" +
           "홍길동,hong@example.com\n")
 
-      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
-      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("이름|이메일", true)))
+      assert(CsvInference.detectCsvHasHeader(spark, file.toString))
+      assert(CsvInference.inferCsvSchemaSignature(spark, file.toString) == Right(("이름|이메일", true)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -706,8 +707,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "maker,model\n" +
           "ford,focus\n")
 
-      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
-      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("maker|model", true)))
+      assert(CsvInference.detectCsvHasHeader(spark, file.toString))
+      assert(CsvInference.inferCsvSchemaSignature(spark, file.toString) == Right(("maker|model", true)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -722,8 +723,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "도시,국가\n" +
           "서울,한국\n")
 
-      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
-      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("도시|국가", true)))
+      assert(CsvInference.detectCsvHasHeader(spark, file.toString))
+      assert(CsvInference.inferCsvSchemaSignature(spark, file.toString) == Right(("도시|국가", true)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -738,7 +739,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "alice,alice@example.com\n" +
           "bob,bob@example.com\n")
 
-      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("cols:2", false)))
+      assert(CsvInference.inferCsvSchemaSignature(spark, file.toString) == Right(("cols:2", false)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -753,8 +754,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "alice,seoul\n" +
           "bob,busan\n")
 
-      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
-      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("alice|seoul", true)))
+      assert(CsvInference.detectCsvHasHeader(spark, file.toString))
+      assert(CsvInference.inferCsvSchemaSignature(spark, file.toString) == Right(("alice|seoul", true)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -769,8 +770,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "color,shape\n" +
           "green,round\n")
 
-      assert(PrivySparkApp.detectCsvHasHeader(spark, file.toString))
-      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("color|shape", true)))
+      assert(CsvInference.detectCsvHasHeader(spark, file.toString))
+      assert(CsvInference.inferCsvSchemaSignature(spark, file.toString) == Right(("color|shape", true)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -783,8 +784,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val file = inputDir.resolve("headerless.csv")
       writeText(file, "alice,seoul\n")
 
-      assert(!PrivySparkApp.detectCsvHasHeader(spark, file.toString))
-      assert(PrivySparkApp.inferCsvSchemaSignature(spark, file.toString) == Right(("cols:2", false)))
+      assert(!CsvInference.detectCsvHasHeader(spark, file.toString))
+      assert(CsvInference.inferCsvSchemaSignature(spark, file.toString) == Right(("cols:2", false)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -804,17 +805,17 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "\"account\",email\n" +
           "bob,bob@example.com\n")
 
-      val spacedFastPath = PrivySparkApp.inferCsvHeaderSignature(spark, spacedFile.toString)
-      val spacedSparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", spacedFile.toString)
-      val compactFastPath = PrivySparkApp.inferCsvHeaderSignature(spark, compactFile.toString)
-      val compactSparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", compactFile.toString)
-      val group = PrivySparkApp.ScanGroup(
+      val spacedFastPath = CsvHeaderHeuristic.inferCsvHeaderSignature(spark, spacedFile.toString)
+      val spacedSparkSignature = CsvInference.inferSchemaSignature(spark, "csv", spacedFile.toString)
+      val compactFastPath = CsvHeaderHeuristic.inferCsvHeaderSignature(spark, compactFile.toString)
+      val compactSparkSignature = CsvInference.inferSchemaSignature(spark, "csv", compactFile.toString)
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "",
         filePaths = Seq(compactFile.toString, spacedFile.toString)
       )
-      val (splitGroups, splitErrors) = PrivySparkApp.splitGroupBySchema(
+      val (splitGroups, splitErrors) = DirectoryScanner.splitGroupBySchema(
         spark,
         inputDir.toString,
         "2026-03-13T00:00:00Z",
@@ -840,9 +841,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "\n\nname,email\n" +
           "alice,alice@example.com\n")
 
-      val fastPathSignature = PrivySparkApp.inferCsvHeaderSignature(spark, file.toString)
-      val sparkSignature = PrivySparkApp.inferSchemaSignature(spark, "csv", file.toString)
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val fastPathSignature = CsvHeaderHeuristic.inferCsvHeaderSignature(spark, file.toString)
+      val sparkSignature = CsvInference.inferSchemaSignature(spark, "csv", file.toString)
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -861,7 +862,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val missingPath = s"/tmp/privyspark-missing-${System.nanoTime()}"
 
     val exception = intercept[IllegalArgumentException] {
-      PrivySparkApp.scanDirectoryStructure(
+      DirectoryScanner.scanDirectoryStructure(
         spark,
         missingPath,
         missingPath,
@@ -881,7 +882,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "alice,alice@example.com\n")
       writeBytes(inputDir.resolve("unsupported.bin"), Array[Byte](0.toByte, 1.toByte, 2.toByte, 3.toByte))
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -908,7 +909,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "not-an-email\n" +
           "bob@example.com\n")
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -933,7 +934,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "alice@example.com\n" +
           "bob@example.com\n")
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -958,7 +959,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeBytes(unreadableFile, Array[Byte](0x50.toByte, 0x41.toByte, 0x52.toByte, 0x31.toByte))
       Files.setPosixFilePermissions(unreadableFile, PosixFilePermissions.fromString("---------"))
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -985,7 +986,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
       PartialReadFileSystem.register(partialPath, parquetBytes)
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         partialPath,
         partialPath,
@@ -1008,7 +1009,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
       PartialReadFileSystem.register(partialPath, "%PDF-1.7".getBytes(StandardCharsets.UTF_8))
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         partialPath,
         partialPath,
@@ -1031,7 +1032,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(inputDir.resolve("broken.json"),
         "{\"email\":\"alice@example.com\"\n")
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -1058,14 +1059,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(brokenFile,
         "{\"email\":\"broken@example.com\"\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "json",
         schemaSignature = "",
         filePaths = Seq(goodFile.toString, brokenFile.toString)
       )
 
-      val (groups, errors) = PrivySparkApp.splitGroupBySchemaFast(
+      val (groups, errors) = DirectoryScanner.splitGroupBySchemaFast(
         spark,
         inputDir.toString,
         "2026-04-09T00:00:00Z",
@@ -1119,8 +1120,8 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(cleanFile,
         "{\"email\":\"bob@example.com\"}\n")
 
-      assert(PrivySparkApp.inferSchemaSignature(spark, "json", mixedFile.toString) == Right("email"))
-      assert(PrivySparkApp.inferSchemaSignature(spark, "json", cleanFile.toString) == Right("email"))
+      assert(CsvInference.inferSchemaSignature(spark, "json", mixedFile.toString) == Right("email"))
+      assert(CsvInference.inferSchemaSignature(spark, "json", cleanFile.toString) == Right("email"))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -1128,19 +1129,19 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   test("inferSchemaSignature reuses cached signatures across repeated reads") {
     val partialPath = "partial:///schema-cache.json"
-    val schemaSignatureCache = new PrivySparkApp.SchemaSignatureCache()
+    val schemaSignatureCache = new SchemaSignatureCache()
 
     try {
       spark.sparkContext.hadoopConfiguration.set("fs.partial.impl", classOf[PartialReadFileSystem].getName)
       PartialReadFileSystem.register(partialPath, "{\"email\":\"alice@example.com\"}\n".getBytes(StandardCharsets.UTF_8))
 
-      val first = PrivySparkApp.inferSchemaSignature(
+      val first = CsvInference.inferSchemaSignature(
         spark,
         "json",
         partialPath,
         schemaSigCache = schemaSignatureCache
       )
-      val second = PrivySparkApp.inferSchemaSignature(
+      val second = CsvInference.inferSchemaSignature(
         spark,
         "json",
         partialPath,
@@ -1157,7 +1158,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   test("inferSchemaSignature cache keeps xlsx sheet schemas distinct") {
     val inputDir = Files.createTempDirectory("privyspark-schema-cache-xlsx-")
-    val schemaSignatureCache = new PrivySparkApp.SchemaSignatureCache()
+    val schemaSignatureCache = new SchemaSignatureCache()
 
     try {
       val workbookPath = inputDir.resolve("contacts.xlsx")
@@ -1189,18 +1190,18 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         workbook.close()
       }
 
-      val contactsSignature = PrivySparkApp.inferSchemaSignature(
+      val contactsSignature = CsvInference.inferSchemaSignature(
         spark,
         "xlsx",
         workbookPath.toString,
-        readOptions = PrivySparkApp.ScanReadOptions(sheetName = Some("Contacts")),
+        readOptions = ScanReadOptions(sheetName = Some("Contacts")),
         schemaSigCache = schemaSignatureCache
       )
-      val accountsSignature = PrivySparkApp.inferSchemaSignature(
+      val accountsSignature = CsvInference.inferSchemaSignature(
         spark,
         "xlsx",
         workbookPath.toString,
-        readOptions = PrivySparkApp.ScanReadOptions(sheetName = Some("Accounts")),
+        readOptions = ScanReadOptions(sheetName = Some("Accounts")),
         schemaSigCache = schemaSignatureCache
       )
 
@@ -1212,7 +1213,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   test("parse ok cache tracks validated files") {
-    val cache = new PrivySparkApp.ParseOkCache()
+    val cache = new ParseOkCache()
 
     assert(!cache.isOk("/tmp/a.json"))
     cache.markOk("/tmp/a.json")
@@ -1254,7 +1255,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "alice,alice@example.com\n" +
           "bob,bob@example.com\n")
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -1263,7 +1264,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val group = plan.groups.head
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -1288,7 +1289,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   test("withFileReadRetry retries transient missing file failures") {
     var attempts = 0
 
-    val result = PrivySparkApp.withFileReadRetry(
+    val result = RetryIO.withFileReadRetry(
       spark,
       Seq("/tmp/privyspark-transient.csv"),
       operationName = "test_retry",
@@ -1322,7 +1323,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "{\"email\":\"carol@example.com\"}\n" +
           "{}\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "json",
         schemaSignature = "email",
@@ -1330,7 +1331,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val results = PrivySparkApp.scanGroupBatch(
+      val results = GroupScanner.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -1352,14 +1353,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   test("selectSampledFileKeys keeps at least one uniformly sampled file") {
-    val sampledKeys = PrivySparkApp.selectSampledFileKeys(Seq("a", "b", "c", "d"), 0.01)
+    val sampledKeys = GroupScanner.selectSampledFileKeys(Seq("a", "b", "c", "d"), 0.01)
 
     assert(sampledKeys.size == 1)
     assert(sampledKeys.forall(Set("a", "b", "c", "d").contains))
   }
 
   test("selectSampledFileKeys uses ceiling for sampled file count") {
-    val sampledKeys = PrivySparkApp.selectSampledFileKeys(Seq("a", "b", "c", "d"), 0.51)
+    val sampledKeys = GroupScanner.selectSampledFileKeys(Seq("a", "b", "c", "d"), 0.51)
 
     assert(sampledKeys.size == 3)
     assert(sampledKeys.distinct.size == sampledKeys.size)
@@ -1388,7 +1389,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     writer.start()
 
     try {
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -1396,7 +1397,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val results = PrivySparkApp.scanGroupBatch(
+      val results = GroupScanner.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -1426,7 +1427,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "alice,alice@example.com\n")
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -1457,7 +1458,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "bob,bob@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -1468,7 +1469,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         useDirectoryIdentifier = true
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -1653,7 +1654,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val file = inputDir.resolve("messages.json")
       writeText(file, s"""{"note":"$prefix$email$suffix"}""" + "\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "json",
         schemaSignature = "note",
@@ -1661,7 +1662,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroupByFile(
+      val (results, errors) = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -1691,7 +1692,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "{\"email\":\"sales@example.com\"}\n"
       )
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "json",
         schemaSignature = "email",
@@ -1702,7 +1703,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("email", "sales@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
       )
 
-      val (results, errors) = PrivySparkApp.scanGroupByFile(
+      val (results, errors) = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -1768,7 +1769,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "dave,dave@example.com\n")
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val rootGroup = PrivySparkApp.ScanGroup(
+      val rootGroup = ScanGroup(
         directoryPath = datasetDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -1778,7 +1779,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         ),
         useDirectoryIdentifier = true
       )
-      val nestedGroup = PrivySparkApp.ScanGroup(
+      val nestedGroup = ScanGroup(
         directoryPath = nestedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -1789,7 +1790,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         useDirectoryIdentifier = true
       )
 
-      val (rootResults, rootErrors) = PrivySparkApp.scanGroup(
+      val (rootResults, rootErrors) = GroupScanner.scanGroup(
         spark,
         datasetDir.toString,
         rootGroup,
@@ -1797,7 +1798,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         sampleRatio = 1.0,
         timestamp = timestamp
       )
-      val (nestedResults, nestedErrors) = PrivySparkApp.scanGroup(
+      val (nestedResults, nestedErrors) = GroupScanner.scanGroup(
         spark,
         datasetDir.toString,
         nestedGroup,
@@ -1832,7 +1833,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeBytes(groupedDir.resolve("unsupported.bin"), Array[Byte](0.toByte, 1.toByte, 2.toByte, 3.toByte))
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -1864,7 +1865,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "alice,alice@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "email|name",
@@ -1874,7 +1875,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       var scanResult = (Seq.empty[ScanResult], Seq.empty[ScanError])
       val logs = captureStderr {
-        scanResult = PrivySparkApp.scanGroup(
+        scanResult = GroupScanner.scanGroup(
           spark,
           inputDir.toString,
           group,
@@ -1906,7 +1907,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "bob,bob@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -1918,7 +1919,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -1951,7 +1952,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "bob,bob@example.com\n" +
           "carol,carol@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -1961,7 +1962,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroupByFile(
+      val (results, errors) = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -1993,7 +1994,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(matchingFile, "{\"email\":\"alice@example.com\"}\n")
       writeText(invalidFile, "{\"email\":\"not-an-email\"}\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "json",
         schemaSignature = "email",
@@ -2002,7 +2003,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroupByFile(
+      val (results, errors) = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2036,7 +2037,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "bob,bob@example.com\n" +
           "carol,carol@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2047,7 +2048,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2084,7 +2085,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "bob,bob@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2096,7 +2097,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2126,7 +2127,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "alice,alice@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2135,7 +2136,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2164,7 +2165,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "alice,alice@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2174,7 +2175,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
       val logs = captureStderr {
-        PrivySparkApp.scanGroup(
+        GroupScanner.scanGroup(
           spark,
           inputDir.toString,
           group,
@@ -2204,7 +2205,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "alice,alice@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2212,7 +2213,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2259,7 +2260,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       Files.move(parquetFileA, groupedDir.resolve("part-a.parquet"))
       Files.move(parquetFileB, groupedDir.resolve("part-b.parquet"))
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         groupedDir.toString,
         groupedDir.toString,
@@ -2271,7 +2272,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         groupedDir.toString,
         group,
@@ -2319,7 +2320,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       Files.move(findDataFile(leftWriteDir, ".parquet").get, groupedDir.resolve("part-a.parquet"))
       Files.move(findDataFile(rightWriteDir, ".parquet").get, groupedDir.resolve("part-b.parquet"))
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -2333,7 +2334,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2381,7 +2382,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       Files.move(parquetFileA, groupedDir.resolve("part-a.parquet"))
       Files.move(parquetFileB, groupedDir.resolve("part-b.parquet"))
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "parquet",
         schemaSignature = "email|phone",
@@ -2396,7 +2397,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val (results, errors) = PrivySparkApp.scanGroupByFile(
+      val (results, errors) = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2428,7 +2429,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "alice,alice@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2439,7 +2440,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2471,7 +2472,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "bob,bob@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2480,7 +2481,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val sequential = PrivySparkApp.scanGroupByFile(
+      val sequential = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2489,7 +2490,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         timestamp = timestamp,
         fileParallelism = 1
       )
-      val parallel = PrivySparkApp.scanGroupByFile(
+      val parallel = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2515,7 +2516,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "__privyspark_file_identifier,email\n" +
           "alpha@example.com,beta@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "__privyspark_file_identifier|email",
@@ -2523,7 +2524,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val results = PrivySparkApp.scanGroupBatch(
+      val results = GroupScanner.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -2553,7 +2554,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "bob,bob@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2563,7 +2564,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          PrivySparkApp.scanGroupBatch(
+          GroupScanner.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2601,7 +2602,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "carol,carol@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2611,7 +2612,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDriverLogLevel("warn") {
-          val results = PrivySparkApp.scanGroupBatch(
+          val results = GroupScanner.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2654,7 +2655,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "carol,carol@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2664,7 +2665,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          val results = PrivySparkApp.scanGroupBatch(
+          val results = GroupScanner.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2704,7 +2705,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "carol,carol@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2714,7 +2715,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          PrivySparkApp.scanGroupBatch(
+          GroupScanner.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2749,7 +2750,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(file2, "{\"email\":\"bob@example.com\"}\n")
       writeText(file3, "{\"email\":\"carol@example.com\"}\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "json",
         schemaSignature = "email",
@@ -2757,7 +2758,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroupByFile(
+      val (results, errors) = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2794,7 +2795,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(file2, fileContents)
       writeText(file3, fileContents)
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "json",
         schemaSignature = "email",
@@ -2802,7 +2803,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = PrivySparkApp.scanGroupByFile(
+      val (results, errors) = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2836,7 +2837,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "bob,bob@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2845,7 +2846,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val (results, persistedRdds) = capturePersistedRddNames {
-        PrivySparkApp.scanGroupBatch(
+        GroupScanner.scanGroupBatch(
           spark,
           inputDir.toString,
           group,
@@ -2876,7 +2877,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,email\n" +
           "bob,bob@example.com\n")
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -2885,7 +2886,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val ((results, errors), persistedRdds) = capturePersistedRddNames {
-        PrivySparkApp.scanGroupByFile(
+        GroupScanner.scanGroupByFile(
           spark,
           inputDir.toString,
           group,
@@ -2943,9 +2944,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"),
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
-      val plan = PrivySparkApp.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
+      val plan = DirectoryScanner.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
 
-      val sequential = PrivySparkApp.scanGroups(
+      val sequential = GroupScanner.scanGroups(
         spark,
         inputDir.toString,
         plan.groups,
@@ -2954,7 +2955,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         timestamp = timestamp,
         groupParallelism = 1
       )
-      val parallel = PrivySparkApp.scanGroups(
+      val parallel = GroupScanner.scanGroups(
         spark,
         inputDir.toString,
         plan.groups,
@@ -2984,9 +2985,9 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(
         PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
       )
-      val plan = PrivySparkApp.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
+      val plan = DirectoryScanner.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
 
-      val outcomes = PrivySparkApp.scanGroups(
+      val outcomes = GroupScanner.scanGroups(
         spark,
         inputDir.toString,
         plan.groups,
@@ -3013,7 +3014,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
     )
 
-    val plan = PrivySparkApp.scanDirectoryStructure(
+    val plan = DirectoryScanner.scanDirectoryStructure(
       spark,
       datasetDir.toString,
       datasetDir.toString,
@@ -3027,7 +3028,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
 
     plan.groups.foreach { group =>
-      val (groupResults, groupErrors) = PrivySparkApp.scanGroup(
+      val (groupResults, groupErrors) = GroupScanner.scanGroup(
         spark,
         datasetDir.toString,
         group,
@@ -3200,7 +3201,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   test("scanDirectoryStructure ignores archive entries under ignored archive subdirectories") {
     val inputDir = Files.createTempDirectory("privyspark-zip-ignore-entry-")
-    var plan: PrivySparkApp.DirectoryScanPlan = null
+    var plan: DirectoryScanPlan = null
 
     try {
       createArchiveFile(
@@ -3215,7 +3216,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          plan = PrivySparkApp.scanDirectoryStructure(
+          plan = DirectoryScanner.scanDirectoryStructure(
             spark,
             inputDir.toString,
             inputDir.toString,
@@ -3256,7 +3257,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -3370,7 +3371,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -3400,7 +3401,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -3430,7 +3431,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -3460,7 +3461,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      val plan = PrivySparkApp.scanDirectoryStructure(
+      val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
         inputDir.toString,
         inputDir.toString,
@@ -3918,7 +3919,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
+      ReportWriter.writeReports(spark, outputDir.toString, results, errors)
 
       val resultParquetDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_results")
       val errorParquetDf = spark.read.parquet(s"${outputDir.toString}/parquet/scan_errors")
@@ -3970,10 +3971,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
+      ReportWriter.writeReports(spark, outputDir.toString, results, errors)
       assert(Files.exists(outputDir.resolve("parquet/scan_results")))
 
-      PrivySparkApp.writeReports(spark, outputDir.toString, results, errors, Seq("csv", "excel"))
+      ReportWriter.writeReports(spark, outputDir.toString, results, errors, Seq("csv", "excel"))
 
       val resultCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_results")
       val errorCsvDf = spark.read.option("header", "true").csv(s"${outputDir.toString}/csv/scan_errors")
@@ -4036,10 +4037,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      PrivySparkApp.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
+      ReportWriter.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
 
       val error = intercept[RuntimeException] {
-        PrivySparkApp.writeReports(
+        ReportWriter.writeReports(
           spark,
           outputDir.toString,
           replacementResults,
@@ -4080,10 +4081,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      PrivySparkApp.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
+      ReportWriter.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
 
       val error = intercept[IllegalStateException] {
-        PrivySparkApp.writeReports(
+        ReportWriter.writeReports(
           spark,
           outputDir.toString,
           initialResults,
@@ -4130,10 +4131,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         )
       )
 
-      PrivySparkApp.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
+      ReportWriter.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
 
       intercept[IllegalStateException] {
-        PrivySparkApp.writeReports(
+        ReportWriter.writeReports(
           spark,
           outputDir.toString,
           initialResults,
@@ -4147,7 +4148,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
 
       intercept[RuntimeException] {
-        PrivySparkApp.writeReports(
+        ReportWriter.writeReports(
           spark,
           outputDir.toString,
           initialResults,
@@ -4199,7 +4200,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val (_, persistedRdds) = capturePersistedRddNames {
-        PrivySparkApp.writeReports(spark, outputDir.toString, results, errors)
+        ReportWriter.writeReports(spark, outputDir.toString, results, errors)
       }
 
       assert(persistedRdds.isEmpty, s"expected no persisted RDDs, found: ${persistedRdds.mkString(", ")}")
@@ -4218,7 +4219,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(staleProgressDir.resolve("stale.jsonl"), """{"stale":true}""")
       Files.setLastModifiedTime(staleRoot, FileTime.fromMillis(System.currentTimeMillis() - 10L * 60L * 1000L))
 
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         "/data/input",
@@ -4250,7 +4251,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       Files.setLastModifiedTime(stalePreparingFile, FileTime.fromMillis(System.currentTimeMillis() - 10L * 60L * 1000L))
 
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         "/data/input",
@@ -4277,7 +4278,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val error = intercept[IllegalStateException] {
-        PrivySparkApp.prepareProgressRun(
+        ProgressRunManager.prepareProgressRun(
           spark.sparkContext.hadoopConfiguration,
           outputDir.toString,
           "/data/input",
@@ -4299,7 +4300,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       Files.createDirectories(orphanDir)
       writeText(orphanDir.resolve("orphan.jsonl"), """{"orphan":true}""")
 
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         "/data/input",
@@ -4326,7 +4327,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val error = intercept[IllegalStateException] {
-        PrivySparkApp.prepareProgressRun(
+        ProgressRunManager.prepareProgressRun(
           spark.sparkContext.hadoopConfiguration,
           outputDir.toString,
           "/data/input",
@@ -4353,7 +4354,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         s"""{"run_id":"failed-run","state":"FAILED","last_heartbeat_epoch_ms":${System.currentTimeMillis()}}"""
       )
 
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         "/data/input",
@@ -4379,7 +4380,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeText(activeRunFile, """{"run_id":""")
       Files.setLastModifiedTime(activeRunFile, FileTime.fromMillis(System.currentTimeMillis() - 10L * 60L * 1000L))
 
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         "/data/input",
@@ -4398,7 +4399,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val outputDir = Files.createTempDirectory("privyspark-progress-self-heal-")
 
     try {
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         "/data/input",
@@ -4407,7 +4408,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val activeRunFile = outputDir.resolve("_progress/active-run.json")
       writeTextViaHadoop(activeRunFile, """{"run_id":""")
 
-      PrivySparkApp.updateActiveRunHeartbeat(spark.sparkContext.hadoopConfiguration, progressRun)
+      ProgressRunManager.updateActiveRunHeartbeat(spark.sparkContext.hadoopConfiguration, progressRun)
 
       val healedMarker = new String(Files.readAllBytes(activeRunFile), StandardCharsets.UTF_8)
       assert(healedMarker.contains(progressRun.runId))
@@ -4421,7 +4422,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val outputDir = Files.createTempDirectory("privyspark-progress-no-revive-")
 
     try {
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         "/data/input",
@@ -4435,7 +4436,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeTextViaHadoop(runMetadataFile, failedRunMetadata)
       writeTextViaHadoop(activeRunFile, """{"run_id":""")
 
-      PrivySparkApp.updateActiveRunHeartbeat(spark.sparkContext.hadoopConfiguration, progressRun)
+      ProgressRunManager.updateActiveRunHeartbeat(spark.sparkContext.hadoopConfiguration, progressRun)
 
       val activeMarkerAfter = new String(Files.readAllBytes(activeRunFile), StandardCharsets.UTF_8)
       assert(!activeMarkerAfter.contains(progressRun.runId))
@@ -4451,7 +4452,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val outputDir = Files.createTempDirectory("privyspark-progress-failed-cleanup-")
 
     try {
-      val failedRun = PrivySparkApp.prepareProgressRun(
+      val failedRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         "/data/input",
@@ -4465,7 +4466,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       writeTextViaHadoop(runMetadataFile, failedRunMetadata)
       writeTextViaHadoop(activeRunFile, """{"run_id":""")
 
-      val recoveredRun = PrivySparkApp.prepareProgressRun(
+      val recoveredRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         "/data/input",
@@ -4496,14 +4497,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "{\"email\":\"carol@example.com\"}\n" +
           "{}\n")
 
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         inputDir.toString,
         "2026-04-13T00:00:00Z"
       )
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "json",
         schemaSignature = "email",
@@ -4511,7 +4512,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -4525,7 +4526,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errors.isEmpty)
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 1L)
 
-      val (mergedResults, mergedErrors) = PrivySparkApp.mergeProgressReports(spark, outputDir.toString, progressRun)
+      val (mergedResults, mergedErrors) = ProgressRunManager.mergeProgressReports(spark, outputDir.toString, progressRun)
 
       assert(mergedResults == 2L)
       assert(mergedErrors == 0L)
@@ -4565,14 +4566,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           "{\"email\":null}\n" +
           "{\"email\":\"not-an-email\"}\n")
 
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         inputDir.toString,
         "2026-04-13T00:00:00Z"
       )
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "json",
         schemaSignature = "email",
@@ -4580,7 +4581,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = PrivySparkApp.scanGroupByFile(
+      val (results, errors) = GroupScanner.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -4623,14 +4624,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
       writeText(slowFile, content.toString())
 
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         inputDir.toString,
         "2026-04-13T00:00:00Z"
       )
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "name|email",
@@ -4639,7 +4640,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val scanFuture = Future {
-        PrivySparkApp.scanGroupByFile(
+        GroupScanner.scanGroupByFile(
           spark,
           inputDir.toString,
           group,
@@ -4675,14 +4676,14 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "name,city\n" +
           "alice,seoul\n")
 
-      val progressRun = PrivySparkApp.prepareProgressRun(
+      val progressRun = ProgressRunManager.prepareProgressRun(
         spark.sparkContext.hadoopConfiguration,
         outputDir.toString,
         inputDir.toString,
         "2026-04-13T00:00:00Z"
       )
 
-      val group = PrivySparkApp.ScanGroup(
+      val group = ScanGroup(
         directoryPath = inputDir.toString,
         format = "csv",
         schemaSignature = "name|city",
@@ -4690,7 +4691,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = PrivySparkApp.scanGroup(
+      val (results, errors) = GroupScanner.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -4800,7 +4801,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     rules: Seq[PiiRule],
     timestamp: String
   ): (Seq[ScanResult], Seq[ScanError]) = {
-    val plan = PrivySparkApp.scanDirectoryStructure(
+    val plan = DirectoryScanner.scanDirectoryStructure(
       spark,
       inputPath,
       datasetPath,
@@ -4811,7 +4812,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
 
     plan.groups.foreach { group =>
-      val (groupResults, groupErrors) = PrivySparkApp.scanGroup(
+      val (groupResults, groupErrors) = GroupScanner.scanGroup(
         spark,
         datasetPath,
         group,
@@ -5038,19 +5039,19 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   private def normalizeOutcomeResults(
-    outcomes: Seq[(PrivySparkApp.ScanGroup, Seq[ScanResult], Seq[ScanError])]
+    outcomes: Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])]
   ): Seq[(String, String, String, Long, Long, Double, Double, Double)] = {
     normalizeResults(outcomes.flatMap(_._2))
   }
 
   private def normalizeOutcomeErrors(
-    outcomes: Seq[(PrivySparkApp.ScanGroup, Seq[ScanResult], Seq[ScanError])]
+    outcomes: Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])]
   ): Seq[(String, String)] = {
     normalizeErrors(outcomes.flatMap(_._3))
   }
 
   private def normalizePlanGroups(
-    groups: Seq[PrivySparkApp.ScanGroup]
+    groups: Seq[ScanGroup]
   ): Seq[(String, String, String, Seq[String], Boolean, Boolean, Boolean)] = {
     groups
       .map(group =>

@@ -98,7 +98,7 @@ class SampleDatasetGeneratorSpec extends AnyFunSuite with BeforeAndAfterAll {
     rules: Seq[PiiRule],
     timestamp: String
   ): (Seq[ScanResult], Seq[ScanError]) = {
-    val plan = PrivySparkApp.scanDirectoryStructure(
+    val plan = DirectoryScanner.scanDirectoryStructure(
       spark,
       inputPath,
       datasetPath,
@@ -109,7 +109,7 @@ class SampleDatasetGeneratorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
 
     plan.groups.foreach { group =>
-      val (groupResults, groupErrors) = PrivySparkApp.scanGroup(
+      val (groupResults, groupErrors) = GroupScanner.scanGroup(
         spark,
         datasetPath,
         group,

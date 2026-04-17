@@ -24,7 +24,7 @@ class LooksLikeTextSpec extends AnyFunSuite {
   test("looksLikeText classifies utf-8 text and suspicious control bytes") {
     forAll(cases) { (label: String, bytes: Array[Byte], expected: Boolean) =>
       assert(
-        PrivySparkApp.looksLikeText(bytes, false) == expected,
+        ByteProbe.looksLikeText(bytes, false) == expected,
         label
       )
     }
