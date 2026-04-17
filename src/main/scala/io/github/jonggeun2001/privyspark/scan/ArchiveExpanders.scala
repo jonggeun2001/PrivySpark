@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark.scan
 import com.github.junrar.Archive
 import com.github.junrar.exception.UnsupportedRarV5Exception
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
+import io.github.jonggeun2001.privyspark.format.ByteProbe.{MagicProbeByteLimit, TextProbeByteLimit, inferMagicByteFormat, inferTextFormat}
 import io.github.jonggeun2001.privyspark.format.CompressionStreams
 import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.model.{ScanError, ScanFileEntry}
@@ -13,7 +14,7 @@ import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.hadoop.fs.Path
 
-import java.io.{InputStream, OutputStream}
+import java.io.{ByteArrayOutputStream, InputStream, OutputStream}
 import java.nio.file.{Files => NioFiles}
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipInputStream
@@ -130,51 +131,76 @@ private[privyspark] object ArchiveExpanders {
                   "reason" -> "zero_byte"
                 )
               } else {
-                val stagingResult = for {
-                  _ <- ensureArchiveStagingReady()
-                  _ <- reserveStagedTargetPath(normalizedEntryName, targetPath)
-                  _ <- ensureArchiveEntryParent(fs, targetPath)
-                } yield ()
+                val pathFormat = FormatDetector.infer(normalizedEntryName)
+                val shouldRejectNestedArchive = pathFormat.exists(ArchiveFormats.contains) && archiveExpansionDepth >= MaxArchiveExpansionDepth
+                val shouldRejectProbe = pathFormat.isEmpty && FormatDetector.shouldSkipProbe(normalizedEntryName)
+                val initialBytes =
+                  if (pathFormat.isDefined) {
+                    Some(firstChunk)
+                  } else if (shouldRejectProbe) {
+                    None
+                  } else {
+                    val (probeBytes, detectedFormat) = probeEntryContent(firstChunk, entryInputStream)
+                    if (detectedFormat.isDefined) Some(probeBytes) else None
+                  }
 
-                stagingResult match {
-                  case Left(errorMessage) =>
-                    drainInputStream(entryInputStream)
-                    addArchiveError(childLogicalIdentifier, errorMessage)
-                  case Right(_) =>
-                    var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
-                    try {
-                      outputStream = fs.create(targetPath, true)
-                      outputStream.write(firstChunk)
-                      copyRemaining(entryInputStream, outputStream)
-                    } catch {
-                      case NonFatal(e) =>
-                        addArchiveError(
-                          childLogicalIdentifier,
-                          s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
-                        )
-                    } finally {
-                      if (outputStream != null) {
-                        outputStream.close()
+                if (shouldRejectNestedArchive) {
+                  drainInputStream(entryInputStream)
+                  addArchiveError(childLogicalIdentifier, s"Nested archive expansion is not supported: $childLogicalIdentifier")
+                } else if (shouldRejectProbe || initialBytes.isEmpty) {
+                  drainInputStream(entryInputStream)
+                  addArchiveError(childLogicalIdentifier, s"Unsupported file format: $childLogicalIdentifier")
+                } else {
+                  val bytesToMaterialize = initialBytes.get
+                  val stagingResult = for {
+                    _ <- ensureArchiveStagingReady()
+                    _ <- reserveStagedTargetPath(normalizedEntryName, targetPath)
+                    _ <- ensureArchiveEntryParent(fs, targetPath)
+                  } yield ()
+
+                  stagingResult match {
+                    case Left(errorMessage) =>
+                      drainInputStream(entryInputStream)
+                      addArchiveError(childLogicalIdentifier, errorMessage)
+                    case Right(_) =>
+                      var materializedSuccessfully = false
+                      var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
+                      try {
+                        outputStream = fs.create(targetPath, true)
+                        outputStream.write(bytesToMaterialize)
+                        copyRemaining(entryInputStream, outputStream)
+                        materializedSuccessfully = true
+                      } catch {
+                        case NonFatal(e) =>
+                          fs.delete(targetPath, false)
+                          addArchiveError(
+                            childLogicalIdentifier,
+                            s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+                          )
+                      } finally {
+                        if (outputStream != null) {
+                          outputStream.close()
+                        }
                       }
-                    }
 
-                    if (fs.exists(targetPath) && fs.getFileStatus(targetPath).getLen > 0L) {
-                      val (childEntries, childErrors, childIgnoredEntries) = SourceExpansion.expandPhysicalSource(
-                        conf,
-                        datasetPath,
-                        timestamp,
-                        targetPath.toString,
-                        childLogicalIdentifier,
-                        logicalIdentifier,
-                        stagingPaths,
-                        ignoreMatcher = ignoreMatcher,
-                        archiveExpansionDepth = archiveExpansionDepth,
-                        forceDisableDirectoryIdentifier = true
-                      )
-                      extractedEntries ++= childEntries
-                      archiveErrors ++= childErrors
-                      ignoredArchiveEntries.addAndGet(childIgnoredEntries)
-                    }
+                      if (materializedSuccessfully) {
+                        val (childEntries, childErrors, childIgnoredEntries) = SourceExpansion.expandPhysicalSource(
+                          conf,
+                          datasetPath,
+                          timestamp,
+                          targetPath.toString,
+                          childLogicalIdentifier,
+                          logicalIdentifier,
+                          stagingPaths,
+                          ignoreMatcher = ignoreMatcher,
+                          archiveExpansionDepth = archiveExpansionDepth,
+                          forceDisableDirectoryIdentifier = true
+                        )
+                        extractedEntries ++= childEntries
+                        archiveErrors ++= childErrors
+                        ignoredArchiveEntries.addAndGet(childIgnoredEntries)
+                      }
+                  }
                 }
               }
           }
@@ -400,6 +426,31 @@ private[privyspark] object ArchiveExpanders {
     val buffer = new Array[Byte](CopyBufferSize)
     val bytesRead = readChunk(inputStream, buffer)
     if (bytesRead <= 0) Array.emptyByteArray else java.util.Arrays.copyOf(buffer, bytesRead)
+  }
+
+  private def probeEntryContent(
+    firstChunk: Array[Byte],
+    inputStream: InputStream
+  ): (Array[Byte], Option[String]) = {
+    val probeBuffer = new ByteArrayOutputStream()
+    probeBuffer.write(firstChunk)
+    var reachedEof = false
+
+    while (probeBuffer.size() < TextProbeByteLimit && !reachedEof) {
+      val probeChunk = new Array[Byte](math.min(CopyBufferSize, TextProbeByteLimit - probeBuffer.size()))
+      val bytesRead = readChunk(inputStream, probeChunk)
+      if (bytesRead < 0) {
+        reachedEof = true
+      } else if (bytesRead > 0) {
+        probeBuffer.write(probeChunk, 0, bytesRead)
+      }
+    }
+
+    val probeBytes = probeBuffer.toByteArray
+    val magicProbeBytes = java.util.Arrays.copyOf(probeBytes, math.min(probeBytes.length, MagicProbeByteLimit))
+    val inferredFormat = inferMagicByteFormat(magicProbeBytes)
+      .orElse(inferTextFormat(probeBytes, allowIncompleteTrailingSequence = !reachedEof))
+    (probeBytes, inferredFormat)
   }
 
   private def readChunk(inputStream: InputStream, buffer: Array[Byte]): Int = {

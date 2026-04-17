@@ -24,6 +24,11 @@ class FormatDetectorSpec extends AnyFunSuite {
     assert(!parquet.isArchive)
   }
 
+  test("does not classify compressed workbooks as direct passthrough inputs") {
+    assert(FormatDetector.detect("/data/input.xlsx.gz").isEmpty)
+    assert(FormatDetector.infer("/data/input.xlsx.gz").isEmpty)
+  }
+
   test("classifies archive families including compressed tar aliases") {
     val tarZst = FormatDetector.detect("/data/input.tar.zst").get
     assert(tarZst.archiveFormat.contains("tar"))
