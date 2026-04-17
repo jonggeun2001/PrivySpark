@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.detect
 
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType, SampleValue}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
-import org.apache.spark.sql.functions.{col, exists, first, length, lit, regexp_extract_all, regexp_replace, substring, sum => sparkSum, trim, when}
+import org.apache.spark.sql.functions.{col, first, lit, sum => sparkSum, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{Column, DataFrame}
 
@@ -27,14 +27,6 @@ object DetectionAggregator {
   }
   private final case class ExtractedMatch(fragment: String, start: Int, end: Int)
   private val LegacyFallbackBatchSize = 50
-  private val DriverLicenseNamedRegionSqlRegex =
-    s"^(?:${DriverLicenseNumberValidator.KoreanRegionAlternation})(?:[0-9]{10}|[0-9]{2}-[0-9]{6}-[0-9]{2})$$"
-  private val DriverLicenseSupportedNumericSqlRegex =
-    DriverLicenseNumberValidator.SupportedNumericFormats
-      .map(_.stripPrefix("^").stripSuffix("$"))
-      .mkString("^(?:", "|", ")$$")
-  private val DriverLicenseDigitsOnlySqlRegex = "^[0-9]+$"
-  private val DriverLicenseCurrentRegionCodeInts = DriverLicenseNumberValidator.CurrentRegionCodes.toSeq.map(_.toInt)
   private val SafeSampleFallbackBatchSize = 32
   @volatile private var forceFileSampleBatchFailure = false
 
@@ -440,13 +432,9 @@ object DetectionAggregator {
               val valueColumn = col(columnName).cast(StringType)
               val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
               val pattern = compiledPattern(rule.regex, rule.matchType)
-              val matchPredicate = rule.piiType match {
-                case "driver_license_number" => driverLicenseMatchPredicate(valueColumn, rule)
-                case _ =>
-                  rule.matchType match {
-                    case PiiRuleMatchType.FullColumn => valueColumn.rlike(fullMatchRegex(rule.regex))
-                    case _ => valueColumn.rlike(rule.regex)
-                  }
+              val matchPredicate = rule.matchType match {
+                case PiiRuleMatchType.FullColumn => valueColumn.rlike(fullMatchRegex(rule.regex))
+                case _ => valueColumn.rlike(rule.regex)
               }
               val predicate = rule.matchType match {
                 case PiiRuleMatchType.FullColumn => presentValuePredicate && matchPredicate
@@ -469,30 +457,6 @@ object DetectionAggregator {
             }
         }
     }
-  }
-
-  private def driverLicenseMatchPredicate(valueColumn: Column, rule: PiiRule): Column = {
-    val ruleRegex =
-      if (rule.matchType == PiiRuleMatchType.FullColumn) fullMatchRegex(rule.regex)
-      else rule.regex
-    val matchedCandidates = regexp_extract_all(valueColumn, lit(ruleRegex), lit(0))
-    exists(matchedCandidates, candidate => driverLicenseCandidateValid(candidate))
-  }
-
-  private def driverLicenseCandidateValid(candidate: Column): Column = {
-    val trimmedCandidate = trim(candidate)
-    val whitespaceStrippedCandidate = regexp_replace(trimmedCandidate, "\\s+", "")
-    val normalizedNumericCandidate = regexp_replace(trimmedCandidate, "-", "")
-    val numericPrefix = substring(normalizedNumericCandidate, 1, 2).cast("int")
-    val digitsOnly = normalizedNumericCandidate.rlike(DriverLicenseDigitsOnlySqlRegex)
-    val validCurrentRegionCode = numericPrefix.isin(DriverLicenseCurrentRegionCodeInts.map(Int.box): _*)
-    val supportedNumericFormat = trimmedCandidate.rlike(DriverLicenseSupportedNumericSqlRegex)
-    val validNormalizedNumeric =
-      (length(normalizedNumericCandidate) === 10 && digitsOnly) ||
-        (length(normalizedNumericCandidate) === 12 && digitsOnly && validCurrentRegionCode)
-
-    whitespaceStrippedCandidate.rlike(DriverLicenseNamedRegionSqlRegex) ||
-      (supportedNumericFormat && validNormalizedNumeric)
   }
 
   private def buildExpressions(batch: Seq[Metric]): Seq[Column] = {
@@ -814,39 +778,12 @@ object DetectionAggregator {
   }
 
   private def extractMatch(rawValue: String, metric: Metric): Option[ExtractedMatch] = {
-    if (metric.piiType == "driver_license_number") {
-      extractDriverLicenseMatch(rawValue, metric)
+    val matcher = metric.pattern.matcher(rawValue)
+    if (metric.matchType == PiiRuleMatchType.FullColumn) {
+      if (matcher.matches()) Some(ExtractedMatch(matcher.group(), 0, rawValue.length)) else None
+    } else if (matcher.find()) {
+      Some(ExtractedMatch(matcher.group(), matcher.start(), matcher.end()))
     } else {
-      val matcher = metric.pattern.matcher(rawValue)
-      if (metric.matchType == PiiRuleMatchType.FullColumn) {
-        if (matcher.matches()) Some(ExtractedMatch(matcher.group(), 0, rawValue.length)) else None
-      } else if (matcher.find()) {
-        Some(ExtractedMatch(matcher.group(), matcher.start(), matcher.end()))
-      } else {
-        None
-      }
-    }
-  }
-
-  private def extractDriverLicenseMatch(rawValue: String, metric: Metric): Option[ExtractedMatch] = {
-    extractDriverLicenseMatch(rawValue, metric.pattern, metric.matchType)
-  }
-
-  private def extractDriverLicenseMatch(rawValue: String, pattern: Pattern, matchType: String): Option[ExtractedMatch] = {
-    val matcher = pattern.matcher(Option(rawValue).getOrElse(""))
-    if (matchType == PiiRuleMatchType.FullColumn) {
-      if (matcher.matches() && DriverLicenseNumberValidator.isValid(matcher.group())) {
-        Some(ExtractedMatch(matcher.group(), 0, Option(rawValue).map(_.length).getOrElse(0)))
-      } else {
-        None
-      }
-    } else {
-      while (matcher.find()) {
-        val fragment = matcher.group()
-        if (DriverLicenseNumberValidator.isValid(fragment)) {
-          return Some(ExtractedMatch(fragment, matcher.start(), matcher.end()))
-        }
-      }
       None
     }
   }

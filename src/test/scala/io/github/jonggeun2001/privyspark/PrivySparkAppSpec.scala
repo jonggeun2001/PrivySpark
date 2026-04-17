@@ -1598,7 +1598,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  test("scanWithRules stores the validated driver license fragment instead of the whole free-form text") {
+  test("scanWithRules stores the matched driver license fragment instead of the whole free-form text") {
     val inputDir = Files.createTempDirectory("privyspark-driver-license-fragment-")
     val timestamp = "2026-04-14T00:00:00Z"
     val value = "면허번호는 서울 07 - 111111 - 10 입니다"
@@ -1615,6 +1615,30 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errors.isEmpty)
       assert(results.size == 1)
       assert(results.head.sample_matched_fragment == "서울 07 - 111111 - 10")
+      assert(results.head.sample_raw_value == value)
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules stores the first regex-matched driver license fragment") {
+    val inputDir = Files.createTempDirectory("privyspark-driver-license-regex-fragment-")
+    val timestamp = "2026-04-17T00:00:00Z"
+    val value = "이전 번호 27-12-345678-90, 현재 번호 11-12-345678-90"
+
+    try {
+      writeText(
+        inputDir.resolve("licenses.json"),
+        s"""{"note":"$value"}""" + "\n"
+      )
+
+      val rules = Seq(PiiRule("driver_license_number", "(?:27|11)-[0-9]{2}-[0-9]{6}-[0-9]{2}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.size == 1)
+      assert(results.head.match_count == 1L)
+      assert(results.head.sample_matched_fragment == "27-12-345678-90")
       assert(results.head.sample_raw_value == value)
     } finally {
       deleteRecursively(inputDir)
