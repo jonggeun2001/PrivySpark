@@ -46,8 +46,8 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 - `sampled_row_count` is the post-sampling row count that was actually scanned.
 - `non_empty_match_ratio` uses only non-empty values in the column as its denominator.
 - Empty means `null` or a value whose `trim(column)` is blank.
-- `full_column` only changes how `match_count` is computed. The denominator for `match_ratio` and `confidence` still uses sampled row count.
-- `confidence` currently equals `match_ratio`.
+- `full_column` only changes how `match_count` is computed. `confidence` is still calculated against non-empty values for the column.
+- `confidence` is the lower bound of the 95% Wilson score interval (z=1.96) for `match_count / non_empty_count`. Smaller samples are penalized more conservatively, and larger samples converge toward `non_empty_match_ratio`.
 - `sample_matched_fragment` stores one raw fragment that actually matched the regex and validator path.
 - `sample_raw_value` stores only the matched fragment plus up to 50 characters of surrounding context on each side.
 - Both values are rounded to two decimal places.

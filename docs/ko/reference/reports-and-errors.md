@@ -46,8 +46,8 @@
 - `sampled_row_count`는 실제 탐지에 사용된 샘플링 후 행 수입니다.
 - `non_empty_match_ratio`는 해당 컬럼에서 비어 있지 않은 값만 분모로 사용한 비율입니다.
 - 비어 있는 값은 `null`이거나 `trim(column)` 결과가 blank인 값입니다.
-- `full_column`도 `match_count` 기준만 달라질 뿐, `match_ratio`와 `confidence`의 분모는 동일하게 샘플링된 행 수입니다.
-- `confidence`는 현재 구현에서 `match_ratio`와 동일한 값입니다.
+- `full_column`도 `match_count` 기준만 달라질 뿐, `confidence`는 여전히 해당 컬럼의 non-empty 값 기준으로 계산됩니다.
+- `confidence`는 `match_count / non_empty_count`의 95% Wilson score 신뢰구간 하한(z=1.96)입니다. 표본이 작을수록 보수적으로 낮아지고, 표본이 커질수록 `non_empty_match_ratio`에 수렴합니다.
 - `sample_matched_fragment`는 실제 regex/validator가 검출한 원문 조각 1건입니다.
 - `sample_raw_value`는 그 조각이 포함된 셀에서 앞뒤 최대 50자 문맥만 잘라 저장한 값입니다.
 - 두 값 모두 소수점 둘째 자리까지 반올림합니다.
