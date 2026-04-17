@@ -164,6 +164,7 @@ private[privyspark] object ArchiveExpanders {
                       addArchiveError(childLogicalIdentifier, errorMessage)
                     case Right(_) =>
                       var materializedSuccessfully = false
+                      var cleanupPartialTarget = false
                       var outputStream: org.apache.hadoop.fs.FSDataOutputStream = null
                       try {
                         outputStream = fs.create(targetPath, true)
@@ -172,7 +173,7 @@ private[privyspark] object ArchiveExpanders {
                         materializedSuccessfully = true
                       } catch {
                         case NonFatal(e) =>
-                          fs.delete(targetPath, false)
+                          cleanupPartialTarget = true
                           addArchiveError(
                             childLogicalIdentifier,
                             s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
@@ -180,6 +181,22 @@ private[privyspark] object ArchiveExpanders {
                       } finally {
                         if (outputStream != null) {
                           outputStream.close()
+                        }
+                        if (cleanupPartialTarget) {
+                          try {
+                            if (fs.exists(targetPath) && !fs.delete(targetPath, false)) {
+                              addArchiveError(
+                                childLogicalIdentifier,
+                                s"Archive entry cleanup failed: ${targetPath.toString}"
+                              )
+                            }
+                          } catch {
+                            case NonFatal(e) =>
+                              addArchiveError(
+                                childLogicalIdentifier,
+                                s"Archive entry cleanup failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+                              )
+                          }
                         }
                       }
 

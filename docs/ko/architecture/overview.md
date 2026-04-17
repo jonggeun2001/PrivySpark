@@ -8,7 +8,7 @@
 ## 구현 컴포넌트
 - `cli/Cli.scala`: 실행 인자와 기본 실행 옵션
 - `format/FormatDetector.scala`: 확장자 기반 1차 포맷 식별
-- `format/CompressionStreams.scala`: direct compressed file과 compressed tar stream의 codec wrapping
+- `format/CompressionStreams.scala`: direct compressed text-style file과 compressed tar stream의 codec wrapping
 - `RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
 - `util/DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
 - `detect/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
@@ -25,7 +25,7 @@
 1. 입력 경로 검증
 2. ruleset 로드와 regex 사전 검증
 3. 물리 파일 수집과 ignore 패턴 필터
-4. archive 엔트리 확장, workbook 시트 확장, direct compressed input passthrough, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화, archive entry ignore 필터
+4. archive 엔트리 확장, workbook 시트 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화, archive entry ignore 필터
 5. `(directory, format)` 기준 1차 그룹화
 6. 대표 파일 기준 스키마 샘플링
 7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정

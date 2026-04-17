@@ -2,7 +2,7 @@
 
 ## Supported Inputs
 - Extension-first support: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`, `tar`, `tar.gz`, `tgz`, `tar.bz2`, `tbz2`, `tar.xz`, `txz`, `tar.zst`, `tzst`, `7z`, `rar`
-- Direct data files with outer `gz`, `bz2`, `xz`, or `zst` wrappers are passed through to Spark/Hadoop readers using the original path. Examples: `customers.csv.gz`, `events.json.zst`, `part-00000.parquet.xz`
+- Direct text-style data files (`csv`, `json`, `jsonl`, `ndjson`) with outer `gz`, `bz2`, `xz`, or `zst` wrappers are passed through to Spark/Hadoop readers using the original path. Examples: `customers.csv.gz`, `events.json.zst`, `events.jsonl.xz`
 - Files without extensions and most unsupported extensions are probed for `parquet` and `orc` magic bytes first. A small set of obviously non-data binary extensions such as `pdf` or `jpg` are classified as unsupported without probing.
 - If magic bytes do not match but the content looks like UTF-8 text, the input is normalized into the internal `text` format and scanned through Spark's single-column `text` reader.
 - UTF-8 text that uses ASCII information separators (`0x1C`-`0x1F`, for example RS-delimited files) still counts as text fallback input instead of binary.

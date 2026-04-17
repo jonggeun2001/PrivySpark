@@ -25,7 +25,12 @@ object FormatDetector {
     ".xlsx" -> "xlsx"
   )
 
-  private val CodecPassthroughFormatsBySuffix = BaseFormatsBySuffix.filterNot(_._2 == "xlsx")
+  private val CodecPassthroughFormatsBySuffix = Seq(
+    ".jsonl" -> "json",
+    ".ndjson" -> "json",
+    ".json" -> "json",
+    ".csv" -> "csv"
+  )
 
   private val ArchiveAliases = Seq(
     ".tgz" -> ("tar", Some("gz")),
