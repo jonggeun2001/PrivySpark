@@ -682,6 +682,8 @@ private[privyspark] object ArchiveExpanders {
           }
         }
       }
+    } catch {
+      case _: PasswordRequiredException => true
     } finally {
       if (archiveFile != null) {
         archiveFile.close()
