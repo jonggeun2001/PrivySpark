@@ -12,12 +12,12 @@ import io.github.jonggeun2001.privyspark.util.{DriverLogger, PathIdentifiers}
 import org.apache.commons.compress.PasswordRequiredException
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.hadoop.fs.Path
 
 import java.io.{ByteArrayOutputStream, InputStream, OutputStream}
 import java.nio.file.{Files => NioFiles}
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.zip.ZipInputStream
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -252,16 +252,22 @@ private[privyspark] object ArchiveExpanders {
     logicalIdentifier: String
   ): Unit = {
     val archiveInputStream = fs.open(sourcePath)
-    val zipInputStream = new ZipInputStream(archiveInputStream)
+    val zipInputStream = new ZipArchiveInputStream(archiveInputStream)
 
     try {
       var entry = zipInputStream.getNextEntry
       while (entry != null) {
-        try {
-          processEntry(entry.getName, entry.isDirectory, entry.getSize, zipInputStream)
-        } finally {
-          zipInputStream.closeEntry()
+        val encryptedEntry = Option(entry.getGeneralPurposeBit).exists(_.usesEncryption())
+        if (encryptedEntry || !zipInputStream.canReadEntryData(entry)) {
+          archiveErrors += ScanError(
+            datasetPath,
+            timestamp,
+            logicalIdentifier,
+            s"Password-protected archive is not supported: $logicalIdentifier"
+          )
+          return
         }
+        processEntry(entry.getName, entry.isDirectory, entry.getSize, zipInputStream)
         entry = zipInputStream.getNextEntry
       }
     } catch {

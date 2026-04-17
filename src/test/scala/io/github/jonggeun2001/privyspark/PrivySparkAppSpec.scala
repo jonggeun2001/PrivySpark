@@ -3364,6 +3364,24 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules reports password protected zip archives in scan errors") {
+    val inputDir = Files.createTempDirectory("privyspark-zip-password-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      copyClasspathResource("/archive-fixtures/zip/encrypted.zip", inputDir.resolve("bundle.zip"))
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.map(_.file_identifier) == Seq("bundle.zip"))
+      assert(errors.head.error_message.contains("Password-protected archive is not supported"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure ignores archive entries under ignored archive subdirectories") {
     val inputDir = Files.createTempDirectory("privyspark-zip-ignore-entry-")
     var plan: DirectoryScanPlan = null
