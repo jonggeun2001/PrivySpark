@@ -1,4 +1,4 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, ScanReadOptions}
 
@@ -59,7 +59,7 @@ private[privyspark] final class CsvHeadCache {
   }
 }
 
-private object CsvHeadCache {
+private[privyspark] object CsvHeadCache {
   val CachedLineLimit = 2
   val MaxEntries = 4096
   val MaxCharacters = 1024 * 1024

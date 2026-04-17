@@ -1,13 +1,15 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.scan
 
-import io.github.jonggeun2001.privyspark.ArchiveStaging.ArchiveFormats
-import io.github.jonggeun2001.privyspark.ByteProbe.{isZeroBytePhysicalFile, shouldProbeForFormat}
-import io.github.jonggeun2001.privyspark.CsvInference._
-import io.github.jonggeun2001.privyspark.ManagedPaths.cleanupStagingPaths
-import io.github.jonggeun2001.privyspark.PathIdentifiers._
-import io.github.jonggeun2001.privyspark.ParallelismConfig._
-import io.github.jonggeun2001.privyspark.RetryIO.withFileReadRetry
-import io.github.jonggeun2001.privyspark.SourceExpansion.expandPhysicalSource
+import io.github.jonggeun2001.privyspark.scan.ArchiveStaging.ArchiveFormats
+import io.github.jonggeun2001.privyspark.format.ByteProbe.{isZeroBytePhysicalFile, shouldProbeForFormat}
+import io.github.jonggeun2001.privyspark.format.CsvInference._
+import io.github.jonggeun2001.privyspark.format.FormatDetector
+import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
+import io.github.jonggeun2001.privyspark.util.PathIdentifiers._
+import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
+import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
+import io.github.jonggeun2001.privyspark.scan.SourceExpansion.expandPhysicalSource
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, PreScanFileOutcome, ScanError, ScanFileEntry, ScanGroup, ScanReadOptions}
 import org.apache.hadoop.fs.Path

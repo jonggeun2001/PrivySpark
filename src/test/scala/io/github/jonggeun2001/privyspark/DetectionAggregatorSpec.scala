@@ -1,7 +1,9 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.DetectionAggregator.{AggregationConfig, FileMatchCount, MatchCount}
-import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
+import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
+import io.github.jonggeun2001.privyspark.detect.DetectionAggregator.{AggregationConfig, FileMatchCount}
+import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType}
+import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
 import org.apache.spark.sql.functions.{col, trim, when}
 import org.apache.spark.sql.types.StringType

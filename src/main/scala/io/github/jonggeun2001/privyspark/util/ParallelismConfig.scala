@@ -1,4 +1,4 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.util
 
 import org.apache.spark.sql.SparkSession
 
@@ -85,11 +85,15 @@ private[privyspark] object ParallelismConfig {
     resolveParallelism(fileCount, spark.sparkContext.getConf.getInt(FileParallelismConfKey, DefaultFileParallelism))
   }
 
-  def resolveCliParallelism(config: CliConfig): (Int, Int, Int) = {
+  def resolveCliParallelism(
+    preScan: Option[Int],
+    group: Option[Int],
+    file: Option[Int]
+  ): (Int, Int, Int) = {
     (
-      config.preScanParallelism.getOrElse(-1),
-      config.groupParallelism.getOrElse(-1),
-      config.fileParallelism.getOrElse(-1)
+      preScan.getOrElse(-1),
+      group.getOrElse(-1),
+      file.getOrElse(-1)
     )
   }
 

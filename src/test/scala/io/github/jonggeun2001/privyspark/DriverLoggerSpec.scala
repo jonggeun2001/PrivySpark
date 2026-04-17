@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.util.{DriverLogLevel, DriverLogger}
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
 

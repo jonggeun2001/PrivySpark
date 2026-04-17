@@ -1,5 +1,6 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.cli
 
+import io.github.jonggeun2001.privyspark.report.OutputFormats
 import scopt.OParser
 import scopt.{DefaultOParserSetup, OEffectSetup}
 

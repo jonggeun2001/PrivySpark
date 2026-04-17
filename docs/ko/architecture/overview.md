@@ -6,11 +6,13 @@
 - 일부 파일 또는 그룹 실패가 있어도 가능한 범위를 계속 처리합니다.
 
 ## 구현 컴포넌트
-- `Cli.scala`: 실행 인자와 기본 실행 옵션
-- `FormatDetector.scala`: 확장자 기반 1차 포맷 식별
+- `cli/Cli.scala`: 실행 인자와 기본 실행 옵션
+- `format/FormatDetector.scala`: 확장자 기반 1차 포맷 식별
 - `RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
-- `DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
-- `DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
+- `util/DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
+- `detect/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
+- `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: 입력 확장, 그룹화, 스캔 실행
+- `report/ReportWriter.scala`: 최종 리포트 저장과 포맷별 산출물 생성
 - `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, progress/최종 리포트 저장
 - `Models.scala`: 결과/오류/규칙 모델
 

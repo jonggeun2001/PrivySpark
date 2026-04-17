@@ -1,6 +1,6 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.scan
 
-import io.github.jonggeun2001.privyspark.PathIdentifiers.canonicalizePath
+import io.github.jonggeun2001.privyspark.util.PathIdentifiers.canonicalizePath
 import org.apache.hadoop.fs.Path
 
 private[privyspark] object ArchiveStaging {

@@ -1,5 +1,6 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.fsio
 
+import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
 

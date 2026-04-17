@@ -1,7 +1,10 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.ManagedPaths.cleanupStagingPaths
-import io.github.jonggeun2001.privyspark.ParallelismConfig.{renderConfiguredParallelism, resolveCliParallelism}
+import io.github.jonggeun2001.privyspark.cli.{Cli, CliConfig, PathValidator}
+import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
+import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
+import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{renderConfiguredParallelism, resolveCliParallelism}
+import io.github.jonggeun2001.privyspark.util.{DriverLogLevel, DriverLogger}
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.ProgressRun
@@ -90,7 +93,8 @@ object PrivySparkApp {
   }
 
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
-    val (preScanParallelism, groupParallelism, fileParallelism) = resolveCliParallelism(config)
+    val (preScanParallelism, groupParallelism, fileParallelism) =
+      resolveCliParallelism(config.preScanParallelism, config.groupParallelism, config.fileParallelism)
     val outputFormats = config.effectiveOutputFormats
     val csvHeadCache = new CsvHeadCache()
     val schemaSigCache = new SchemaSignatureCache()

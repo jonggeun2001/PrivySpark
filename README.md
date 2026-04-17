@@ -86,11 +86,11 @@ bash scripts/verify-worktree.sh
 ### 어디를 수정해야 하는지 빠르게 찾기
 - `src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala`
   - 입력 확장, 그룹화, 스캔 오케스트레이션, progress/최종 리포트 저장
-- `src/main/scala/io/github/jonggeun2001/privyspark/Cli.scala`
+- `src/main/scala/io/github/jonggeun2001/privyspark/cli/Cli.scala`
   - CLI 파싱과 실행 옵션 정의
-- `src/main/scala/io/github/jonggeun2001/privyspark/DetectionAggregator.scala`
+- `src/main/scala/io/github/jonggeun2001/privyspark/detect/DetectionAggregator.scala`
   - 규칙별 집계, sample 값 추출, fallback regroup 전략
-- `src/main/scala/io/github/jonggeun2001/privyspark/FormatDetector.scala`
+- `src/main/scala/io/github/jonggeun2001/privyspark/format/FormatDetector.scala`
   - 지원 포맷 판별
 - `src/main/scala/io/github/jonggeun2001/privyspark/config/RulesetLoader.scala`
   - 기본/외부 ruleset 로딩과 검증
@@ -102,8 +102,8 @@ bash scripts/verify-worktree.sh
 ### 수정 흐름 추천
 1. 현재 상태를 `./gradlew test` 또는 `bash scripts/verify-worktree.sh`로 먼저 확인합니다.
 2. ruleset 변경이면 [config/rules/default.yaml](config/rules/default.yaml)과 관련 문서를 함께 수정합니다.
-3. 입력 포맷 처리 변경이면 `FormatDetector.scala`, `PrivySparkApp.scala`, 입력 포맷 문서를 같이 봅니다.
-4. 집계나 출력 스키마 변경이면 `DetectionAggregator.scala`, `Models.scala`, `PrivySparkApp.scala`, 관련 테스트를 같이 봅니다.
+3. 입력 포맷 처리 변경이면 `format/FormatDetector.scala`, `scan/DirectoryScanner.scala`, `PrivySparkApp.scala`, 입력 포맷 문서를 같이 봅니다.
+4. 집계나 출력 스키마 변경이면 `detect/DetectionAggregator.scala`, `model/Models.scala`, `report/ReportWriter.scala`, 관련 테스트를 같이 봅니다.
 5. 변경 후 테스트를 다시 돌리고, 필요하면 `bin/privyspark-submit`으로 실제 스캔을 재현합니다.
 
 ## 문서 구조
@@ -123,10 +123,13 @@ bash scripts/verify-worktree.sh
 
 ## 소스 구조
 - `src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala`: 입력 확장, 그룹화, 스캔 오케스트레이션, progress/최종 리포트 저장
-- `src/main/scala/io/github/jonggeun2001/privyspark/Cli.scala`: CLI 파싱과 실행 옵션 정의
-- `src/main/scala/io/github/jonggeun2001/privyspark/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
-- `src/main/scala/io/github/jonggeun2001/privyspark/DriverLogger.scala`: driver 로그 레벨과 공통 로그 포맷
-- `src/main/scala/io/github/jonggeun2001/privyspark/FormatDetector.scala`: 지원 포맷 판별
+- `src/main/scala/io/github/jonggeun2001/privyspark/cli/`: CLI 파싱과 경로 검증
+- `src/main/scala/io/github/jonggeun2001/privyspark/scan/`: 입력 확장, pre-scan, 그룹 스캔, 캐시
+- `src/main/scala/io/github/jonggeun2001/privyspark/format/`: 포맷 판별, CSV 추론, workbook 헬퍼
+- `src/main/scala/io/github/jonggeun2001/privyspark/detect/`: 규칙 집계와 strict validator
+- `src/main/scala/io/github/jonggeun2001/privyspark/report/`: 출력 포맷, JSON codec, 리포트 쓰기
+- `src/main/scala/io/github/jonggeun2001/privyspark/fsio/`: staging 경로 관리와 재시도 I/O
+- `src/main/scala/io/github/jonggeun2001/privyspark/util/`: driver 로그, 병렬도, 식별자 유틸리티
 - `src/main/scala/io/github/jonggeun2001/privyspark/config/RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
 - `src/main/scala/io/github/jonggeun2001/privyspark/model/Models.scala`: ruleset, 결과, 오류 모델
 
