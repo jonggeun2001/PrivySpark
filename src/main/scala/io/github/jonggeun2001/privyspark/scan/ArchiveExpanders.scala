@@ -12,7 +12,7 @@ import io.github.jonggeun2001.privyspark.util.{DriverLogger, PathIdentifiers}
 import org.apache.commons.compress.PasswordRequiredException
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.archivers.zip.ZipFile
+import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.hadoop.fs.Path
 
 import java.io.{ByteArrayOutputStream, Closeable, InputStream, OutputStream}
@@ -278,50 +278,49 @@ private[privyspark] object ArchiveExpanders {
     timestamp: String,
     logicalIdentifier: String
   ): Unit = {
-    try {
-      withLocalArchiveFile(conf, archivePath) { localArchivePath =>
-        var zipFile: ZipFile = null
-        try {
-          zipFile = new ZipFile(localArchivePath)
-          val entries = zipFile.getEntries.asScala.toSeq
-          val hasEncryptedEntry = entries.exists(entry => Option(entry.getGeneralPurposeBit).exists(_.usesEncryption()))
+    val sourcePath = new Path(archivePath)
+    val fs = sourcePath.getFileSystem(conf)
 
-          if (hasEncryptedEntry) {
-            archiveErrors += ScanError(
-              datasetPath,
-              timestamp,
-              logicalIdentifier,
-              s"Password-protected archive is not supported: $logicalIdentifier"
-            )
-          } else {
-            entries.foreach { entry =>
-              if (!entry.isDirectory) {
-                val childLogicalIdentifier = archiveEntryLogicalIdentifier(logicalIdentifier, entry.getName)
-                if (!zipFile.canReadEntryData(entry)) {
-                  archiveErrors += ScanError(
-                    datasetPath,
-                    timestamp,
-                    childLogicalIdentifier,
-                    s"Archive read failed: Unsupported ZIP feature: $childLogicalIdentifier"
-                  )
-                } else {
-                  withArchiveEntryInputStream(
-                    entry.getName,
-                    logicalIdentifier,
-                    archiveErrors,
-                    datasetPath,
-                    timestamp
-                  )(zipFile.getInputStream(entry)) { entryInputStream =>
-                    processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
-                  }
-                }
+    try {
+      if (hasEncryptedZipEntry(fs, sourcePath, archiveErrors, datasetPath, timestamp, logicalIdentifier)) {
+        archiveErrors += ScanError(
+          datasetPath,
+          timestamp,
+          logicalIdentifier,
+          s"Password-protected archive is not supported: $logicalIdentifier"
+        )
+      } else {
+        var rawInputStream: InputStream = null
+        var zipInputStream: ZipArchiveInputStream = null
+
+        try {
+          rawInputStream = fs.open(sourcePath)
+          zipInputStream = new ZipArchiveInputStream(rawInputStream)
+          var entry = zipInputStream.getNextZipEntry
+          while (entry != null) {
+            if (!entry.isDirectory) {
+              val childLogicalIdentifier = archiveEntryLogicalIdentifier(logicalIdentifier, entry.getName)
+              if (!zipInputStream.canReadEntryData(entry)) {
+                archiveErrors += ScanError(
+                  datasetPath,
+                  timestamp,
+                  childLogicalIdentifier,
+                  s"Archive read failed: Unsupported ZIP feature: $childLogicalIdentifier"
+                )
+              } else {
+                processEntry(entry.getName, entry.isDirectory, entry.getSize, zipInputStream)
               }
             }
+            entry = zipInputStream.getNextZipEntry
           }
         } finally {
-          if (zipFile != null) {
-            zipFile.close()
-          }
+          closeArchiveResources(
+            Seq(zipInputStream, rawInputStream),
+            archiveErrors,
+            datasetPath,
+            timestamp,
+            logicalIdentifier
+          )
         }
       }
     } catch {
@@ -657,23 +656,69 @@ private[privyspark] object ArchiveExpanders {
 
     try {
       archiveFile = SevenZFile.builder().setFile(localArchivePath.toFile).get()
-      archiveFile.getEntries.asScala.foreach { entry =>
-        if (!entry.isDirectory && entry.hasStream()) {
-          val entryInputStream = archiveFile.getInputStream(entry)
+      archiveFile.getEntries.asScala.exists { entry =>
+        if (entry.isDirectory || !entry.hasStream()) {
+          false
+        } else {
           try {
-            entryInputStream.read()
-          } finally {
-            entryInputStream.close()
+            val entryInputStream = archiveFile.getInputStream(entry)
+            try {
+              entryInputStream.read()
+              false
+            } catch {
+              case _: PasswordRequiredException => true
+              case NonFatal(_) => false
+            } finally {
+              try {
+                entryInputStream.close()
+              } catch {
+                case _: PasswordRequiredException => return true
+                case NonFatal(_) =>
+              }
+            }
+          } catch {
+            case _: PasswordRequiredException => true
+            case NonFatal(_) => false
           }
         }
       }
-      false
-    } catch {
-      case _: PasswordRequiredException => true
     } finally {
       if (archiveFile != null) {
         archiveFile.close()
       }
+    }
+  }
+
+  private def hasEncryptedZipEntry(
+    fs: org.apache.hadoop.fs.FileSystem,
+    sourcePath: Path,
+    archiveErrors: ArrayBuffer[ScanError],
+    datasetPath: String,
+    timestamp: String,
+    logicalIdentifier: String
+  ): Boolean = {
+    var rawInputStream: InputStream = null
+    var zipInputStream: ZipArchiveInputStream = null
+
+    try {
+      rawInputStream = fs.open(sourcePath)
+      zipInputStream = new ZipArchiveInputStream(rawInputStream)
+      var entry = zipInputStream.getNextZipEntry
+      while (entry != null) {
+        if (Option(entry.getGeneralPurposeBit).exists(_.usesEncryption())) {
+          return true
+        }
+        entry = zipInputStream.getNextZipEntry
+      }
+      false
+    } finally {
+      closeArchiveResources(
+        Seq(zipInputStream, rawInputStream),
+        archiveErrors,
+        datasetPath,
+        timestamp,
+        logicalIdentifier
+      )
     }
   }
 
