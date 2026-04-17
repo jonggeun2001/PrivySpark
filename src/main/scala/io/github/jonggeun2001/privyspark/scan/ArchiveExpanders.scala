@@ -12,7 +12,7 @@ import io.github.jonggeun2001.privyspark.util.{DriverLogger, PathIdentifiers}
 import org.apache.commons.compress.PasswordRequiredException
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
+import org.apache.commons.compress.archivers.zip.ZipFile
 import org.apache.hadoop.fs.Path
 
 import java.io.{ByteArrayOutputStream, InputStream, OutputStream}
@@ -180,7 +180,17 @@ private[privyspark] object ArchiveExpanders {
                           )
                       } finally {
                         if (outputStream != null) {
-                          outputStream.close()
+                          try {
+                            outputStream.close()
+                          } catch {
+                            case NonFatal(e) =>
+                              materializedSuccessfully = false
+                              cleanupPartialTarget = true
+                              addArchiveError(
+                                childLogicalIdentifier,
+                                s"Archive entry materialization failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
+                              )
+                          }
                         }
                         if (cleanupPartialTarget) {
                           try {
@@ -226,7 +236,7 @@ private[privyspark] object ArchiveExpanders {
 
     FormatDetector.detect(archivePath).flatMap(_.archiveFormat) match {
       case Some(format) if format == ZipFormat || format == JarFormat =>
-        expandZipLikeArchive(sourcePath, fs, processEntry, archiveErrors, datasetPath, timestamp, logicalIdentifier)
+        expandZipLikeArchive(conf, archivePath, processEntry, archiveErrors, datasetPath, timestamp, logicalIdentifier)
       case Some(TarFormat) =>
         expandTarArchive(conf, archivePath, processEntry, archiveErrors, datasetPath, timestamp, logicalIdentifier)
       case Some(SevenZFormat) =>
@@ -243,32 +253,48 @@ private[privyspark] object ArchiveExpanders {
   }
 
   private def expandZipLikeArchive(
-    sourcePath: Path,
-    fs: org.apache.hadoop.fs.FileSystem,
+    conf: org.apache.hadoop.conf.Configuration,
+    archivePath: String,
     processEntry: (String, Boolean, Long, InputStream) => Unit,
     archiveErrors: ArrayBuffer[ScanError],
     datasetPath: String,
     timestamp: String,
     logicalIdentifier: String
   ): Unit = {
-    val archiveInputStream = fs.open(sourcePath)
-    val zipInputStream = new ZipArchiveInputStream(archiveInputStream)
-
     try {
-      var entry = zipInputStream.getNextEntry
-      while (entry != null) {
-        val encryptedEntry = Option(entry.getGeneralPurposeBit).exists(_.usesEncryption())
-        if (encryptedEntry || !zipInputStream.canReadEntryData(entry)) {
-          archiveErrors += ScanError(
-            datasetPath,
-            timestamp,
-            logicalIdentifier,
-            s"Password-protected archive is not supported: $logicalIdentifier"
-          )
-          return
+      withLocalArchiveFile(conf, archivePath) { localArchivePath =>
+        var zipFile: ZipFile = null
+        try {
+          zipFile = new ZipFile(localArchivePath)
+          val entries = zipFile.getEntries.asScala.toSeq
+          val hasEncryptedEntry = entries.exists { entry =>
+            Option(entry.getGeneralPurposeBit).exists(_.usesEncryption()) || !zipFile.canReadEntryData(entry)
+          }
+
+          if (hasEncryptedEntry) {
+            archiveErrors += ScanError(
+              datasetPath,
+              timestamp,
+              logicalIdentifier,
+              s"Password-protected archive is not supported: $logicalIdentifier"
+            )
+          } else {
+            entries.foreach { entry =>
+              if (!entry.isDirectory) {
+                val entryInputStream = zipFile.getInputStream(entry)
+                try {
+                  processEntry(entry.getName, entry.isDirectory, entry.getSize, entryInputStream)
+                } finally {
+                  entryInputStream.close()
+                }
+              }
+            }
+          }
+        } finally {
+          if (zipFile != null) {
+            zipFile.close()
+          }
         }
-        processEntry(entry.getName, entry.isDirectory, entry.getSize, zipInputStream)
-        entry = zipInputStream.getNextEntry
       }
     } catch {
       case NonFatal(e) =>
@@ -278,9 +304,6 @@ private[privyspark] object ArchiveExpanders {
           logicalIdentifier,
           s"Archive read failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}"
         )
-    } finally {
-      zipInputStream.close()
-      archiveInputStream.close()
     }
   }
 
