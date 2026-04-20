@@ -51,7 +51,7 @@ privyspark scan \
 - 해당 result row는 최종 `scan_results`에서 빠집니다.
 
 메타데이터나 checksum이 바뀌면 row를 유지하고 다음 값을 남깁니다.
-- `review_status=false_positive`
+- `review_status=pending`
 - `review_reason=<이전 사유>`
 - `review_invalidated=true`
 

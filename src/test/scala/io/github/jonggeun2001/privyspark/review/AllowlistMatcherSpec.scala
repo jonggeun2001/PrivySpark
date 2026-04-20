@@ -68,7 +68,7 @@ class AllowlistMatcherSpec extends AnyFunSuite {
 
     assert(!evaluation.shouldSuppress)
     assert(evaluation.reviewInvalidated)
-    assert(evaluation.reviewStatus == "false_positive")
+    assert(evaluation.reviewStatus == "pending")
     assert(evaluation.reviewReason == "known dummy data")
   }
 

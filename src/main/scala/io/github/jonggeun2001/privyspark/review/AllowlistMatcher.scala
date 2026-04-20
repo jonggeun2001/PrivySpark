@@ -51,7 +51,7 @@ final class AllowlistMatcher private (
       } else if (mismatchedEntries.nonEmpty) {
         AllowlistEvaluation(
           shouldSuppress = false,
-          reviewStatus = ReviewStatus.FalsePositive,
+          reviewStatus = ReviewStatus.Pending,
           reviewReason = mismatchedEntries.head.reason,
           reviewInvalidated = true
         )

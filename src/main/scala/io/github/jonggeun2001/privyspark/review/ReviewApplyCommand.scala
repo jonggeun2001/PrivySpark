@@ -130,8 +130,10 @@ object ReviewApplyCommand {
               .map(columnName => parseScopeIdentifiers(valueOf(row, columnName)))
               .getOrElse(Seq.empty)
           ))
-        case _ =>
-          None
+        case None =>
+          throw new IllegalArgumentException(
+            s"Unsupported review_status for ${valueOf(row, normalizedColumns("file_identifier"))}: $reviewStatus"
+          )
       }
     }.toSeq
   }

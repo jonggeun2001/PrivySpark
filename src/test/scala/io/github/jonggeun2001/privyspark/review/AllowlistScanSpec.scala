@@ -106,7 +106,7 @@ class AllowlistScanSpec extends AnyFunSuite {
 
       val results = scanned.flatMap(_._2)
       assert(results.size == 1)
-      assert(results.head.review_status == "false_positive")
+      assert(results.head.review_status == "pending")
       assert(results.head.review_reason == "known dummy data")
       assert(results.head.review_invalidated)
     } finally {

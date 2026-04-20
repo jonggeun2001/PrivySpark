@@ -169,6 +169,36 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     }
   }
 
+  test("run fails fast when review_status contains an unsupported value") {
+    val inputRoot = Files.createTempDirectory("privyspark-review-apply-invalid-status-")
+
+    try {
+      Files.write(inputRoot.resolve("users.csv"), "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+
+      val error = intercept[IllegalArgumentException] {
+        ReviewApplyCommand.run(
+          spark,
+          ReviewApplyCliConfig(
+            scanResultsPath = writeScanResultsCsv(
+              inputRoot,
+              "scan_results_invalid_status.csv",
+              "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason\n" +
+                s"${inputRoot.toString},users.csv,email,email,false-postive,typo\n"
+            ).toString,
+            inputRoot = inputRoot.toString,
+            allowlistPath = inputRoot.resolve("allowlist.jsonl").toString,
+            reviewer = "reviewer@example.com"
+          )
+        )
+      }
+
+      assert(error.getMessage.contains("Unsupported review_status"))
+      assert(error.getMessage.contains("false-postive"))
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
   private def writeScanResultsCsv(root: Path, fileName: String, contents: String): Path = {
     val path = root.resolve(fileName)
     Files.write(path, contents.getBytes(StandardCharsets.UTF_8))

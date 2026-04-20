@@ -51,7 +51,7 @@ During the next scan:
 - the result row is removed from the final `scan_results`.
 
 If metadata or checksum changed, the row stays and carries:
-- `review_status=false_positive`
+- `review_status=pending`
 - `review_reason=<previous note>`
 - `review_invalidated=true`
 
