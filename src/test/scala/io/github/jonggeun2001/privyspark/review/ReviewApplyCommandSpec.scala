@@ -158,6 +158,50 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     }
   }
 
+  test("run preserves scope identifiers with leading spaces") {
+    val inputRoot = Files.createTempDirectory("privyspark-review-apply-space-scope-")
+
+    try {
+      val reviewsDir = Files.createDirectories(inputRoot.resolve(" reviews"))
+      val firstCsv = reviewsDir.resolve("a.csv")
+      Files.write(firstCsv, "id\n1\n".getBytes(StandardCharsets.UTF_8))
+      val scopeIdentifiers = Seq(" reviews/a.csv")
+      val (fileSize, fileMtimeEpochMs) = aggregateMetadata(Seq(firstCsv))
+      val allowlistPath = inputRoot.resolve("allowlist.jsonl")
+      val scopedResultsPath = writeScanResultsCsv(
+        inputRoot,
+        "scan_results_scoped_space.csv",
+        Seq(scanResultRow(
+          datasetPath = inputRoot.toString,
+          fileIdentifier = " reviews",
+          columnName = "resident_registration_number",
+          piiType = "rrn",
+          reviewStatus = ReviewStatus.FalsePositive,
+          reviewReason = "dummy data",
+          fileSize = fileSize,
+          fileMtimeEpochMs = fileMtimeEpochMs,
+          reviewScopeFileIdentifiers = scopeIdentifiers,
+          reviewScopeFileFingerprints = scopeFingerprints(inputRoot.toString, scopeIdentifiers)
+        ))
+      )
+
+      ReviewApplyCommand.run(
+        spark,
+        ReviewApplyCliConfig(
+          scanResultsPath = scopedResultsPath.toString,
+          inputRoot = inputRoot.toString,
+          allowlistPath = allowlistPath.toString,
+          reviewer = "reviewer@example.com"
+        )
+      )
+
+      val matcher = AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, allowlistPath.toString)
+      assert(matcher.hasExactCandidate(inputRoot.toString, " reviews/a.csv", "resident_registration_number", "rrn"))
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
   test("run does not write output in dry-run mode") {
     val inputRoot = Files.createTempDirectory("privyspark-review-apply-dry-run-")
 

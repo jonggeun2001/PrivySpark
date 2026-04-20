@@ -18,14 +18,16 @@ object ReviewScopeIdentifierCodec {
     if (normalized.isEmpty) {
       Right(Seq.empty)
     } else {
-      Right(
-        normalized
-          .split(EntrySeparator, -1)
-          .toSeq
-          .map(token => URLDecoder.decode(token, StandardCharsets.UTF_8.name()))
-          .map(_.trim)
-          .filter(_.nonEmpty)
-      )
+      val decoded = normalized
+        .split(EntrySeparator, -1)
+        .toSeq
+        .map(token => URLDecoder.decode(token, StandardCharsets.UTF_8.name()))
+
+      if (decoded.exists(_.isEmpty)) {
+        Left("Malformed review_scope_file_identifiers entry")
+      } else {
+        Right(decoded)
+      }
     }
   }
 }

@@ -233,6 +233,11 @@ object ReviewApplyCommand {
       writer.close()
     }
 
+    if (!fs.exists(path) && fs.exists(backupPath) && !fs.rename(backupPath, path)) {
+      fs.delete(tempPath, false)
+      throw new IllegalStateException(s"Allowlist backup restore failed: $allowlistPath")
+    }
+
     if (fs.exists(backupPath) && !fs.delete(backupPath, false)) {
       fs.delete(tempPath, false)
       throw new IllegalStateException(s"Stale allowlist backup cleanup failed: ${backupPath.toString}")
