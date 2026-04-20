@@ -18,7 +18,9 @@ final case class CliConfig(
   fileParallelism: Option[Int] = None,
   outputFormats: Seq[String] = Seq.empty,
   ignorePatterns: Seq[String] = Seq.empty,
-  ignoreFile: Option[String] = None
+  ignoreFile: Option[String] = None,
+  suppressions: Seq[String] = Seq.empty,
+  suppressionFile: Option[String] = None
 ) {
   def effectiveOutputFormats: Seq[String] = OutputFormats.normalizeAll(outputFormats)
 }
@@ -29,6 +31,19 @@ object Cli {
   private val builder = OParser.builder[CliConfig]
   private object QuietParserSetup extends DefaultOParserSetup {
     override def showUsageOnError: Option[Boolean] = Some(false)
+  }
+
+  private def validateSuppressionArgument(value: String): Option[String] = {
+    val trimmed = Option(value).map(_.trim).getOrElse("")
+    val delimiterIndex = trimmed.lastIndexOf(':')
+    if (delimiterIndex <= 0 || delimiterIndex >= trimmed.length - 1) {
+      Some("suppress must use column:pii_type with non-empty values")
+    } else {
+      val columnName = trimmed.substring(0, delimiterIndex).trim
+      val piiType = trimmed.substring(delimiterIndex + 1).trim
+      if (columnName.nonEmpty && piiType.nonEmpty) None
+      else Some("suppress must use column:pii_type with non-empty values")
+    }
   }
 
   private val parser = {
@@ -116,7 +131,21 @@ object Cli {
       opt[String]("ignore-file")
         .optional()
         .action((value, config) => config.copy(ignoreFile = Some(value)))
-        .text("줄 단위 ignore 패턴 파일 경로")
+        .text("줄 단위 ignore 패턴 파일 경로"),
+      opt[String]("suppress")
+        .unbounded()
+        .optional()
+        .action((value, config) => config.copy(suppressions = config.suppressions :+ value.trim))
+        .validate(value => validateSuppressionArgument(value).fold(success)(failure))
+        .text("column:pii_type 조합을 결과에서 제외. 반복 지정 가능"),
+      opt[String]("suppression-file")
+        .optional()
+        .action((value, config) => config.copy(suppressionFile = Some(value)))
+        .validate { value =>
+          if (Option(value).exists(_.trim.nonEmpty)) success
+          else failure("suppression-file must not be blank")
+        }
+        .text("줄 단위 suppression 파일 경로")
     )
   }
 

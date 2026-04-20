@@ -9,7 +9,7 @@
 - `cli/Cli.scala`: 실행 인자와 기본 실행 옵션
 - `format/FormatDetector.scala`: 확장자 기반 1차 포맷 식별
 - `format/CompressionStreams.scala`: direct compressed text-style file과 compressed tar stream의 codec wrapping
-- `RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
+- `RulesetLoader.scala`: 기본/외부 ruleset과 suppression 로딩, regex 검증
 - `util/DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
 - `detect/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
 - `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: 입력 확장, 그룹화, 스캔 실행
@@ -23,7 +23,7 @@
 
 ## 처리 플로우
 1. 입력 경로 검증
-2. ruleset 로드와 regex 사전 검증
+2. ruleset 로드, regex 사전 검증, ruleset/CLI suppression 병합
 3. 물리 파일 수집과 ignore 패턴 필터
 4. archive 엔트리 확장, workbook 시트 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화, archive entry ignore 필터
 5. `(directory, format)` 기준 1차 그룹화
@@ -41,6 +41,7 @@
 - `scan_results`에는 해석용 샘플 값 두 개를 저장합니다. `sample_matched_fragment`는 검출된 조각 그대로이고, `sample_raw_value`는 앞뒤 최대 50자 문맥만 저장합니다.
 - `--pre-scan-parallelism`은 디렉터리 discovery, 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용합니다.
 - `--ignore`, `--ignore-file`은 물리 파일 수집 직후와 archive entry 확장 단계에서 적용합니다.
+- suppression은 `DetectionAggregator.buildMetrics`에서 metric plan 생성 전에 적용해 제외된 `(column, pii_type)` 조합이 결과 row 자체를 만들지 않게 합니다.
 - 디렉터리 discovery는 BFS 순회로 진행하고, 각 레벨의 `listStatus`는 safety ceiling `64` 안에서 병렬 실행합니다.
 - discovery 이후 pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.

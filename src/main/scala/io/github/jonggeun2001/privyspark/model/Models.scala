@@ -18,6 +18,8 @@ final case class PiiRule(
   matchType: String = PiiRuleMatchType.Value
 )
 
+final case class Suppression(columnName: String, piiType: String)
+
 private[privyspark] final case class MatchCount(
   columnName: String,
   piiType: String,

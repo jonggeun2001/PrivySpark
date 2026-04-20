@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark.scan
 
+import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
 import io.github.jonggeun2001.privyspark.format.ByteProbe.detectPhysicalFormat
 import io.github.jonggeun2001.privyspark.format.CsvInference._
@@ -95,6 +96,7 @@ private[privyspark] object GroupScanner {
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     progressRun: Option[ProgressRun] = None,
     retainPayloads: Boolean = true,
     csvHeadCache: CsvHeadCache = new CsvHeadCache()
@@ -132,6 +134,7 @@ private[privyspark] object GroupScanner {
             fileParallelism,
             fileSampleRatio,
             fileSampleMinFiles,
+            suppressions,
             progressRun,
             csvHeadCache
           )
@@ -162,6 +165,7 @@ private[privyspark] object GroupScanner {
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     selectedSourceKeys: Option[Seq[String]] = None
@@ -191,6 +195,7 @@ private[privyspark] object GroupScanner {
         fileParallelism,
         fileSampleRatio,
         fileSampleMinFiles,
+        suppressions,
         progressRun,
         csvHeadCache
       )
@@ -217,6 +222,7 @@ private[privyspark] object GroupScanner {
         sampleRatio,
         timestamp,
         fileParallelism,
+        suppressions,
         progressRun,
         csvHeadCache,
         fileSampleRatio,
@@ -248,6 +254,7 @@ private[privyspark] object GroupScanner {
         timestamp,
         fileSampleRatio,
         fileSampleMinFiles,
+        suppressions,
         selectedSourceKeys = Some(effectiveSelectedSourceKeys)
       )
       progressRun.foreach { run =>
@@ -309,6 +316,7 @@ private[privyspark] object GroupScanner {
             fileParallelism,
             fileSampleRatio,
             fileSampleMinFiles,
+            suppressions,
             progressRun,
             csvHeadCache
           )
@@ -332,6 +340,7 @@ private[privyspark] object GroupScanner {
             sampleRatio,
             timestamp,
             fileParallelism,
+            suppressions,
             progressRun,
             csvHeadCache,
             fileSampleRatio,
@@ -360,6 +369,7 @@ private[privyspark] object GroupScanner {
     sampleRatio: Double,
     timestamp: String,
     fileParallelism: Int = -1,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     fileSampleRatio: Option[Double] = None,
@@ -418,6 +428,7 @@ private[privyspark] object GroupScanner {
           logicalIdentifierOverride = Some(logicalIdentifier),
           physicalPathOverride = Some(physicalPath),
           readOptions = readOptions,
+          suppressions = suppressions,
           csvHeadCache = csvHeadCache
         )
           .fold(
@@ -583,6 +594,7 @@ private[privyspark] object GroupScanner {
     timestamp: String,
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     selectedSourceKeys: Option[Seq[String]] = None
   ): Seq[ScanResult] = {
     DriverLogger.debug(
@@ -644,8 +656,8 @@ private[privyspark] object GroupScanner {
             )
             Seq.empty
           } else {
-            val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
-            val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts)
+            val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules, suppressions = suppressions)
+            val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts, suppressions = suppressions)
             val groupScanTimestamp = currentScanTimestamp()
             val results = buildScanResults(
               datasetPath,
@@ -695,8 +707,14 @@ private[privyspark] object GroupScanner {
             )
             Seq.empty
           } else {
-            val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules)
-            val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(sampledDf, columnName, effectiveRules, matchCountsByFile)
+            val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules, suppressions = suppressions)
+            val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(
+              sampledDf,
+              columnName,
+              effectiveRules,
+              matchCountsByFile,
+              suppressions = suppressions
+            )
             val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
             val groupScanTimestamp = currentScanTimestamp()
             val results = matchCountsByFile.flatMap { matchCount =>
@@ -739,6 +757,7 @@ private[privyspark] object GroupScanner {
     logicalIdentifierOverride: Option[String] = None,
     physicalPathOverride: Option[String] = None,
     readOptions: ScanReadOptions = ScanReadOptions(),
+    suppressions: SuppressionSet = SuppressionSet.empty,
     csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Either[ScanError, FileScanMetrics] = {
     val physicalPath = physicalPathOverride.getOrElse(filePath)
@@ -773,12 +792,12 @@ private[privyspark] object GroupScanner {
           DriverLogger.debug("scan_file_complete", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "matches" -> 0)
           Right(FileScanMetrics(fileIdentifier, sampledRowCount, Map.empty, Seq.empty, Map.empty, currentScanTimestamp()))
         } else {
-          val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
+          val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules, suppressions = suppressions)
           val nonEmptyValueCounts = DetectionAggregator.countNonEmpty(
             sampledDf,
-            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules)
+            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules, suppressions)
           )
-          val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts)
+          val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts, suppressions = suppressions)
           DriverLogger.debug(
             "scan_file_complete",
             "file" -> physicalPath,
@@ -802,9 +821,10 @@ private[privyspark] object GroupScanner {
     filePath: String,
     rules: Seq[PiiRule],
     sampleRatio: Double,
-    timestamp: String
+    timestamp: String,
+    suppressions: SuppressionSet = SuppressionSet.empty
   ): Either[ScanError, Seq[ScanResult]] = {
-    scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp).map { fileMetrics =>
+    scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp, suppressions = suppressions).map { fileMetrics =>
       buildScanResults(
         datasetPath,
         fileMetrics.scanTimestamp,
@@ -901,6 +921,7 @@ private[privyspark] object GroupScanner {
     fileParallelism: Int,
     fileSampleRatio: Option[Double],
     fileSampleMinFiles: Int,
+    suppressions: SuppressionSet,
     progressRun: Option[ProgressRun],
     csvHeadCache: CsvHeadCache
   ): (Seq[ScanResult], Seq[ScanError]) = {
@@ -946,6 +967,7 @@ private[privyspark] object GroupScanner {
         fileParallelism,
         fileSampleRatio,
         fileSampleMinFiles,
+        suppressions,
         progressRun,
         csvHeadCache
       )

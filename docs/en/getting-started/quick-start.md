@@ -61,6 +61,7 @@ bin/privyspark-submit \
   --pre-scan-parallelism 32 \
   --group-parallelism 16 \
   --file-parallelism 8 \
+  --suppress prdctcd:driver_license_number \
   --ignore "_SUCCESS" \
   --ignore "backup/**"
 ```
@@ -92,6 +93,20 @@ bin/privyspark-submit \
 ```
 
 `--ignore-file` is a UTF-8 text file. Blank lines and `#` comments are ignored. HDFS and object-store URIs can also be passed directly.
+
+## Suppression Example
+
+```bash
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ruleset default \
+  --suppress prdctcd:driver_license_number \
+  --suppression-file scan.suppressions
+```
+
+`--suppression-file` is also UTF-8 text. Each line uses `column:pii_type`, and blank lines plus `#` comments are ignored. If the ruleset YAML already defines `suppressions:`, the CLI entries are union-merged with them.
 
 ## Distributing a Custom Ruleset
 

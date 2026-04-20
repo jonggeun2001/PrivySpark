@@ -19,6 +19,8 @@
 - `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
+- `--suppress <column:pii_type>`: repeatable false-positive suppression rule
+- `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
 
 ## Ignore Patterns
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`
@@ -30,6 +32,12 @@
 - `--ignore-file` is read through Hadoop `FileSystem`. In YARN cluster mode, client-local files must be distributed first with `--files` or `PRIVYSPARK_SPARK_FILES`, then referenced through the distributed alias.
 
 The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `.crc`, log dumps, or backup directories do not inflate I/O, error rows, or report noise.
+
+## Suppression
+- Suppression removes only a specific `(column, pii_type)` result pair. Column names are matched case-insensitively by exact equality.
+- `--suppress` only accepts the `column:pii_type` format.
+- `--suppression-file` is read through Hadoop `FileSystem`. In YARN cluster mode, distribute client-local files first with `--files` or `PRIVYSPARK_SPARK_FILES`, then reference the distributed alias.
+- CLI suppressions are union-merged with ruleset YAML `suppressions:`.
 
 ## Parallelism
 - CLI values are passed directly into application logic.

@@ -22,6 +22,8 @@ class CliSpec extends AnyFunSuite {
     assert(parsed.get.fileParallelism.isEmpty)
     assert(parsed.get.ignorePatterns.isEmpty)
     assert(parsed.get.ignoreFile.isEmpty)
+    assert(parsed.get.suppressions.isEmpty)
+    assert(parsed.get.suppressionFile.isEmpty)
     assert(parsed.get.effectiveOutputFormats == Seq("parquet"))
   }
 
@@ -57,7 +59,15 @@ class CliSpec extends AnyFunSuite {
         "--ignore",
         "backup/**",
         "--ignore-file",
-        "/etc/privyspark/ignore.txt"
+        "/etc/privyspark/ignore.txt",
+        "--suppress",
+        "prdctcd:driver_license_number",
+        "--suppress",
+        "foo:email",
+        "--suppress",
+        "ns:email:email",
+        "--suppression-file",
+        "/etc/privyspark/suppressions.txt"
       )
     )
 
@@ -72,6 +82,8 @@ class CliSpec extends AnyFunSuite {
     assert(parsed.get.effectiveOutputFormats == Seq("csv", "excel"))
     assert(parsed.get.ignorePatterns == Seq("_SUCCESS", "backup/**"))
     assert(parsed.get.ignoreFile.contains("/etc/privyspark/ignore.txt"))
+    assert(parsed.get.suppressions == Seq("prdctcd:driver_license_number", "foo:email", "ns:email:email"))
+    assert(parsed.get.suppressionFile.contains("/etc/privyspark/suppressions.txt"))
   }
 
   test("rejects invalid sampling, parallelism, and output format values") {
@@ -94,6 +106,14 @@ class CliSpec extends AnyFunSuite {
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--file-parallelism", "-1"))
     val invalidOutputFormat =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--output-format", "json"))
+    val missingSuppressionSeparator =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd"))
+    val missingSuppressionColumn =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", ":email"))
+    val missingSuppressionPiiType =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd:"))
+    val blankSuppressionFile =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppression-file", "   "))
 
     assert(zeroRatio.isEmpty)
     assert(overOneRatio.isEmpty)
@@ -106,6 +126,10 @@ class CliSpec extends AnyFunSuite {
     assert(zeroGroupParallelism.isEmpty)
     assert(negativeFileParallelism.isEmpty)
     assert(invalidOutputFormat.isEmpty)
+    assert(missingSuppressionSeparator.isEmpty)
+    assert(missingSuppressionColumn.isEmpty)
+    assert(missingSuppressionPiiType.isEmpty)
+    assert(blankSuppressionFile.isEmpty)
   }
 
   test("captures parser errors without terminating") {
@@ -117,6 +141,10 @@ class CliSpec extends AnyFunSuite {
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--file-sample-min-files", "0"))
     val invalidOutputFormat =
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--output-format", "json"))
+    val invalidSuppression =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd"))
+    val invalidSuppressionFile =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--suppression-file", " "))
 
     assert(missingPath.config.isEmpty)
     assert(missingPath.errors.exists(_.contains("--path")))
@@ -128,5 +156,9 @@ class CliSpec extends AnyFunSuite {
     assert(invalidFileSampleMinFiles.errors.exists(_.contains("file-sample-min-files must be >= 1")))
     assert(invalidOutputFormat.config.isEmpty)
     assert(invalidOutputFormat.errors.exists(_.contains("output-format must be one of: parquet, csv, excel")))
+    assert(invalidSuppression.config.isEmpty)
+    assert(invalidSuppression.errors.exists(_.contains("suppress must use column:pii_type with non-empty values")))
+    assert(invalidSuppressionFile.config.isEmpty)
+    assert(invalidSuppressionFile.errors.exists(_.contains("suppression-file must not be blank")))
   }
 }

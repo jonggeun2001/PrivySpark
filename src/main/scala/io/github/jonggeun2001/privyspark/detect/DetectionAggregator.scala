@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark.detect
 
+import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType, SampleValue}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.spark.sql.functions.{col, first, lit, sum => sparkSum, trim, when}
@@ -66,13 +67,22 @@ object DetectionAggregator {
   }
 
   def aggregate(sampledDf: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
-    aggregate(sampledDf, rules, AggregationConfig())
+    aggregate(sampledDf, rules, SuppressionSet.empty, AggregationConfig())
   }
 
   private[privyspark] def aggregate(
     sampledDf: DataFrame,
     rules: Seq[PiiRule],
     config: AggregationConfig
+  ): Seq[MatchCount] = {
+    aggregate(sampledDf, rules, SuppressionSet.empty, config)
+  }
+
+  private[privyspark] def aggregate(
+    sampledDf: DataFrame,
+    rules: Seq[PiiRule],
+    suppressions: SuppressionSet,
+    config: AggregationConfig = AggregationConfig()
   ): Seq[MatchCount] = {
     val columns = sampledDf.columns.toSeq
     logDebug("detection_aggregation_start", "scope" -> "dataset", "columns" -> columns.size, "rules" -> rules.size)
@@ -84,7 +94,7 @@ object DetectionAggregator {
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
     require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
 
-    val metrics = buildMetrics(columns, rules)
+    val metrics = buildMetrics(columns, rules, suppressions)
     if (metrics.isEmpty) {
       logDebug("detection_aggregation_complete", "scope" -> "dataset", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
@@ -140,7 +150,7 @@ object DetectionAggregator {
     fileIdentifierColumn: String,
     rules: Seq[PiiRule]
   ): Seq[FileMatchCount] = {
-    aggregateByFile(sampledDf, fileIdentifierColumn, rules, AggregationConfig())
+    aggregateByFile(sampledDf, fileIdentifierColumn, rules, SuppressionSet.empty, AggregationConfig())
   }
 
   private[privyspark] def aggregateByFile(
@@ -148,6 +158,16 @@ object DetectionAggregator {
     fileIdentifierColumn: String,
     rules: Seq[PiiRule],
     config: AggregationConfig
+  ): Seq[FileMatchCount] = {
+    aggregateByFile(sampledDf, fileIdentifierColumn, rules, SuppressionSet.empty, config)
+  }
+
+  private[privyspark] def aggregateByFile(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    rules: Seq[PiiRule],
+    suppressions: SuppressionSet,
+    config: AggregationConfig = AggregationConfig()
   ): Seq[FileMatchCount] = {
     require(fileIdentifierColumn.nonEmpty, "fileIdentifierColumn must not be empty")
 
@@ -161,7 +181,7 @@ object DetectionAggregator {
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
     require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
 
-    val metrics = buildMetrics(columns, rules)
+    val metrics = buildMetrics(columns, rules, suppressions)
     if (metrics.isEmpty) {
       logDebug("detection_aggregation_complete", "scope" -> "file", "metrics" -> 0, "results" -> 0, "mode" -> "noop")
       return Seq.empty
@@ -301,7 +321,15 @@ object DetectionAggregator {
     columns: Seq[String],
     rules: Seq[PiiRule]
   ): Seq[String] = {
-    buildMetrics(columns, rules).map(_.columnName).distinct
+    columnsCoveredByRules(columns, rules, SuppressionSet.empty)
+  }
+
+  private[privyspark] def columnsCoveredByRules(
+    columns: Seq[String],
+    rules: Seq[PiiRule],
+    suppressions: SuppressionSet
+  ): Seq[String] = {
+    buildMetrics(columns, rules, suppressions).map(_.columnName).distinct
   }
 
   def sampleMatches(
@@ -309,7 +337,7 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[MatchCount]
   ): Map[String, SampleValue] = {
-    sampleMatches(sampledDf, rules, matchCounts, AggregationConfig())
+    sampleMatches(sampledDf, rules, matchCounts, SuppressionSet.empty, AggregationConfig())
   }
 
   private[privyspark] def sampleMatches(
@@ -317,6 +345,16 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[MatchCount],
     config: AggregationConfig
+  ): Map[String, SampleValue] = {
+    sampleMatches(sampledDf, rules, matchCounts, SuppressionSet.empty, config)
+  }
+
+  private[privyspark] def sampleMatches(
+    sampledDf: DataFrame,
+    rules: Seq[PiiRule],
+    matchCounts: Seq[MatchCount],
+    suppressions: SuppressionSet,
+    config: AggregationConfig = AggregationConfig()
   ): Map[String, SampleValue] = {
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
     require(config.legacyFallbackThreshold > 0, "legacyFallbackThreshold must be > 0")
@@ -326,7 +364,7 @@ object DetectionAggregator {
     } else {
       val requestedKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
       val requestedAliases = matchCounts.map(_.metricAlias).filter(_.nonEmpty).toSet
-      val metrics = buildMetrics(sampledDf.columns.toSeq, rules).filter { metric =>
+      val metrics = buildMetrics(sampledDf.columns.toSeq, rules, suppressions).filter { metric =>
         if (requestedAliases.nonEmpty) {
           requestedAliases.contains(metric.metricKey)
         } else {
@@ -363,7 +401,7 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[FileMatchCount]
   ): Map[(String, String), SampleValue] = {
-    sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, AggregationConfig())
+    sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, SuppressionSet.empty, AggregationConfig())
   }
 
   private[privyspark] def sampleMatchesByFile(
@@ -372,6 +410,17 @@ object DetectionAggregator {
     rules: Seq[PiiRule],
     matchCounts: Seq[FileMatchCount],
     config: AggregationConfig
+  ): Map[(String, String), SampleValue] = {
+    sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, SuppressionSet.empty, config)
+  }
+
+  private[privyspark] def sampleMatchesByFile(
+    sampledDf: DataFrame,
+    fileIdentifierColumn: String,
+    rules: Seq[PiiRule],
+    matchCounts: Seq[FileMatchCount],
+    suppressions: SuppressionSet,
+    config: AggregationConfig = AggregationConfig()
   ): Map[(String, String), SampleValue] = {
     require(fileIdentifierColumn.nonEmpty, "fileIdentifierColumn must not be empty")
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
@@ -386,7 +435,7 @@ object DetectionAggregator {
         .toSet
       val requestedMetricKeys = matchCounts.map(matchCount => (matchCount.columnName, matchCount.piiType)).toSet
       val requestedMetricAliases = requestedAliases.map(_._2)
-      val metrics = buildMetrics(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules)
+      val metrics = buildMetrics(sampledDf.columns.toSeq.filterNot(_ == fileIdentifierColumn), rules, suppressions)
         .filter { metric =>
           if (requestedMetricAliases.nonEmpty) {
             requestedMetricAliases.contains(metric.metricKey)
@@ -418,14 +467,16 @@ object DetectionAggregator {
     }
   }
 
-  private def buildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[Metric] = {
+  private def buildMetrics(columns: Seq[String], rules: Seq[PiiRule], suppressions: SuppressionSet): Seq[Metric] = {
     columns.zipWithIndex.flatMap {
       case (columnName, columnIndex) =>
-        val normalizedColumnName = columnName.toLowerCase
+        val normalizedColumnName = SuppressionSet.normalizeColumnName(columnName)
         rules.zipWithIndex.flatMap {
           case (rule, ruleIndex) =>
-            val shouldTestColumn =
-              rule.columnHints.isEmpty || rule.columnHints.exists(hint => normalizedColumnName.contains(hint.toLowerCase))
+            val passesHint =
+              rule.columnHints.isEmpty || rule.columnHints.exists(hint => normalizedColumnName.contains(SuppressionSet.normalizeColumnName(hint)))
+            val notSuppressed = !suppressions.isSuppressed(normalizedColumnName, rule.piiType)
+            val shouldTestColumn = passesHint && notSuppressed
 
             if (shouldTestColumn) {
               val alias = s"m_${columnIndex}_${ruleIndex}"
