@@ -73,21 +73,41 @@ private[privyspark] object JsonCodec {
   }
 
   private def findJsonFieldValueStart(json: String, field: String): Option[Int] = {
-    val fieldToken = "\"" + escapeJson(field) + "\""
-    var searchFrom = 0
+    var index = skipWhitespace(json, 0)
+    if (index >= json.length || json.charAt(index) != '{') {
+      return None
+    }
 
-    while (searchFrom >= 0 && searchFrom < json.length) {
-      val fieldIndex = json.indexOf(fieldToken, searchFrom)
-      if (fieldIndex < 0) {
+    index += 1
+    while (index < json.length) {
+      index = skipWhitespace(json, index)
+      if (index >= json.length || json.charAt(index) == '}') {
         return None
       }
 
-      val colonIndex = skipWhitespace(json, fieldIndex + fieldToken.length)
-      if (colonIndex < json.length && json.charAt(colonIndex) == ':') {
-        return Some(skipWhitespace(json, colonIndex + 1))
-      }
+      parseJsonString(json, index) match {
+        case Some((fieldName, afterFieldName)) =>
+          val colonIndex = skipWhitespace(json, afterFieldName)
+          if (colonIndex >= json.length || json.charAt(colonIndex) != ':') {
+            return None
+          }
 
-      searchFrom = fieldIndex + fieldToken.length
+          val valueStart = skipWhitespace(json, colonIndex + 1)
+          if (fieldName == field) {
+            return Some(valueStart)
+          }
+
+          val nextIndex = skipJsonValue(json, valueStart)
+          if (nextIndex < 0) {
+            return None
+          }
+          index = skipWhitespace(json, nextIndex)
+          if (index < json.length && json.charAt(index) == ',') {
+            index += 1
+          }
+        case None =>
+          return None
+      }
     }
 
     None
@@ -147,5 +167,56 @@ private[privyspark] object JsonCodec {
     }
 
     None
+  }
+
+  private def skipJsonValue(json: String, startIndex: Int): Int = {
+    if (startIndex >= json.length) {
+      -1
+    } else {
+      json.charAt(startIndex) match {
+        case '"' =>
+          parseJsonString(json, startIndex).map(_._2).getOrElse(-1)
+        case '{' =>
+          skipJsonStructure(json, startIndex, '{', '}')
+        case '[' =>
+          skipJsonStructure(json, startIndex, '[', ']')
+        case _ =>
+          var index = startIndex
+          while (index < json.length && json.charAt(index) != ',' && json.charAt(index) != '}' && json.charAt(index) != ']') {
+            index += 1
+          }
+          index
+      }
+    }
+  }
+
+  private def skipJsonStructure(json: String, startIndex: Int, openChar: Char, closeChar: Char): Int = {
+    var depth = 0
+    var index = startIndex
+
+    while (index < json.length) {
+      json.charAt(index) match {
+        case '"' =>
+          parseJsonString(json, index) match {
+            case Some((_, nextIndex)) =>
+              index = nextIndex
+            case None =>
+              return -1
+          }
+        case ch if ch == openChar =>
+          depth += 1
+          index += 1
+        case ch if ch == closeChar =>
+          depth -= 1
+          index += 1
+          if (depth == 0) {
+            return index
+          }
+        case _ =>
+          index += 1
+      }
+    }
+
+    -1
   }
 }

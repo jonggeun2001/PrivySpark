@@ -84,6 +84,22 @@ private[privyspark] object GroupScanner {
     }
   }
 
+  private def comparableResultPayloads(results: Seq[ScanResult]): Seq[(String, String, String, Long, Long, Double, Double, Double)] =
+    results
+      .map(result =>
+        (
+          result.file_identifier,
+          result.column_name,
+          result.pii_type,
+          result.match_count,
+          result.sampled_row_count,
+          result.match_ratio,
+          result.non_empty_match_ratio,
+          result.confidence
+        )
+      )
+      .sortBy(value => (value._1, value._2, value._3))
+
   private def stageFileSnapshot(
     conf: org.apache.hadoop.conf.Configuration,
     datasetPath: String,
@@ -354,9 +370,8 @@ private[privyspark] object GroupScanner {
     sampleRatio: Double,
     timestamp: String,
     suppressions: SuppressionSet,
-    allowlistMatcher: AllowlistMatcher,
-    allowlistInputRoot: Option[String],
     matchedSourceKeys: Seq[String],
+    batchFileIdentifierValuesBySourceKey: Map[String, String],
     batchFileIdentifierColumnName: String,
     selectedFileCount: Int,
     csvHeadCache: CsvHeadCache = new CsvHeadCache()
@@ -371,6 +386,7 @@ private[privyspark] object GroupScanner {
         () => {
           val physicalPath = resolvePhysicalPath(group, sourceKey)
           val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
+          val batchFileIdentifierValue = batchFileIdentifierValuesBySourceKey.getOrElse(sourceKey, physicalPath)
           logReviewSnapshotFile("batch", physicalPath, logicalIdentifier)
           sourceKey -> scanSourceKeyUsingSnapshot(
             spark,
@@ -382,7 +398,7 @@ private[privyspark] object GroupScanner {
             timestamp,
             suppressions,
             csvHeadCache,
-            injectedFileIdentifierColumn = Some(batchFileIdentifierColumnName -> physicalPath)
+            injectedFileIdentifierColumn = Some(batchFileIdentifierColumnName -> batchFileIdentifierValue)
           )
         }
       })
@@ -413,14 +429,7 @@ private[privyspark] object GroupScanner {
           )
         }
       }
-
-      applyAllowlist(
-        spark.sparkContext.hadoopConfiguration,
-        datasetPath,
-        allowlistMatcher,
-        allowlistInputRoot,
-        results
-      )
+      results
     }
   }
 
@@ -931,6 +940,17 @@ private[privyspark] object GroupScanner {
             } else {
               logReviewSnapshotStart("file", matchedFiles = 1, selectedFiles = 1)
               logReviewSnapshotFile("file", physicalPath, logicalIdentifier)
+              val provisionalResults = buildScanResults(
+                datasetPath,
+                provisionalMetrics.scanTimestamp,
+                provisionalMetrics.fileIdentifier,
+                provisionalMetrics.sampledRowCount,
+                provisionalMetrics.nonEmptyValueCounts,
+                provisionalMetrics.matchCounts,
+                provisionalMetrics.sampleValues,
+                provisionalMetrics.fileSize,
+                provisionalMetrics.fileMtimeEpochMs
+              )
               scanSourceKeyUsingSnapshot(
                 spark,
                 datasetPath,
@@ -941,7 +961,24 @@ private[privyspark] object GroupScanner {
                 timestamp,
                 suppressions,
                 csvHeadCache
-              )
+              ).flatMap { snapshotMetrics =>
+                val snapshotResults = buildScanResults(
+                  datasetPath,
+                  snapshotMetrics.scanTimestamp,
+                  snapshotMetrics.fileIdentifier,
+                  snapshotMetrics.sampledRowCount,
+                  snapshotMetrics.nonEmptyValueCounts,
+                  snapshotMetrics.matchCounts,
+                  snapshotMetrics.sampleValues,
+                  snapshotMetrics.fileSize,
+                  snapshotMetrics.fileMtimeEpochMs
+                )
+                if (comparableResultPayloads(provisionalResults) == comparableResultPayloads(snapshotResults)) {
+                  Right(snapshotMetrics)
+                } else {
+                  Left(ScanError(datasetPath, timestamp, logicalIdentifier, "Review snapshot changed during rescan"))
+                }
+              }
             }
           }
         }
@@ -1159,6 +1196,7 @@ private[privyspark] object GroupScanner {
     val effectiveSelectedSourceKeys =
       selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
     val fileSamplingApplied = effectiveSelectedSourceKeys.size < group.filePaths.size
+    val hasDuplicateSelectedSourceKeys = effectiveSelectedSourceKeys.distinct.size != effectiveSelectedSourceKeys.size
     val physicalPaths = effectiveSelectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
     val effectiveSampleRatio = if (fileSamplingApplied) 1.0 else sampleRatio
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
@@ -1218,6 +1256,14 @@ private[privyspark] object GroupScanner {
             Seq.empty
           } else {
             val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules, suppressions = suppressions)
+            val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(
+              sampledDf,
+              columnName,
+              effectiveRules,
+              matchCountsByFile,
+              suppressions = suppressions
+            )
+            val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
             val matchedSourceKeys = matchCountsByFile
               .map { matchCount =>
                 resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier).getOrElse {
@@ -1225,7 +1271,32 @@ private[privyspark] object GroupScanner {
                 }
               }
               .distinct
-            val filteredResults = rescanBatchMatchedFilesWithSnapshots(
+            val batchFileIdentifierValuesBySourceKey = matchCountsByFile
+              .flatMap { matchCount =>
+                resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier).map(_ -> matchCount.fileIdentifier)
+              }
+              .toMap
+            val groupScanTimestamp = currentScanTimestamp()
+            val provisionalResults = matchCountsByFile.flatMap { matchCount =>
+              sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
+                val sourceKey = resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier)
+                buildScanResults(
+                  datasetPath,
+                  groupScanTimestamp,
+                  resolveLogicalIdentifierForPhysicalPath(group, datasetPath, matchCount.fileIdentifier),
+                  sampledRowCount,
+                  Map(matchCount.columnName -> nonEmptyCountsByFile.getOrElse((matchCount.fileIdentifier, matchCount.columnName), sampledRowCount)),
+                  Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count, matchCount.metricAlias)),
+                  sampleValuesByFile
+                    .get((matchCount.fileIdentifier, matchCount.metricAlias))
+                    .map(value => Map(matchCount.metricAlias -> value))
+                    .getOrElse(Map.empty),
+                  sourceKey.flatMap(group.fileSizesByKey.get).getOrElse(0L),
+                  sourceKey.flatMap(group.fileMtimesByKey.get).getOrElse(0L)
+                ).headOption
+              }
+            }
+            val snapshotResults = rescanBatchMatchedFilesWithSnapshots(
               spark,
               datasetPath,
               group,
@@ -1233,11 +1304,20 @@ private[privyspark] object GroupScanner {
               effectiveSampleRatio,
               timestamp,
               suppressions,
-              allowlistMatcher,
-              allowlistInputRoot,
               matchedSourceKeys,
+              batchFileIdentifierValuesBySourceKey,
               columnName,
               selectedFileCount = effectiveSelectedSourceKeys.size
+            )
+            if (!hasDuplicateSelectedSourceKeys && comparableResultPayloads(provisionalResults) != comparableResultPayloads(snapshotResults)) {
+              throw new IllegalStateException(s"Review snapshot changed during batch rescan: ${group.directoryPath}")
+            }
+            val filteredResults = applyAllowlist(
+              spark.sparkContext.hadoopConfiguration,
+              datasetPath,
+              allowlistMatcher,
+              allowlistInputRoot,
+              snapshotResults
             )
             DriverLogger.debug(
               "group_scan_batch_complete",

@@ -2842,9 +2842,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
             result.file_identifier,
             result.column_name,
             result.match_count,
-            result.sampled_row_count,
-            result.sample_raw_value,
-            result.sample_matched_fragment
+            result.sampled_row_count
           )
         )
       }
