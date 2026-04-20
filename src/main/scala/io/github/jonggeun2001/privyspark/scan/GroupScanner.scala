@@ -640,6 +640,8 @@ private[privyspark] object GroupScanner {
             formatOverride = Some(group.format),
             logicalIdentifierOverride = Some(logicalIdentifier),
             physicalPathOverride = Some(physicalPath),
+            fileSizeOverride = group.fileSizesByKey.get(sourceKey),
+            fileMtimeEpochMsOverride = group.fileMtimesByKey.get(sourceKey),
             readOptions = readOptions,
             csvHeadCache = csvHeadCache
           )
