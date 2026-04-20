@@ -1413,22 +1413,43 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         "# comment\n" +
           "\n" +
           "prdctcd:driver_license_number\n" +
-          " customer_phone : phone_number \n")
+          " customer_phone : phone_number \n" +
+          "ns:email:email\n")
 
       val parsed = PrivySparkApp.parseCliSuppressions(
         spark.sparkContext.hadoopConfiguration,
-        Seq("foo:email"),
+        Seq("foo:email", "profile:email:email"),
         Some(suppressionFile.toString)
       )
 
       assert(parsed == Seq(
         Suppression("foo", "email"),
+        Suppression("profile:email", "email"),
         Suppression("prdctcd", "driver_license_number"),
-        Suppression("customer_phone", "phone_number")
+        Suppression("customer_phone", "phone_number"),
+        Suppression("ns:email", "email")
       ))
     } finally {
       Files.deleteIfExists(suppressionFile)
     }
+  }
+
+  test("warnUnknownSuppressions logs cli and file sources") {
+    val logs = captureStderr {
+      PrivySparkApp.warnUnknownSuppressions(
+        Seq(
+          PrivySparkApp.ParsedSuppression(Suppression("prdctcd", "driver_licence_number"), "cli:1"),
+          PrivySparkApp.ParsedSuppression(Suppression("ns:email", "phonee"), "file:scan.suppressions:2")
+        ),
+        Set("email", "phone_number")
+      )
+    }
+
+    assert(logs.contains("ruleset_suppression_unknown_pii_type"))
+    assert(logs.contains("suppression_source=cli:1"))
+    assert(logs.contains("suppression_source=file:scan.suppressions:2"))
+    assert(logs.contains("pii_type=driver_licence_number"))
+    assert(logs.contains("pii_type=phonee"))
   }
 
   test("selectSampledFileKeys keeps at least one uniformly sampled file") {

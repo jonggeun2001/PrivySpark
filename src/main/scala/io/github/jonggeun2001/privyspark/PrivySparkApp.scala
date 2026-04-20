@@ -24,6 +24,8 @@ import scala.util.control.ControlThrowable
 import scala.util.control.NonFatal
 
 object PrivySparkApp {
+  private[privyspark] final case class ParsedSuppression(suppression: Suppression, source: String)
+
   private[privyspark] def resetDebugCache(): Unit = {
     DriverLogger.resetCache()
   }
@@ -131,11 +133,13 @@ object PrivySparkApp {
     )
 
     val bundle = RulesetLoader.loadBundle(config.ruleset)
-    val cliSuppressions = parseCliSuppressions(
+    val parsedCliSuppressions = parseCliSuppressionEntries(
       spark.sparkContext.hadoopConfiguration,
       config.suppressions,
       config.suppressionFile
     )
+    warnUnknownSuppressions(parsedCliSuppressions, bundle.rules.map(_.piiType).toSet)
+    val cliSuppressions = parsedCliSuppressions.map(_.suppression)
     val suppressions = SuppressionSet.from(bundle.suppressions).merge(SuppressionSet.from(cliSuppressions))
     val rules = bundle.rules
     DriverLogger.debug(
@@ -269,13 +273,23 @@ object PrivySparkApp {
     inline: Seq[String],
     file: Option[String]
   ): Seq[Suppression] = {
-    inline.map(rawValue => parseSuppressionSpec(rawValue, "cli")) ++ file.toSeq.flatMap(loadSuppressionFile(conf, _))
+    parseCliSuppressionEntries(conf, inline, file).map(_.suppression)
   }
 
-  private def loadSuppressionFile(conf: Configuration, path: String): Seq[Suppression] = {
+  private def parseCliSuppressionEntries(
+    conf: Configuration,
+    inline: Seq[String],
+    file: Option[String]
+  ): Seq[ParsedSuppression] = {
+    inline.zipWithIndex.map {
+      case (rawValue, index) => parseSuppressionSpec(rawValue, s"cli:${index + 1}")
+    } ++ file.toSeq.flatMap(loadSuppressionFile(conf, _))
+  }
+
+  private def loadSuppressionFile(conf: Configuration, path: String): Seq[ParsedSuppression] = {
     val normalizedPath = Option(path).map(_.trim).getOrElse("")
     if (normalizedPath.isEmpty) {
-      Seq.empty
+      throw new IllegalArgumentException("suppression-file must not be blank")
     } else {
       resolveLocalSuppressionFile(normalizedPath) match {
         case Some(localPath) =>
@@ -306,8 +320,8 @@ object PrivySparkApp {
     }
   }
 
-  private def readSuppressions(reader: BufferedReader, source: String): Seq[Suppression] = {
-    val suppressions = ArrayBuffer.empty[Suppression]
+  private def readSuppressions(reader: BufferedReader, source: String): Seq[ParsedSuppression] = {
+    val suppressions = ArrayBuffer.empty[ParsedSuppression]
 
     try {
       var lineNumber = 1
@@ -331,15 +345,34 @@ object PrivySparkApp {
     if (trimmed.isEmpty || trimmed.startsWith("#")) None else Some(trimmed)
   }
 
-  private def parseSuppressionSpec(rawValue: String, source: String): Suppression = {
-    val parts = Option(rawValue).map(_.split(":", 2)).getOrElse(Array.empty[String])
-    val columnName = if (parts.length == 2) parts(0).trim else ""
-    val piiType = if (parts.length == 2) parts(1).trim else ""
+  private def parseSuppressionSpec(rawValue: String, source: String): ParsedSuppression = {
+    val trimmed = Option(rawValue).map(_.trim).getOrElse("")
+    val delimiterIndex = trimmed.lastIndexOf(':')
+    val columnName =
+      if (delimiterIndex > 0 && delimiterIndex < trimmed.length - 1) trimmed.substring(0, delimiterIndex).trim else ""
+    val piiType =
+      if (delimiterIndex > 0 && delimiterIndex < trimmed.length - 1) trimmed.substring(delimiterIndex + 1).trim else ""
 
     if (columnName.isEmpty || piiType.isEmpty) {
       throw new IllegalArgumentException(s"Invalid suppression entry ($source): $rawValue")
     }
 
-    Suppression(columnName, piiType)
+    ParsedSuppression(Suppression(columnName, piiType), source)
+  }
+
+  private[privyspark] def warnUnknownSuppressions(
+    suppressions: Seq[ParsedSuppression],
+    definedPiiTypes: Set[String]
+  ): Unit = {
+    suppressions.foreach { parsedSuppression =>
+      if (!definedPiiTypes.contains(parsedSuppression.suppression.piiType)) {
+        DriverLogger.warn(
+          "ruleset_suppression_unknown_pii_type",
+          "column" -> parsedSuppression.suppression.columnName,
+          "pii_type" -> parsedSuppression.suppression.piiType,
+          "suppression_source" -> parsedSuppression.source
+        )
+      }
+    }
   }
 }

@@ -34,12 +34,13 @@ object Cli {
   }
 
   private def validateSuppressionArgument(value: String): Option[String] = {
-    val parts = Option(value).map(_.split(":", 2)).getOrElse(Array.empty[String])
-    if (parts.length != 2) {
+    val trimmed = Option(value).map(_.trim).getOrElse("")
+    val delimiterIndex = trimmed.lastIndexOf(':')
+    if (delimiterIndex <= 0 || delimiterIndex >= trimmed.length - 1) {
       Some("suppress must use column:pii_type with non-empty values")
     } else {
-      val columnName = parts(0).trim
-      val piiType = parts(1).trim
+      val columnName = trimmed.substring(0, delimiterIndex).trim
+      val piiType = trimmed.substring(delimiterIndex + 1).trim
       if (columnName.nonEmpty && piiType.nonEmpty) None
       else Some("suppress must use column:pii_type with non-empty values")
     }
@@ -140,6 +141,10 @@ object Cli {
       opt[String]("suppression-file")
         .optional()
         .action((value, config) => config.copy(suppressionFile = Some(value)))
+        .validate { value =>
+          if (Option(value).exists(_.trim.nonEmpty)) success
+          else failure("suppression-file must not be blank")
+        }
         .text("줄 단위 suppression 파일 경로")
     )
   }

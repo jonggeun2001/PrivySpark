@@ -48,6 +48,7 @@ suppressions:
 ### CLI 로 추가 suppression
 - `--suppress <column:pii_type>`는 반복 지정 가능합니다.
 - `--suppression-file <path>`는 UTF-8 텍스트 파일을 줄 단위 `column:pii_type` 형식으로 읽고, 빈 줄과 `#` 주석을 무시합니다.
+- CLI/file 형식에서는 마지막 `:`를 구분자로 사용하므로 컬럼명 안에 `:`가 포함돼도 표현할 수 있습니다.
 - CLI suppression은 ruleset `suppressions:`를 대체하지 않고 union으로 합쳐집니다.
 - YARN cluster에서 client 로컬 suppression 파일을 쓰려면 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 먼저 배포한 뒤 alias를 `--suppression-file`에 넘겨야 합니다.
 

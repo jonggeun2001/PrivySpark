@@ -48,6 +48,7 @@ suppressions:
 ### CLI Overrides
 - `--suppress <column:pii_type>` is repeatable.
 - `--suppression-file <path>` reads UTF-8 lines in `column:pii_type` format and ignores blank lines plus `#` comments.
+- CLI/file parsing uses the last `:` as the delimiter, so column names may themselves contain `:`.
 - CLI suppressions merge with ruleset `suppressions:`. They do not replace them.
 - In YARN cluster mode, distribute client-local suppression files first with `--files` or `PRIVYSPARK_SPARK_FILES`, then pass the distributed alias to `--suppression-file`.
 
