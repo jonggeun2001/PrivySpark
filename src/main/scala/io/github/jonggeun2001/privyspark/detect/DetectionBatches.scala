@@ -30,6 +30,10 @@ private[privyspark] object DetectionBatches {
     metrics: Seq[DetectionAggregator.Metric],
     maxExpressionsPerAgg: Int
   ): Seq[MatchCount] = {
+    if (DetectionAggregator.forceDatasetBatchFailure) {
+      throw new RuntimeException("forced-dataset-batch-failure")
+    }
+
     DetectionMetrics.groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).flatMap { batch =>
       val expressions = DetectionExpressions.buildExpressions(batch)
       val row = sampledDf.agg(expressions.head, expressions.tail: _*).head()
@@ -59,6 +63,10 @@ private[privyspark] object DetectionBatches {
     metrics: Seq[DetectionAggregator.Metric],
     maxExpressionsPerAgg: Int
   ): Seq[DetectionAggregator.FileMatchCount] = {
+    if (DetectionAggregator.forceFileBatchFailure) {
+      throw new RuntimeException("forced-file-batch-failure")
+    }
+
     DetectionMetrics.groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).flatMap { batch =>
       val expressions = DetectionExpressions.buildExpressions(batch)
       val groupedRows = sampledDf.groupBy(col(fileIdentifierColumn)).agg(expressions.head, expressions.tail: _*).collect()

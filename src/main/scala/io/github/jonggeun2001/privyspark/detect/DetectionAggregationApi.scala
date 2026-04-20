@@ -61,6 +61,7 @@ private[privyspark] object DetectionAggregationApi {
       results
     } catch {
       case NonFatal(e) =>
+        DetectionAggregator.logFallback("dataset", expressionCount, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
         val results = DetectionBatches.aggregateSafeLegacy(sampledDf, metrics)
         DetectionAggregator.logDebug(
           "detection_aggregation_complete",
@@ -129,7 +130,8 @@ private[privyspark] object DetectionAggregationApi {
       )
       results
     } catch {
-      case NonFatal(_) =>
+      case NonFatal(e) =>
+        DetectionAggregator.logFallback("file", expressionCount, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
         val results = DetectionBatches.aggregateByFileSafeLegacy(sampledDf, fileIdentifierColumn, metrics)
         DetectionAggregator.logDebug(
           "detection_aggregation_complete",
