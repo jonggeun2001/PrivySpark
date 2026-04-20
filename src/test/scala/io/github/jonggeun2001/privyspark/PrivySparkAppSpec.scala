@@ -2708,6 +2708,103 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroupBatch skips review snapshot rescans when no review rows are produced") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-review-skip-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.csv")
+      val file2 = inputDir.resolve("part-0002.csv")
+
+      writeText(file1,
+        "name,email\n" +
+          "alice,not-an-email\n")
+      writeText(file2,
+        "name,email\n" +
+          "bob,still-not-an-email\n")
+
+      val group = ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(file1.toString, file2.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          val results = GroupScanner.scanGroupBatch(
+            spark,
+            inputDir.toString,
+            group,
+            rules,
+            sampleRatio = 1.0,
+            timestamp = "2026-04-20T00:00:00Z"
+          )
+
+          assert(results.isEmpty)
+        }
+      }
+
+      assert(logs.contains("group_scan_review_snapshot_skipped"))
+      assert(logs.contains("mode=batch"))
+      assert(logs.contains("matched_files=0"))
+      assert(!logs.contains("group_scan_review_snapshot_file"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupBatch rescans only matched files for review snapshots") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-review-match-")
+
+    try {
+      val matchedFile = inputDir.resolve("part-0001.csv")
+      val cleanFile = inputDir.resolve("part-0002.csv")
+
+      writeText(matchedFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(cleanFile,
+        "name,email\n" +
+          "bob,not-an-email\n")
+
+      val group = ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(matchedFile.toString, cleanFile.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          val results = GroupScanner.scanGroupBatch(
+            spark,
+            inputDir.toString,
+            group,
+            rules,
+            sampleRatio = 1.0,
+            timestamp = "2026-04-20T00:05:00Z"
+          )
+
+          assert(results.size == 1)
+          assert(results.map(_.file_identifier) == Seq("part-0001.csv"))
+          assert(results.forall(_.review_scope_file_fingerprints.nonEmpty))
+        }
+      }
+
+      val reviewSnapshotLines = logs.linesIterator.filter(_.contains("group_scan_review_snapshot_file")).toSeq
+      assert(logs.contains("group_scan_review_snapshot_start"))
+      assert(logs.contains("mode=batch"))
+      assert(logs.contains("matched_files=1"))
+      assert(reviewSnapshotLines.size == 1)
+      assert(reviewSnapshotLines.exists(_.contains(s"file=${matchedFile.toString}")))
+      assert(!reviewSnapshotLines.exists(_.contains(cleanFile.toString)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroupBatch samples files and ignores row sampling when file-sample-ratio is configured") {
     val inputDir = Files.createTempDirectory("privyspark-group-batch-file-sampling-")
 
@@ -3024,6 +3121,59 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(results.nonEmpty)
       assert(errors.isEmpty)
       assert(persistedRdds.isEmpty, s"expected no persisted RDDs, found: ${persistedRdds.mkString(", ")}")
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile rescans only matched files for review snapshots") {
+    val inputDir = Files.createTempDirectory("privyspark-group-file-review-match-")
+
+    try {
+      val matchedFile = inputDir.resolve("part-0001.csv")
+      val cleanFile = inputDir.resolve("part-0002.csv")
+
+      writeText(matchedFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(cleanFile,
+        "name,email\n" +
+          "bob,not-an-email\n")
+
+      val group = ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(matchedFile.toString, cleanFile.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val logs = captureStderr {
+        withDebugLoggingEnabled {
+          val (results, errors) = GroupScanner.scanGroupByFile(
+            spark,
+            inputDir.toString,
+            group,
+            rules,
+            sampleRatio = 1.0,
+            timestamp = "2026-04-20T00:10:00Z",
+            fileParallelism = 1
+          )
+
+          assert(errors.isEmpty)
+          assert(results.size == 1)
+          assert(results.map(_.file_identifier) == Seq("part-0001.csv"))
+          assert(results.forall(_.review_scope_file_fingerprints.nonEmpty))
+        }
+      }
+
+      val reviewSnapshotLines = logs.linesIterator.filter(_.contains("group_scan_review_snapshot_file")).toSeq
+      assert(logs.contains("group_scan_review_snapshot_start"))
+      assert(logs.contains("mode=file"))
+      assert(logs.contains("matched_files=1"))
+      assert(reviewSnapshotLines.size == 1)
+      assert(reviewSnapshotLines.exists(_.contains(s"file=${matchedFile.toString}")))
+      assert(!reviewSnapshotLines.exists(_.contains(cleanFile.toString)))
     } finally {
       deleteRecursively(inputDir)
     }

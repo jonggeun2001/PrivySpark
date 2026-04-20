@@ -17,6 +17,10 @@ privyspark scan \
 - `review_status`: `pending`, `false_positive`, `true_positive`
 - `review_reason`: 자유 텍스트
 
+review 메타데이터 캡처 참고:
+- directory review row는 항상 staged per-file snapshot 기준으로 기록됩니다.
+- batch/file 단위 스캔은 실제 review row가 생긴 파일에 대해서만 staged review snapshot을 만들기 때문에, 미검출 파일은 추가 full-file pass 비용을 내지 않습니다.
+
 ## 2. Allowlist 생성 또는 갱신
 ```bash
 privyspark review apply \

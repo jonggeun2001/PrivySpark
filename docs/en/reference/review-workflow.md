@@ -17,6 +17,10 @@ Operators only need to edit these columns in `scan_results`.
 - `review_status`: `pending`, `false_positive`, `true_positive`
 - `review_reason`: free-form note
 
+Review metadata capture notes:
+- Directory review rows always use staged per-file snapshots.
+- Batch and file-level scans create staged review snapshots only for files that actually produce review rows, so unmatched files do not pay an extra full-file pass.
+
 ## 2. Create or Update the Allowlist
 ```bash
 privyspark review apply \
