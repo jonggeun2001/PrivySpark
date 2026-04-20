@@ -1,10 +1,10 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
+import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, SuppressionSet}
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.format.{CsvHeaderHeuristic, CsvInference}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
-import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult}
+import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult, Suppression}
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
 import io.github.jonggeun2001.privyspark.report.ReportWriter
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
@@ -1360,6 +1360,74 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       ))
     } finally {
       deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupBatch applies suppressions before materializing results") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-suppressions-")
+
+    try {
+      val file1 = inputDir.resolve("part-0001.json")
+      val file2 = inputDir.resolve("part-0002.json")
+
+      writeText(file1,
+        "{\"prdctcd\":\"11-12-345678-90 010-1234-5678\"}\n" +
+          "{\"prdctcd\":\"010-9999-8888\"}\n")
+      writeText(file2,
+        "{\"prdctcd\":\"noise\"}\n")
+
+      val group = ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "json",
+        schemaSignature = "prdctcd",
+        filePaths = Seq(file1.toString, file2.toString)
+      )
+      val rules = Seq(
+        PiiRule("driver_license_number", "(?:11|12)-[0-9]{2}-[0-9]{6}-[0-9]{2}"),
+        PiiRule("phone_number", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+      )
+
+      val results = GroupScanner.scanGroupBatch(
+        spark,
+        inputDir.toString,
+        group,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-04-20T00:00:00Z",
+        suppressions = SuppressionSet.from(Seq(Suppression("prdctcd", "driver_license_number")))
+      )
+
+      assert(results.map(result => (result.file_identifier, result.pii_type, result.match_count)).toSet == Set(
+        ("part-0001.json", "phone_number", 2L)
+      ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("parseCliSuppressions merges inline entries with suppression files") {
+    val suppressionFile = Files.createTempFile("privyspark-suppressions", ".txt")
+
+    try {
+      writeText(suppressionFile,
+        "# comment\n" +
+          "\n" +
+          "prdctcd:driver_license_number\n" +
+          " customer_phone : phone_number \n")
+
+      val parsed = PrivySparkApp.parseCliSuppressions(
+        spark.sparkContext.hadoopConfiguration,
+        Seq("foo:email"),
+        Some(suppressionFile.toString)
+      )
+
+      assert(parsed == Seq(
+        Suppression("foo", "email"),
+        Suppression("prdctcd", "driver_license_number"),
+        Suppression("customer_phone", "phone_number")
+      ))
+    } finally {
+      Files.deleteIfExists(suppressionFile)
     }
   }
 

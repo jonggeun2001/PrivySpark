@@ -18,7 +18,9 @@ final case class CliConfig(
   fileParallelism: Option[Int] = None,
   outputFormats: Seq[String] = Seq.empty,
   ignorePatterns: Seq[String] = Seq.empty,
-  ignoreFile: Option[String] = None
+  ignoreFile: Option[String] = None,
+  suppressions: Seq[String] = Seq.empty,
+  suppressionFile: Option[String] = None
 ) {
   def effectiveOutputFormats: Seq[String] = OutputFormats.normalizeAll(outputFormats)
 }
@@ -29,6 +31,18 @@ object Cli {
   private val builder = OParser.builder[CliConfig]
   private object QuietParserSetup extends DefaultOParserSetup {
     override def showUsageOnError: Option[Boolean] = Some(false)
+  }
+
+  private def validateSuppressionArgument(value: String): Option[String] = {
+    val parts = Option(value).map(_.split(":", 2)).getOrElse(Array.empty[String])
+    if (parts.length != 2) {
+      Some("suppress must use column:pii_type with non-empty values")
+    } else {
+      val columnName = parts(0).trim
+      val piiType = parts(1).trim
+      if (columnName.nonEmpty && piiType.nonEmpty) None
+      else Some("suppress must use column:pii_type with non-empty values")
+    }
   }
 
   private val parser = {
@@ -116,7 +130,17 @@ object Cli {
       opt[String]("ignore-file")
         .optional()
         .action((value, config) => config.copy(ignoreFile = Some(value)))
-        .text("줄 단위 ignore 패턴 파일 경로")
+        .text("줄 단위 ignore 패턴 파일 경로"),
+      opt[String]("suppress")
+        .unbounded()
+        .optional()
+        .action((value, config) => config.copy(suppressions = config.suppressions :+ value.trim))
+        .validate(value => validateSuppressionArgument(value).fold(success)(failure))
+        .text("column:pii_type 조합을 결과에서 제외. 반복 지정 가능"),
+      opt[String]("suppression-file")
+        .optional()
+        .action((value, config) => config.copy(suppressionFile = Some(value)))
+        .text("줄 단위 suppression 파일 경로")
     )
   }
 

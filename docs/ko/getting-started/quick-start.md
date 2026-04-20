@@ -61,6 +61,7 @@ bin/privyspark-submit \
   --pre-scan-parallelism 32 \
   --group-parallelism 16 \
   --file-parallelism 8 \
+  --suppress prdctcd:driver_license_number \
   --ignore "_SUCCESS" \
   --ignore "backup/**"
 ```
@@ -92,6 +93,20 @@ bin/privyspark-submit \
 ```
 
 `--ignore-file`은 UTF-8 텍스트 파일이며, 빈 줄과 `#` 주석을 무시합니다. HDFS나 object-store URI를 직접 넘기는 것도 가능합니다.
+
+## suppression 예시
+
+```bash
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ruleset default \
+  --suppress prdctcd:driver_license_number \
+  --suppression-file scan.suppressions
+```
+
+`--suppression-file`도 UTF-8 텍스트 파일이며, 각 줄은 `column:pii_type` 형식입니다. 빈 줄과 `#` 주석을 무시합니다. ruleset YAML에 `suppressions:`가 있으면 CLI suppression과 union으로 합쳐집니다.
 
 ## 커스텀 ruleset 배포
 

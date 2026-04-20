@@ -1,8 +1,9 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator.{AggregationConfig, FileMatchCount}
-import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType}
+import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType, Suppression}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
 import org.apache.spark.sql.functions.{col, trim, when}
@@ -162,6 +163,26 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     assert(actual == sortByKey(expected))
+  }
+
+  test("suppresses only the targeted dataset column and pii type") {
+    val df = Seq(
+      ("11-12-345678-90 010-1234-5678"),
+      ("010-9999-8888"),
+      ("noise")
+    ).toDF("PRDCTCD")
+
+    val rules = Seq(
+      PiiRule("driver_license_number", "(?:11|12)-[0-9]{2}-[0-9]{6}-[0-9]{2}"),
+      PiiRule("phone_number", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+    val suppressions = SuppressionSet.from(Seq(Suppression("prdctcd", "driver_license_number")))
+
+    val actual = sortByKey(DetectionAggregator.aggregate(df, rules, suppressions = suppressions))
+    val coveredColumns = DetectionAggregator.columnsCoveredByRules(df.columns.toSeq, rules, suppressions)
+
+    assert(actual == Seq(MatchCount("PRDCTCD", "phone_number", 2L)))
+    assert(coveredColumns == Seq("PRDCTCD"))
   }
 
   test("counts only full-value matches for full-column rules") {
@@ -482,6 +503,27 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     assert(actual == sortByFileKey(expected))
+  }
+
+  test("suppresses only the targeted file metric and keeps other pii types on the same column") {
+    val df = Seq(
+      ("file-1", "11-12-345678-90 010-1234-5678"),
+      ("file-2", "010-9999-8888"),
+      ("file-2", "noise")
+    ).toDF("file_id", "PRDCTCD")
+
+    val rules = Seq(
+      PiiRule("driver_license_number", "(?:11|12)-[0-9]{2}-[0-9]{6}-[0-9]{2}"),
+      PiiRule("phone_number", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+    )
+    val suppressions = SuppressionSet.from(Seq(Suppression("prdctcd", "driver_license_number")))
+
+    val actual = sortByFileKey(DetectionAggregator.aggregateByFile(df, "file_id", rules, suppressions = suppressions))
+
+    assert(actual == Seq(
+      FileMatchCount("file-1", "PRDCTCD", "phone_number", 1L),
+      FileMatchCount("file-2", "PRDCTCD", "phone_number", 1L)
+    ))
   }
 
   test("sampleMatchesByFile extracts per-file samples with bounded Spark jobs per batch") {
@@ -877,7 +919,8 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val metrics = invokeDetectionAggregatorPrivateMethod(
       "buildMetrics",
       df.columns.toSeq,
-      rules
+      rules,
+      SuppressionSet.empty
     )
 
     invokeDetectionAggregatorPrivateMethod(
@@ -895,7 +938,8 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val metrics = invokeDetectionAggregatorPrivateMethod(
       "buildMetrics",
       df.columns.toSeq.filterNot(_ == fileIdentifierColumn),
-      rules
+      rules,
+      SuppressionSet.empty
     )
 
     invokeDetectionAggregatorPrivateMethod(
@@ -1009,7 +1053,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
   private def invokeBuildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[AnyRef] = {
     val method = DetectionAggregator.getClass.getDeclaredMethods.find(_.getName == "buildMetrics").get
     method.setAccessible(true)
-    method.invoke(DetectionAggregator, columns, rules).asInstanceOf[Seq[AnyRef]]
+    method.invoke(DetectionAggregator, columns, rules, SuppressionSet.empty).asInstanceOf[Seq[AnyRef]]
   }
 
   private def extractMetricPredicate(metric: AnyRef): org.apache.spark.sql.Column = {

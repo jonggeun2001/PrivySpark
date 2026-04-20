@@ -1,19 +1,25 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.cli.{Cli, CliConfig, PathValidator}
+import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, RulesetLoader, SuppressionSet}
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
+import io.github.jonggeun2001.privyspark.model.{ProgressRun, Suppression}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{renderConfiguredParallelism, resolveCliParallelism}
 import io.github.jonggeun2001.privyspark.util.{DriverLogLevel, DriverLogger}
-import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
-import io.github.jonggeun2001.privyspark.config.RulesetLoader
-import io.github.jonggeun2001.privyspark.model.ProgressRun
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager._
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.Path
+import org.apache.spark.{SparkEnv, SparkFiles}
 import org.apache.spark.sql.SparkSession
 
+import java.io.{BufferedReader, InputStreamReader}
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Paths}
 import java.time.Instant
 import java.util.concurrent.ScheduledExecutorService
+import scala.collection.mutable.ArrayBuffer
 import scala.util.control.ControlThrowable
 import scala.util.control.NonFatal
 
@@ -119,11 +125,27 @@ object PrivySparkApp {
       "output_formats" -> outputFormats.mkString(","),
       "ignore_patterns" -> config.ignorePatterns.size,
       "ignore_file" -> config.ignoreFile.getOrElse("none"),
+      "suppressions" -> config.suppressions.size,
+      "suppression_file" -> config.suppressionFile.getOrElse("none"),
       "driver_log_level" -> DriverLogger.currentLogLevel.label.toLowerCase
     )
 
-    val rules = RulesetLoader.load(config.ruleset)
-    DriverLogger.debug("ruleset_loaded", "rules" -> rules.size, "ruleset" -> config.ruleset)
+    val bundle = RulesetLoader.loadBundle(config.ruleset)
+    val cliSuppressions = parseCliSuppressions(
+      spark.sparkContext.hadoopConfiguration,
+      config.suppressions,
+      config.suppressionFile
+    )
+    val suppressions = SuppressionSet.from(bundle.suppressions).merge(SuppressionSet.from(cliSuppressions))
+    val rules = bundle.rules
+    DriverLogger.debug(
+      "ruleset_loaded",
+      "rules" -> rules.size,
+      "ruleset_suppressions" -> bundle.suppressions.size,
+      "cli_suppressions" -> cliSuppressions.size,
+      "effective_suppressions" -> suppressions.size,
+      "ruleset" -> config.ruleset
+    )
 
     val timestamp = Instant.now().toString
     val scanPlan = DirectoryScanner.scanDirectoryStructure(
@@ -182,6 +204,7 @@ object PrivySparkApp {
         fileParallelism,
         config.fileSampleRatio,
         config.fileSampleMinFiles,
+        suppressions,
         Some(preparedProgressRun),
         retainPayloads = false,
         csvHeadCache = csvHeadCache
@@ -239,5 +262,84 @@ object PrivySparkApp {
       parseOkCache.clear()
       cleanupStagingPaths(spark.sparkContext.hadoopConfiguration, scanPlan.stagingPaths)
     }
+  }
+
+  private[privyspark] def parseCliSuppressions(
+    conf: Configuration,
+    inline: Seq[String],
+    file: Option[String]
+  ): Seq[Suppression] = {
+    inline.map(rawValue => parseSuppressionSpec(rawValue, "cli")) ++ file.toSeq.flatMap(loadSuppressionFile(conf, _))
+  }
+
+  private def loadSuppressionFile(conf: Configuration, path: String): Seq[Suppression] = {
+    val normalizedPath = Option(path).map(_.trim).getOrElse("")
+    if (normalizedPath.isEmpty) {
+      Seq.empty
+    } else {
+      resolveLocalSuppressionFile(normalizedPath) match {
+        case Some(localPath) =>
+          val reader = Files.newBufferedReader(localPath, StandardCharsets.UTF_8)
+          readSuppressions(reader, s"file:$normalizedPath")
+        case None =>
+          val hadoopPath = new Path(normalizedPath)
+          val fs = hadoopPath.getFileSystem(conf)
+          val reader = new BufferedReader(new InputStreamReader(fs.open(hadoopPath), StandardCharsets.UTF_8))
+          readSuppressions(reader, s"file:$normalizedPath")
+      }
+    }
+  }
+
+  private def resolveLocalSuppressionFile(path: String): Option[java.nio.file.Path] = {
+    val hadoopPath = new Path(path)
+    val uri = hadoopPath.toUri
+
+    if (uri.getScheme != null || uri.getAuthority != null) {
+      None
+    } else {
+      val sparkFilesCandidate = Option(SparkEnv.get).map(_ => Paths.get(SparkFiles.get(path)))
+      val workingDirectoryCandidate = Paths.get(path)
+
+      Seq(sparkFilesCandidate, Some(workingDirectoryCandidate)).flatten.collectFirst {
+        case candidate if Files.exists(candidate) => candidate.toAbsolutePath.normalize()
+      }
+    }
+  }
+
+  private def readSuppressions(reader: BufferedReader, source: String): Seq[Suppression] = {
+    val suppressions = ArrayBuffer.empty[Suppression]
+
+    try {
+      var lineNumber = 1
+      var line = reader.readLine()
+      while (line != null) {
+        normalizeSuppressionLine(line).foreach { spec =>
+          suppressions += parseSuppressionSpec(spec, s"$source:$lineNumber")
+        }
+        line = reader.readLine()
+        lineNumber += 1
+      }
+    } finally {
+      reader.close()
+    }
+
+    suppressions.toSeq
+  }
+
+  private def normalizeSuppressionLine(rawValue: String): Option[String] = {
+    val trimmed = Option(rawValue).map(_.trim).getOrElse("")
+    if (trimmed.isEmpty || trimmed.startsWith("#")) None else Some(trimmed)
+  }
+
+  private def parseSuppressionSpec(rawValue: String, source: String): Suppression = {
+    val parts = Option(rawValue).map(_.split(":", 2)).getOrElse(Array.empty[String])
+    val columnName = if (parts.length == 2) parts(0).trim else ""
+    val piiType = if (parts.length == 2) parts(1).trim else ""
+
+    if (columnName.isEmpty || piiType.isEmpty) {
+      throw new IllegalArgumentException(s"Invalid suppression entry ($source): $rawValue")
+    }
+
+    Suppression(columnName, piiType)
   }
 }

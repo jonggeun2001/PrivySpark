@@ -25,7 +25,54 @@ ruleset을 로드할 때 regex를 미리 검증하는 이유는 스캔이 한참
 - 각 rule은 `pii_type`, `regex`를 포함해야 합니다.
 - `column_hints`는 선택 항목이며, 지정 시 힌트가 포함된 컬럼에만 적용합니다.
 - `match_type`은 선택 항목이며 기본값은 `value`입니다.
+- top-level `suppressions`는 선택 항목이며 특정 `(column, pii_type)` 결과를 제외합니다.
 - 허용 `match_type` 값은 `value`, `full_column`입니다.
+
+## 오탐 제외 (Suppressions)
+특정 컬럼이 특정 탐지 타입에만 반복적으로 오탐되는 경우, ruleset은 그대로 유지한 채 결과만 제외할 수 있습니다. suppression은 컬럼명 대소문자를 무시한 exact match와 `pii_type` exact match를 함께 써서 적용합니다.
+
+### YAML 설정
+
+```yaml
+rules:
+  - pii_type: driver_license_number
+    regex: '...'
+
+suppressions:
+  - column: prdctcd
+    pii_type: driver_license_number
+  - column: PRDCTCD
+    pii_type: phone_number
+```
+
+### CLI 로 추가 suppression
+- `--suppress <column:pii_type>`는 반복 지정 가능합니다.
+- `--suppression-file <path>`는 UTF-8 텍스트 파일을 줄 단위 `column:pii_type` 형식으로 읽고, 빈 줄과 `#` 주석을 무시합니다.
+- CLI suppression은 ruleset `suppressions:`를 대체하지 않고 union으로 합쳐집니다.
+- YARN cluster에서 client 로컬 suppression 파일을 쓰려면 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 먼저 배포한 뒤 alias를 `--suppression-file`에 넘겨야 합니다.
+
+예시:
+
+```bash
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ruleset default \
+  --suppress prdctcd:driver_license_number \
+  --suppression-file scan.suppressions
+```
+
+### 매칭 규칙
+- 컬럼명은 trim 후 소문자로 정규화한 값으로 exact match 합니다.
+- `pii_type`은 trim 후 exact match 합니다.
+- suppression은 metric plan 생성 전에 적용되므로, 제외된 조합은 `match_count`, `match_ratio`, `confidence`, `sample_raw_value`, `sample_matched_fragment` 결과 자체가 생기지 않습니다.
+- 같은 컬럼이라도 suppression에 지정되지 않은 다른 `pii_type`은 계속 탐지됩니다.
+
+### 동작과 한계
+- ruleset에 없는 `pii_type`을 suppression에 적어도 스캔을 실패시키지 않고 warning만 남깁니다. 같은 suppression 파일을 여러 ruleset에 재사용하기 위한 동작입니다.
+- suppression은 value-regex 기반 예외나 컬럼명 glob/regex 매칭을 지원하지 않습니다.
+- suppression 변경 후에는 기존 결과 파일을 신뢰하지 말고 스캔을 다시 실행해야 합니다.
 
 ## 지원하지 않는 규칙
 - `pii_type: name`
