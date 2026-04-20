@@ -266,6 +266,9 @@ object ReviewApplyCommand {
         decision.reviewScopeFileFingerprints.nonEmpty,
         s"Directory review rows require review_scope_file_fingerprints: ${decision.fileIdentifier}"
       )
+    }
+
+    if (decision.reviewScopeFileFingerprints.nonEmpty) {
       validateScopeFingerprints(decision, fingerprints)
     } else {
       val currentFileSize = fingerprints.map(_.fileSize).sum

@@ -347,6 +347,57 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     }
   }
 
+  test("run fails when a non-directory fingerprint is stale even if size and mtime still match") {
+    val inputRoot = Files.createTempDirectory("privyspark-review-apply-stale-file-fingerprint-")
+
+    try {
+      val usersCsv = inputRoot.resolve("users.csv")
+      val pinnedMtime = FileTime.fromMillis(1710000000000L)
+      val originalContents = "name,email\nalice,aaaa@example.com\n"
+      val updatedContents = "name,email\nalice,zzzz@example.com\n"
+      Files.write(usersCsv, originalContents.getBytes(StandardCharsets.UTF_8))
+      Files.setLastModifiedTime(usersCsv, pinnedMtime)
+
+      val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
+      val originalFingerprint = scopeFingerprints(inputRoot.toString, Seq("users.csv"))
+
+      Files.write(usersCsv, updatedContents.getBytes(StandardCharsets.UTF_8))
+      Files.setLastModifiedTime(usersCsv, pinnedMtime)
+
+      val allowlistPath = inputRoot.resolve("allowlist.jsonl")
+      val error = intercept[IllegalArgumentException] {
+        ReviewApplyCommand.run(
+          spark,
+          ReviewApplyCliConfig(
+            scanResultsPath = writeScanResultsCsv(
+              inputRoot,
+              "scan_results_stale_file_fingerprint.csv",
+              Seq(scanResultRow(
+                datasetPath = inputRoot.toString,
+                fileIdentifier = "users.csv",
+                columnName = "email",
+                piiType = "email",
+                reviewStatus = ReviewStatus.FalsePositive,
+                reviewReason = "known dummy data",
+                fileSize = fileSize,
+                fileMtimeEpochMs = fileMtimeEpochMs,
+                reviewScopeFileFingerprints = originalFingerprint
+              ))
+            ).toString,
+            inputRoot = inputRoot.toString,
+            allowlistPath = allowlistPath.toString,
+            reviewer = "reviewer@example.com"
+          )
+        )
+      }
+
+      assert(error.getMessage.contains("Scan result metadata is stale"))
+      assert(!Files.exists(allowlistPath))
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
   private def metadataOf(path: Path): (Long, Long) = {
     Files.size(path) -> Files.getLastModifiedTime(path).toMillis
   }

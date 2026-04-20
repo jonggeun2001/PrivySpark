@@ -151,6 +151,45 @@ private[privyspark] object GroupScanner {
     }
   }
 
+  private def captureRecordedFingerprint(
+    conf: org.apache.hadoop.conf.Configuration,
+    fileIdentifier: String,
+    physicalPath: String,
+    fileSize: Long,
+    fileMtimeEpochMs: Long
+  ): RecordedFileFingerprint = {
+    val sourcePath = new Path(physicalPath)
+    val fs = sourcePath.getFileSystem(conf)
+    var inputStream: InputStream = null
+
+    try {
+      inputStream = fs.open(sourcePath)
+      val crc32 = new CRC32()
+      val buffer = new Array[Byte](CopyBufferSize)
+      var bytesRead = inputStream.read(buffer)
+      while (bytesRead >= 0) {
+        if (bytesRead > 0) {
+          crc32.update(buffer, 0, bytesRead)
+        }
+        bytesRead = inputStream.read(buffer)
+      }
+
+      RecordedFileFingerprint(
+        fileIdentifier = fileIdentifier,
+        fileSize = fileSize,
+        fileMtimeEpochMs = fileMtimeEpochMs,
+        fileChecksumAlgo = FileIdentifierResolver.DefaultChecksumAlgo,
+        fileChecksum = f"${crc32.getValue}%08x"
+      )
+    } finally {
+      if (inputStream != null) {
+        try inputStream.close() catch {
+          case NonFatal(_) => ()
+        }
+      }
+    }
+  }
+
   private def parseReviewScopeIdentifiers(rawValue: String): Seq[String] = {
     Option(rawValue)
       .map(_.trim)
@@ -158,6 +197,9 @@ private[privyspark] object GroupScanner {
       .map(_.split("\\|").toSeq.map(_.trim).filter(_.nonEmpty))
       .getOrElse(Seq.empty)
   }
+
+  private def encodeRecordedFingerprint(recordedFingerprint: Option[RecordedFileFingerprint]): String =
+    recordedFingerprint.map(fingerprint => ReviewScopeFingerprintCodec.encode(Seq(fingerprint))).getOrElse("")
 
   private def applyAllowlist(
     conf: org.apache.hadoop.conf.Configuration,
@@ -691,7 +733,8 @@ private[privyspark] object GroupScanner {
                     fileMetrics.matchCounts,
                     fileMetrics.sampleValues,
                     fileMetrics.fileSize,
-                    fileMetrics.fileMtimeEpochMs
+                    fileMetrics.fileMtimeEpochMs,
+                    reviewScopeFileFingerprints = encodeRecordedFingerprint(fileMetrics.recordedFingerprint)
                   )
                 )
                 progressRun.foreach { run =>
@@ -805,7 +848,8 @@ private[privyspark] object GroupScanner {
           fileMetrics.matchCounts,
           fileMetrics.sampleValues,
           fileMetrics.fileSize,
-          fileMetrics.fileMtimeEpochMs
+          fileMetrics.fileMtimeEpochMs,
+          reviewScopeFileFingerprints = encodeRecordedFingerprint(fileMetrics.recordedFingerprint)
         )
       }
     }
@@ -941,6 +985,23 @@ private[privyspark] object GroupScanner {
             )
             val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
             val groupScanTimestamp = currentScanTimestamp()
+            val recordedFingerprintsBySourceKey = matchCountsByFile
+              .flatMap(matchCount => resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier))
+              .distinct
+              .map { sourceKey =>
+                val physicalPath = resolvePhysicalPath(group, sourceKey)
+                val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
+                val filePath = new Path(physicalPath)
+                val fileStatus = filePath.getFileSystem(spark.sparkContext.hadoopConfiguration).getFileStatus(filePath)
+                sourceKey -> captureRecordedFingerprint(
+                  spark.sparkContext.hadoopConfiguration,
+                  logicalIdentifier,
+                  physicalPath,
+                  group.fileSizesByKey.getOrElse(sourceKey, fileStatus.getLen),
+                  group.fileMtimesByKey.getOrElse(sourceKey, fileStatus.getModificationTime)
+                )
+              }
+              .toMap
             val results = matchCountsByFile.flatMap { matchCount =>
               sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
                 val sourceKey = resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier)
@@ -956,7 +1017,11 @@ private[privyspark] object GroupScanner {
                     .map(value => Map(matchCount.metricAlias -> value))
                     .getOrElse(Map.empty),
                   sourceKey.flatMap(group.fileSizesByKey.get).getOrElse(0L),
-                  sourceKey.flatMap(group.fileMtimesByKey.get).getOrElse(0L)
+                  sourceKey.flatMap(group.fileMtimesByKey.get).getOrElse(0L),
+                  reviewScopeFileFingerprints = sourceKey
+                    .flatMap(recordedFingerprintsBySourceKey.get)
+                    .map(fingerprint => ReviewScopeFingerprintCodec.encode(Seq(fingerprint)))
+                    .getOrElse("")
                 ).headOption
               }
             }
@@ -1005,6 +1070,17 @@ private[privyspark] object GroupScanner {
       withFileReadRetry(spark, Seq(physicalPath), "file_scan") {
         val fileStatus = new org.apache.hadoop.fs.Path(physicalPath).getFileSystem(spark.sparkContext.hadoopConfiguration)
           .getFileStatus(new org.apache.hadoop.fs.Path(physicalPath))
+        val effectiveFileSize = fileSizeOverride.getOrElse(fileStatus.getLen)
+        val effectiveFileMtimeEpochMs = fileMtimeEpochMsOverride.getOrElse(fileStatus.getModificationTime)
+        val effectiveRecordedFingerprint = recordedFingerprint.getOrElse(
+          captureRecordedFingerprint(
+            spark.sparkContext.hadoopConfiguration,
+            fileIdentifier,
+            physicalPath,
+            effectiveFileSize,
+            effectiveFileMtimeEpochMs
+          )
+        )
         val format = formatOverride.orElse(detectPhysicalFormat(spark.sparkContext.hadoopConfiguration, physicalPath)).getOrElse {
           DriverLogger.debug("scan_file_error", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "reason" -> "Unsupported file format")
           return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $fileIdentifier"))
@@ -1035,10 +1111,10 @@ private[privyspark] object GroupScanner {
             Map.empty,
             Seq.empty,
             Map.empty,
-            fileSizeOverride.getOrElse(fileStatus.getLen),
-            fileMtimeEpochMsOverride.getOrElse(fileStatus.getModificationTime),
+            effectiveFileSize,
+            effectiveFileMtimeEpochMs,
             currentScanTimestamp(),
-            recordedFingerprint
+            Some(effectiveRecordedFingerprint)
           ))
         } else {
           val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules, suppressions = suppressions)
@@ -1059,10 +1135,10 @@ private[privyspark] object GroupScanner {
             nonEmptyValueCounts,
             matchCounts,
             sampleValues,
-            fileSizeOverride.getOrElse(fileStatus.getLen),
-            fileMtimeEpochMsOverride.getOrElse(fileStatus.getModificationTime),
+            effectiveFileSize,
+            effectiveFileMtimeEpochMs,
             currentScanTimestamp(),
-            recordedFingerprint
+            Some(effectiveRecordedFingerprint)
           ))
         }
       }
