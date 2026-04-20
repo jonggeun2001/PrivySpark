@@ -33,6 +33,25 @@ final case class ResolvedFileFingerprint(
   fileChecksum: String
 )
 
+final case class RecordedFileFingerprint(
+  fileIdentifier: String,
+  fileSize: Long,
+  fileMtimeEpochMs: Long,
+  fileChecksumAlgo: String,
+  fileChecksum: String
+)
+
+object RecordedFileFingerprint {
+  def fromResolved(fingerprint: ResolvedFileFingerprint): RecordedFileFingerprint =
+    RecordedFileFingerprint(
+      fileIdentifier = fingerprint.fileIdentifier,
+      fileSize = fingerprint.fileSize,
+      fileMtimeEpochMs = fingerprint.fileMtimeEpochMs,
+      fileChecksumAlgo = fingerprint.fileChecksumAlgo,
+      fileChecksum = fingerprint.fileChecksum
+    )
+}
+
 final case class AllowlistEvaluation(
   shouldSuppress: Boolean,
   reviewStatus: String = ReviewStatus.Pending,

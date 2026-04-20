@@ -45,7 +45,8 @@ final case class ScanResult(
   review_status: String = "pending",
   review_reason: String = "",
   review_invalidated: Boolean = false,
-  review_scope_file_identifiers: String = ""
+  review_scope_file_identifiers: String = "",
+  review_scope_file_fingerprints: String = ""
 )
 
 final case class ScanError(

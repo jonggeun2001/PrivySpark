@@ -114,6 +114,40 @@ class AllowlistScanSpec extends AnyFunSuite {
     }
   }
 
+  test("scanGroups records per-file scope fingerprints for directory review rows") {
+    val inputRoot = Files.createTempDirectory("privyspark-allowlist-scope-fingerprints-")
+
+    try {
+      val reviewsDir = Files.createDirectories(inputRoot.resolve("reviews"))
+      Files.write(reviewsDir.resolve("a.csv"), "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      Files.write(reviewsDir.resolve("b.csv"), "name,email\nbob,bob@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
+
+      val scanned = GroupScanner.scanGroups(
+        spark,
+        inputRoot.toString,
+        plan.groups,
+        Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")),
+        sampleRatio = 1.0,
+        timestamp = "2026-04-20T00:00:00Z"
+      )
+
+      val result = scanned.flatMap(_._2).find(_.file_identifier == "reviews").getOrElse(
+        fail("Expected a directory-scoped review row for reviews")
+      )
+      val scopeFingerprints = ReviewScopeFingerprintCodec.decode(result.review_scope_file_fingerprints).fold(
+        errorMessage => fail(errorMessage),
+        identity
+      )
+
+      assert(result.review_scope_file_identifiers == "reviews/a.csv|reviews/b.csv")
+      assert(scopeFingerprints.map(_.fileIdentifier) == Seq("reviews/a.csv", "reviews/b.csv"))
+      assert(scopeFingerprints.forall(_.fileChecksum.nonEmpty))
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
   private def deleteRecursively(path: Path): Unit = {
     if (Files.exists(path)) {
       Files.walk(path)

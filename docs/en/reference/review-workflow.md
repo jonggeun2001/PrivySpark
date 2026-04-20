@@ -30,7 +30,8 @@ What this command does:
 - Reads only rows where `review_status=false_positive`
 - Resolves each `file_identifier` back to the current input file
 - Expands directory identifiers only through the recorded `review_scope_file_identifiers`
-- Calculates current `file_size`, `file_mtime_epoch_ms`, and `CRC32`
+- For directory review rows, requires recorded `review_scope_file_fingerprints` and compares each scoped file fingerprint before staging
+- For non-directory rows, validates the recorded `file_size` and `file_mtime_epoch_ms`, then calculates current `CRC32`
 - Upserts the latest review for the same key
 
 Keys from the same `scan_results` input that are now marked `true_positive` or `pending` are removed from the existing allowlist.

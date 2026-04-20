@@ -8,11 +8,13 @@ import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.FileTime
 
 @RunWith(classOf[JUnitRunner])
 class ReviewApplyCommandSpec extends AnyFunSuite {
   private val BaseScanResultHeader =
     "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason,file_size,file_mtime_epoch_ms"
+  private val BaseScanResultColumnCount = BaseScanResultHeader.count(_ == ',') + 1
 
   private lazy val spark = SparkSession.builder()
     .appName("ReviewApplyCommandSpec")
@@ -69,26 +71,24 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
       val secondCsv = reviewsDir.resolve("b.csv")
       Files.write(firstCsv, "id\n1\n".getBytes(StandardCharsets.UTF_8))
       Files.write(secondCsv, "id\n2\n".getBytes(StandardCharsets.UTF_8))
+      val scopeIdentifiers = Seq("reviews/a.csv", "reviews/b.csv")
       val (fileSize, fileMtimeEpochMs) = aggregateMetadata(Seq(firstCsv, secondCsv))
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
-
-      val scopedResultsPath = inputRoot.resolve("scan_results_scoped.csv")
-      Files.write(
-        scopedResultsPath,
-        (
-          s"$BaseScanResultHeader,review_scope_file_identifiers\n" +
-            scanResultRow(
-              datasetPath = inputRoot.toString,
-              fileIdentifier = "reviews",
-              columnName = "resident_registration_number",
-              piiType = "rrn",
-              reviewStatus = ReviewStatus.FalsePositive,
-              reviewReason = "dummy data",
-              fileSize = fileSize,
-              fileMtimeEpochMs = fileMtimeEpochMs,
-              reviewScopeFileIdentifiers = Seq("reviews/a.csv", "reviews/b.csv")
-            ) + "\n"
-        ).getBytes(StandardCharsets.UTF_8)
+      val scopedResultsPath = writeScanResultsCsv(
+        inputRoot,
+        "scan_results_scoped.csv",
+        Seq(scanResultRow(
+          datasetPath = inputRoot.toString,
+          fileIdentifier = "reviews",
+          columnName = "resident_registration_number",
+          piiType = "rrn",
+          reviewStatus = ReviewStatus.FalsePositive,
+          reviewReason = "dummy data",
+          fileSize = fileSize,
+          fileMtimeEpochMs = fileMtimeEpochMs,
+          reviewScopeFileIdentifiers = scopeIdentifiers,
+          reviewScopeFileFingerprints = scopeFingerprints(inputRoot.toString, scopeIdentifiers)
+        ))
       )
 
       ReviewApplyCommand.run(
@@ -292,6 +292,61 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     }
   }
 
+  test("run fails when a directory scope fingerprint is stale even if aggregate metadata still matches") {
+    val inputRoot = Files.createTempDirectory("privyspark-review-apply-stale-scope-fingerprint-")
+
+    try {
+      val reviewsDir = Files.createDirectories(inputRoot.resolve("reviews"))
+      val firstCsv = reviewsDir.resolve("a.csv")
+      val secondCsv = reviewsDir.resolve("b.csv")
+      val pinnedMtime = FileTime.fromMillis(1710000000000L)
+      Files.write(firstCsv, "id\n1\n".getBytes(StandardCharsets.UTF_8))
+      Files.write(secondCsv, "id\n2\n".getBytes(StandardCharsets.UTF_8))
+      Files.setLastModifiedTime(firstCsv, pinnedMtime)
+      Files.setLastModifiedTime(secondCsv, pinnedMtime)
+
+      val scopeIdentifiers = Seq("reviews/a.csv", "reviews/b.csv")
+      val (fileSize, fileMtimeEpochMs) = aggregateMetadata(Seq(firstCsv, secondCsv))
+      val originalScopeFingerprints = scopeFingerprints(inputRoot.toString, scopeIdentifiers)
+
+      Files.write(firstCsv, "id\n9\n".getBytes(StandardCharsets.UTF_8))
+      Files.setLastModifiedTime(firstCsv, pinnedMtime)
+
+      val allowlistPath = inputRoot.resolve("allowlist.jsonl")
+      val error = intercept[IllegalArgumentException] {
+        ReviewApplyCommand.run(
+          spark,
+          ReviewApplyCliConfig(
+            scanResultsPath = writeScanResultsCsv(
+              inputRoot,
+              "scan_results_stale_scope.csv",
+              Seq(scanResultRow(
+                datasetPath = inputRoot.toString,
+                fileIdentifier = "reviews",
+                columnName = "resident_registration_number",
+                piiType = "rrn",
+                reviewStatus = ReviewStatus.FalsePositive,
+                reviewReason = "dummy data",
+                fileSize = fileSize,
+                fileMtimeEpochMs = fileMtimeEpochMs,
+                reviewScopeFileIdentifiers = scopeIdentifiers,
+                reviewScopeFileFingerprints = originalScopeFingerprints
+              ))
+            ).toString,
+            inputRoot = inputRoot.toString,
+            allowlistPath = allowlistPath.toString,
+            reviewer = "reviewer@example.com"
+          )
+        )
+      }
+
+      assert(error.getMessage.contains("Scan result metadata is stale"))
+      assert(!Files.exists(allowlistPath))
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
   private def metadataOf(path: Path): (Long, Long) = {
     Files.size(path) -> Files.getLastModifiedTime(path).toMillis
   }
@@ -312,7 +367,8 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     reviewReason: String,
     fileSize: Long,
     fileMtimeEpochMs: Long,
-    reviewScopeFileIdentifiers: Seq[String] = Seq.empty
+    reviewScopeFileIdentifiers: Seq[String] = Seq.empty,
+    reviewScopeFileFingerprints: String = ""
   ): String = {
     val values = Seq(
       datasetPath,
@@ -323,18 +379,42 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
       reviewReason,
       fileSize.toString,
       fileMtimeEpochMs.toString
-    ) ++ (if (reviewScopeFileIdentifiers.nonEmpty) Seq(reviewScopeFileIdentifiers.mkString("|")) else Seq.empty)
+    ) ++
+      (if (reviewScopeFileIdentifiers.nonEmpty || reviewScopeFileFingerprints.nonEmpty) {
+        Seq(reviewScopeFileIdentifiers.mkString("|"))
+      } else {
+        Seq.empty
+      }) ++
+      (if (reviewScopeFileFingerprints.nonEmpty) Seq(reviewScopeFileFingerprints) else Seq.empty)
     values.mkString(",")
   }
 
   private def writeScanResultsCsv(root: Path, fileName: String, rows: Seq[String]): Path = {
     val path = root.resolve(fileName)
-    val includesScopeColumn = rows.exists(_.count(_ == ',') == BaseScanResultHeader.count(_ == ',') + 1)
-    val header =
-      if (includesScopeColumn) s"$BaseScanResultHeader,review_scope_file_identifiers" else BaseScanResultHeader
+    val maxColumnCount = rows.map(_.count(_ == ',') + 1).foldLeft(BaseScanResultColumnCount)(math.max)
+    val header = maxColumnCount match {
+      case columnCount if columnCount == BaseScanResultColumnCount =>
+        BaseScanResultHeader
+      case columnCount if columnCount == BaseScanResultColumnCount + 1 =>
+        s"$BaseScanResultHeader,review_scope_file_identifiers"
+      case _ =>
+        s"$BaseScanResultHeader,review_scope_file_identifiers,review_scope_file_fingerprints"
+    }
     val contents = s"$header\n${rows.mkString("\n")}\n"
     Files.write(path, contents.getBytes(StandardCharsets.UTF_8))
     path
+  }
+
+  private def scopeFingerprints(inputRoot: String, identifiers: Seq[String]): String = {
+    val fingerprints = identifiers.flatMap { identifier =>
+      FileIdentifierResolver.resolveFingerprints(spark.sparkContext.hadoopConfiguration, inputRoot, identifier) match {
+        case Right(resolvedFingerprints) =>
+          resolvedFingerprints.map(RecordedFileFingerprint.fromResolved)
+        case Left(errorMessage) =>
+          fail(s"Failed to resolve $identifier: $errorMessage")
+      }
+    }
+    ReviewScopeFingerprintCodec.encode(fingerprints)
   }
 
   private def deleteRecursively(path: Path): Unit = {

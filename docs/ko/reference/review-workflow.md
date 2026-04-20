@@ -30,7 +30,8 @@ privyspark review apply \
 - `review_status=false_positive` row만 읽습니다.
 - 각 row의 `file_identifier`를 실제 파일로 역해석합니다.
 - directory identifier는 `review_scope_file_identifiers`에 기록된 concrete file identifier만 allowlist로 전개합니다.
-- 현재 파일의 `file_size`, `file_mtime_epoch_ms`, `CRC32`를 계산합니다.
+- directory review row는 기록된 `review_scope_file_fingerprints`가 있어야 하며, scope에 포함된 각 파일 fingerprint가 모두 일치할 때만 staged 됩니다.
+- non-directory row는 기록된 `file_size`, `file_mtime_epoch_ms`를 검증한 뒤 현재 `CRC32`를 계산합니다.
 - 같은 key가 이미 있으면 최신 review로 덮어씁니다.
 
 같은 `scan_results` 파일에서 `true_positive` 또는 `pending`으로 바뀐 key는 기존 allowlist에서 제거됩니다.

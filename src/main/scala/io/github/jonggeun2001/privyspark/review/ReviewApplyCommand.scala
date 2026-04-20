@@ -24,6 +24,7 @@ object ReviewApplyCommand {
     reviewReason: String,
     sourceRunId: String,
     reviewScopeFileIdentifiers: Seq[String],
+    reviewScopeFileFingerprints: Seq[RecordedFileFingerprint],
     scanFileSize: Long,
     scanFileMtimeEpochMs: Long
   )
@@ -142,6 +143,9 @@ object ReviewApplyCommand {
             reviewScopeFileIdentifiers = normalizedColumns.get("review_scope_file_identifiers")
               .map(columnName => parseScopeIdentifiers(valueOf(row, columnName)))
               .getOrElse(Seq.empty),
+            reviewScopeFileFingerprints = normalizedColumns.get("review_scope_file_fingerprints")
+              .map(columnName => parseScopeFingerprints(valueOf(row, columnName)))
+              .getOrElse(Seq.empty),
             scanFileSize = valueOf(row, normalizedColumns("file_size")).toLong,
             scanFileMtimeEpochMs = valueOf(row, normalizedColumns("file_mtime_epoch_ms")).toLong
           ))
@@ -251,13 +255,21 @@ object ReviewApplyCommand {
     decision: ReviewDecision,
     fingerprints: Seq[ResolvedFileFingerprint]
   ): Unit = {
-    val currentFileSize = fingerprints.map(_.fileSize).sum
-    val currentFileMtimeEpochMs = fingerprints.map(_.fileMtimeEpochMs).foldLeft(0L)(math.max)
+    if (decision.reviewScopeFileIdentifiers.nonEmpty) {
+      require(
+        decision.reviewScopeFileFingerprints.nonEmpty,
+        s"Directory review rows require review_scope_file_fingerprints: ${decision.fileIdentifier}"
+      )
+      validateScopeFingerprints(decision, fingerprints)
+    } else {
+      val currentFileSize = fingerprints.map(_.fileSize).sum
+      val currentFileMtimeEpochMs = fingerprints.map(_.fileMtimeEpochMs).foldLeft(0L)(math.max)
 
-    require(
-      decision.scanFileSize == currentFileSize && decision.scanFileMtimeEpochMs == currentFileMtimeEpochMs,
-      s"Scan result metadata is stale for ${decision.fileIdentifier}; rerun scan before review apply"
-    )
+      require(
+        decision.scanFileSize == currentFileSize && decision.scanFileMtimeEpochMs == currentFileMtimeEpochMs,
+        s"Scan result metadata is stale for ${decision.fileIdentifier}; rerun scan before review apply"
+      )
+    }
   }
 
   private def isDirectoryIdentifier(
@@ -281,6 +293,28 @@ object ReviewApplyCommand {
       .filter(_.nonEmpty)
       .map(_.split("\\|").toSeq.map(_.trim).filter(_.nonEmpty))
       .getOrElse(Seq.empty)
+  }
+
+  private def parseScopeFingerprints(rawValue: String): Seq[RecordedFileFingerprint] = {
+    ReviewScopeFingerprintCodec.decode(rawValue) match {
+      case Right(fingerprints) =>
+        fingerprints
+      case Left(errorMessage) =>
+        throw new IllegalArgumentException(errorMessage)
+    }
+  }
+
+  private def validateScopeFingerprints(
+    decision: ReviewDecision,
+    fingerprints: Seq[ResolvedFileFingerprint]
+  ): Unit = {
+    val expectedFingerprints = decision.reviewScopeFileFingerprints.sortBy(_.fileIdentifier)
+    val currentFingerprints = fingerprints.map(RecordedFileFingerprint.fromResolved).sortBy(_.fileIdentifier)
+
+    require(
+      expectedFingerprints == currentFingerprints,
+      s"Scan result metadata is stale for ${decision.fileIdentifier}; rerun scan before review apply"
+    )
   }
 
   private def allowlistEntryToJson(entry: AllowlistEntry): String =

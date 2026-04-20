@@ -11,7 +11,7 @@ import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion.supportsBatchScan
 import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, PiiRule, ProgressRun, SampleValue, ScanError, ScanGroup, ScanReadOptions, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
-import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, FileIdentifierResolver}
+import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, FileIdentifierResolver, RecordedFileFingerprint, ReviewScopeFingerprintCodec}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{col, input_file_name}
 
@@ -35,7 +35,8 @@ private[privyspark] object GroupScanner {
     sampleValues: Map[String, SampleValue] = Map.empty,
     fileSize: Long = 0L,
     fileMtimeEpochMs: Long = 0L,
-    reviewScopeFileIdentifiers: Seq[String] = Seq.empty
+    reviewScopeFileIdentifiers: Seq[String] = Seq.empty,
+    reviewScopeFileFingerprints: String = ""
   ): Seq[ScanResult] = {
     if (sampledRowCount <= 0L) {
       Seq.empty
@@ -61,10 +62,33 @@ private[privyspark] object GroupScanner {
           sample_matched_fragment = sampleValue.map(_.sampleMatchedFragment).getOrElse(""),
           file_size = fileSize,
           file_mtime_epoch_ms = fileMtimeEpochMs,
-          review_scope_file_identifiers = reviewScopeFileIdentifiers.mkString("|")
+          review_scope_file_identifiers = reviewScopeFileIdentifiers.mkString("|"),
+          review_scope_file_fingerprints = reviewScopeFileFingerprints
         )
       }
     }
+  }
+
+  private def buildReviewScopeFileFingerprints(
+    conf: org.apache.hadoop.conf.Configuration,
+    datasetPath: String,
+    fileIdentifiers: Seq[String]
+  ): String = {
+    val recordedFingerprints = ArrayBuffer.empty[RecordedFileFingerprint]
+    fileIdentifiers.distinct.foreach { fileIdentifier =>
+      FileIdentifierResolver.resolveFingerprints(conf, datasetPath, fileIdentifier) match {
+        case Right(resolvedFingerprints) =>
+          recordedFingerprints ++= resolvedFingerprints.map(RecordedFileFingerprint.fromResolved)
+        case Left(errorMessage) =>
+          DriverLogger.warn(
+            "review_scope_fingerprint_resolution_failed",
+            "file_identifier" -> fileIdentifier,
+            "reason" -> errorMessage
+          )
+          return ""
+      }
+    }
+    ReviewScopeFingerprintCodec.encode(recordedFingerprints.toSeq)
   }
 
   private def applyAllowlist(
@@ -579,6 +603,12 @@ private[privyspark] object GroupScanner {
     }
 
     val fallbackResults = if (group.useDirectoryIdentifier && fallbackErrors.isEmpty) {
+      val reviewScopeFileIdentifiers = successfulFileMetrics.map(_.fileIdentifier)
+      val reviewScopeFileFingerprints = buildReviewScopeFileFingerprints(
+        spark.sparkContext.hadoopConfiguration,
+        datasetPath,
+        reviewScopeFileIdentifiers
+      )
       val sampledRowCount = successfulFileMetrics.map(_.sampledRowCount).sum
       val aggregatedMatchCounts = successfulFileMetrics
         .flatMap(_.matchCounts)
@@ -612,7 +642,8 @@ private[privyspark] object GroupScanner {
           .toMap,
         successfulFileMetrics.map(_.fileSize).sum,
         successfulFileMetrics.map(_.fileMtimeEpochMs).foldLeft(0L)(math.max),
-        successfulFileMetrics.map(_.fileIdentifier)
+        reviewScopeFileIdentifiers,
+        reviewScopeFileFingerprints
       )
     } else {
       if (group.useDirectoryIdentifier && fallbackErrors.nonEmpty) {
@@ -753,6 +784,12 @@ private[privyspark] object GroupScanner {
             val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
             val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts)
             val groupScanTimestamp = currentScanTimestamp()
+            val reviewScopeFileIdentifiers = effectiveSelectedSourceKeys.map(sourceKey => resolveLogicalIdentifier(group, datasetPath, sourceKey))
+            val reviewScopeFileFingerprints = buildReviewScopeFileFingerprints(
+              spark.sparkContext.hadoopConfiguration,
+              datasetPath,
+              reviewScopeFileIdentifiers
+            )
             val results = buildScanResults(
               datasetPath,
               groupScanTimestamp,
@@ -763,7 +800,8 @@ private[privyspark] object GroupScanner {
               sampleValues,
               effectiveSelectedSourceKeys.flatMap(group.fileSizesByKey.get).sum,
               effectiveSelectedSourceKeys.flatMap(group.fileMtimesByKey.get).foldLeft(0L)(math.max),
-              effectiveSelectedSourceKeys.map(sourceKey => resolveLogicalIdentifier(group, datasetPath, sourceKey))
+              reviewScopeFileIdentifiers,
+              reviewScopeFileFingerprints
             )
             val filteredResults = applyAllowlist(
               spark.sparkContext.hadoopConfiguration,
