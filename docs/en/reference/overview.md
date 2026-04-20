@@ -3,7 +3,7 @@
 PrivySpark is a Spark-based batch scanner that detects potential PII in a dataset path and writes aggregated result and error reports.
 
 ## Scope
-- The product exposes a single entrypoint: `privyspark scan`.
+- The public commands are `privyspark scan` and `privyspark review apply`.
 - Input paths must be absolute paths or URIs.
 - Supported formats are `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, and archive families `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, and `rar`.
 - Direct text-style data files (`csv`, `json/jsonl/ndjson`) wrapped by `gzip` or `bzip2` are passed through to Spark/Hadoop readers using the original path.
@@ -37,3 +37,4 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 - Input formats and grouping: [input-formats.md](input-formats.md)
 - Rulesets and detection constraints: [rules-and-detection.md](rules-and-detection.md)
 - Reports and errors: [reports-and-errors.md](reports-and-errors.md)
+- False-positive review workflow: [review-workflow.md](review-workflow.md)

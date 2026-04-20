@@ -27,6 +27,11 @@
 - `confidence`
 - `sample_raw_value`
 - `sample_matched_fragment`
+- `file_size`
+- `file_mtime_epoch_ms`
+- `review_status`
+- `review_reason`
+- `review_invalidated`
 
 `scan_results.scan_timestamp` is the UTC ISO-8601 time when each result row is actually materialized, not a fixed CLI start timestamp. Long-running scans and multi-group scans can therefore contain different values across result rows.
 
@@ -40,6 +45,14 @@
 - A single file at the input root and logical inputs keep file or logical identifiers.
 
 Directory-level promotion is intentionally strict so the semantic unit of a result row does not drift. Aggregating too early would make result interpretation ambiguous when schema drift or pre-scan errors exist.
+
+## Review Fields
+- `file_size` stores the representative byte size for the row. File-level rows keep the file size, while directory-level rows keep the sum of included file sizes.
+- `file_mtime_epoch_ms` stores the representative last-modified time in epoch milliseconds. Directory-level rows keep the maximum mtime across included files.
+- `review_status` defaults to `pending`. Operators can edit it to `false_positive` or `true_positive`.
+- `review_reason` stores the operator note. It should be filled when a row is marked `false_positive`.
+- `review_invalidated=true` means the same `(file_identifier, column_name, pii_type)` tuple existed in the allowlist before, but the current file metadata and checksum no longer match and the row should be reviewed again.
+- When `--allowlist` is not provided, all review fields stay at their default values.
 
 ## Ratio Fields
 - `match_ratio` is based on sampled rows.

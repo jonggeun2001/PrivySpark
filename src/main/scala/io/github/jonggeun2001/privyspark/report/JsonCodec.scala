@@ -6,7 +6,7 @@ import scala.util.Try
 
 private[privyspark] object JsonCodec {
   def scanResultToJson(result: ScanResult): String =
-    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"sampled_row_count":${result.sampled_row_count},"match_ratio":${result.match_ratio},"non_empty_match_ratio":${result.non_empty_match_ratio},"confidence":${result.confidence},"sample_raw_value":${jsonString(result.sample_raw_value)},"sample_matched_fragment":${jsonString(result.sample_matched_fragment)}}"""
+    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"sampled_row_count":${result.sampled_row_count},"match_ratio":${result.match_ratio},"non_empty_match_ratio":${result.non_empty_match_ratio},"confidence":${result.confidence},"sample_raw_value":${jsonString(result.sample_raw_value)},"sample_matched_fragment":${jsonString(result.sample_matched_fragment)},"file_size":${result.file_size},"file_mtime_epoch_ms":${result.file_mtime_epoch_ms},"review_status":${jsonString(result.review_status)},"review_reason":${jsonString(result.review_reason)},"review_invalidated":${result.review_invalidated}}"""
 
   def scanErrorToJson(error: ScanError): String =
     s"""{"dataset_path":${jsonString(error.dataset_path)},"scan_timestamp":${jsonString(error.scan_timestamp)},"file_identifier":${jsonString(error.file_identifier)},"error_message":${jsonString(error.error_message)}}"""
@@ -41,6 +41,11 @@ private[privyspark] object JsonCodec {
   def extractJsonLongField(json: String, field: String): Option[Long] = {
     val pattern = (""""""" + java.util.regex.Pattern.quote(field) + """":([0-9]+)""").r
     pattern.findFirstMatchIn(json).flatMap(m => Try(m.group(1).toLong).toOption)
+  }
+
+  def extractJsonBooleanField(json: String, field: String): Option[Boolean] = {
+    val pattern = (""""""" + java.util.regex.Pattern.quote(field) + """":(true|false)""").r
+    pattern.findFirstMatchIn(json).flatMap(m => Try(m.group(1).toBoolean).toOption)
   }
 
   def escapeJson(value: String): String = {

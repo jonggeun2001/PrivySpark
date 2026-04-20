@@ -11,6 +11,7 @@ import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion.supportsBatchScan
 import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, PiiRule, ProgressRun, SampleValue, ScanError, ScanGroup, ScanReadOptions, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
+import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, FileIdentifierResolver}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{col, input_file_name}
 
@@ -31,7 +32,9 @@ private[privyspark] object GroupScanner {
     sampledRowCount: Long,
     nonEmptyValueCounts: Map[String, Long],
     matchCounts: Seq[MatchCount],
-    sampleValues: Map[String, SampleValue] = Map.empty
+    sampleValues: Map[String, SampleValue] = Map.empty,
+    fileSize: Long = 0L,
+    fileMtimeEpochMs: Long = 0L
   ): Seq[ScanResult] = {
     if (sampledRowCount <= 0L) {
       Seq.empty
@@ -54,9 +57,70 @@ private[privyspark] object GroupScanner {
           non_empty_match_ratio = nonEmptyMatchRatio,
           confidence = confidenceValue,
           sample_raw_value = sampleValue.map(_.sampleRawValue).getOrElse(""),
-          sample_matched_fragment = sampleValue.map(_.sampleMatchedFragment).getOrElse("")
+          sample_matched_fragment = sampleValue.map(_.sampleMatchedFragment).getOrElse(""),
+          file_size = fileSize,
+          file_mtime_epoch_ms = fileMtimeEpochMs
         )
       }
+    }
+  }
+
+  private def applyAllowlist(
+    conf: org.apache.hadoop.conf.Configuration,
+    datasetPath: String,
+    allowlistMatcher: AllowlistMatcher,
+    allowlistInputRoot: Option[String],
+    results: Seq[ScanResult]
+  ): Seq[ScanResult] = {
+    if (results.isEmpty || allowlistMatcher.isEmpty || allowlistInputRoot.isEmpty) {
+      results
+    } else {
+      val inputRoot = allowlistInputRoot.get
+      results.flatMap { result =>
+        val hasCandidate =
+          allowlistMatcher.hasExactCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type) ||
+            allowlistMatcher.hasDirectoryCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)
+
+        if (!hasCandidate) {
+          Some(result)
+        } else {
+          FileIdentifierResolver.resolveFingerprints(conf, inputRoot, result.file_identifier) match {
+            case Right(fingerprints) =>
+              val evaluation = allowlistMatcher.evaluate(result.dataset_path, result.column_name, result.pii_type, fingerprints)
+              applyAllowlistEvaluation(result, evaluation)
+            case Left(errorMessage) =>
+              DriverLogger.warn(
+                "allowlist_resolution_failed",
+                "file_identifier" -> result.file_identifier,
+                "column" -> result.column_name,
+                "pii_type" -> result.pii_type,
+                "reason" -> errorMessage
+              )
+              Some(result)
+          }
+        }
+      }
+    }
+  }
+
+  private def applyAllowlistEvaluation(
+    result: ScanResult,
+    evaluation: AllowlistEvaluation
+  ): Option[ScanResult] = {
+    if (evaluation.shouldSuppress) {
+      None
+    } else if (
+      evaluation.reviewStatus != result.review_status ||
+        evaluation.reviewReason != result.review_reason ||
+        evaluation.reviewInvalidated != result.review_invalidated
+    ) {
+      Some(result.copy(
+        review_status = evaluation.reviewStatus,
+        review_reason = evaluation.reviewReason,
+        review_invalidated = evaluation.reviewInvalidated
+      ))
+    } else {
+      Some(result)
     }
   }
 
@@ -95,6 +159,8 @@ private[privyspark] object GroupScanner {
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
+    allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
+    allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     retainPayloads: Boolean = true,
     csvHeadCache: CsvHeadCache = new CsvHeadCache()
@@ -132,6 +198,8 @@ private[privyspark] object GroupScanner {
             fileParallelism,
             fileSampleRatio,
             fileSampleMinFiles,
+            allowlistMatcher,
+            allowlistInputRoot,
             progressRun,
             csvHeadCache
           )
@@ -162,6 +230,8 @@ private[privyspark] object GroupScanner {
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
+    allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
+    allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     selectedSourceKeys: Option[Seq[String]] = None
@@ -191,6 +261,8 @@ private[privyspark] object GroupScanner {
         fileParallelism,
         fileSampleRatio,
         fileSampleMinFiles,
+        allowlistMatcher,
+        allowlistInputRoot,
         progressRun,
         csvHeadCache
       )
@@ -217,6 +289,8 @@ private[privyspark] object GroupScanner {
         sampleRatio,
         timestamp,
         fileParallelism,
+        allowlistMatcher,
+        allowlistInputRoot,
         progressRun,
         csvHeadCache,
         fileSampleRatio,
@@ -248,6 +322,8 @@ private[privyspark] object GroupScanner {
         timestamp,
         fileSampleRatio,
         fileSampleMinFiles,
+        allowlistMatcher,
+        allowlistInputRoot,
         selectedSourceKeys = Some(effectiveSelectedSourceKeys)
       )
       progressRun.foreach { run =>
@@ -309,6 +385,8 @@ private[privyspark] object GroupScanner {
             fileParallelism,
             fileSampleRatio,
             fileSampleMinFiles,
+            allowlistMatcher,
+            allowlistInputRoot,
             progressRun,
             csvHeadCache
           )
@@ -332,6 +410,8 @@ private[privyspark] object GroupScanner {
             sampleRatio,
             timestamp,
             fileParallelism,
+            allowlistMatcher,
+            allowlistInputRoot,
             progressRun,
             csvHeadCache,
             fileSampleRatio,
@@ -360,6 +440,8 @@ private[privyspark] object GroupScanner {
     sampleRatio: Double,
     timestamp: String,
     fileParallelism: Int = -1,
+    allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
+    allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     fileSampleRatio: Option[Double] = None,
@@ -438,14 +520,22 @@ private[privyspark] object GroupScanner {
             },
             fileMetrics => {
               if (!group.useDirectoryIdentifier) {
-                val fileResults = buildScanResults(
+                val fileResults = applyAllowlist(
+                  spark.sparkContext.hadoopConfiguration,
                   datasetPath,
-                  fileMetrics.scanTimestamp,
-                  fileMetrics.fileIdentifier,
-                  fileMetrics.sampledRowCount,
-                  fileMetrics.nonEmptyValueCounts,
-                  fileMetrics.matchCounts,
-                  fileMetrics.sampleValues
+                  allowlistMatcher,
+                  allowlistInputRoot,
+                  buildScanResults(
+                    datasetPath,
+                    fileMetrics.scanTimestamp,
+                    fileMetrics.fileIdentifier,
+                    fileMetrics.sampledRowCount,
+                    fileMetrics.nonEmptyValueCounts,
+                    fileMetrics.matchCounts,
+                    fileMetrics.sampleValues,
+                    fileMetrics.fileSize,
+                    fileMetrics.fileMtimeEpochMs
+                  )
                 )
                 progressRun.foreach { run =>
                   persistProgressRecords(
@@ -517,7 +607,9 @@ private[privyspark] object GroupScanner {
           .map {
             case (metricAlias, values) => metricAlias -> values.head._2
           }
-          .toMap
+          .toMap,
+        successfulFileMetrics.map(_.fileSize).sum,
+        successfulFileMetrics.map(_.fileMtimeEpochMs).foldLeft(0L)(math.max)
       )
     } else {
       if (group.useDirectoryIdentifier && fallbackErrors.nonEmpty) {
@@ -545,10 +637,19 @@ private[privyspark] object GroupScanner {
           fileMetrics.sampledRowCount,
           fileMetrics.nonEmptyValueCounts,
           fileMetrics.matchCounts,
-          fileMetrics.sampleValues
+          fileMetrics.sampleValues,
+          fileMetrics.fileSize,
+          fileMetrics.fileMtimeEpochMs
         )
       }
     }
+    val filteredFallbackResults = applyAllowlist(
+      spark.sparkContext.hadoopConfiguration,
+      datasetPath,
+      allowlistMatcher,
+      allowlistInputRoot,
+      fallbackResults
+    )
     progressRun.foreach { run =>
       if (group.useDirectoryIdentifier) {
         persistProgressRecords(
@@ -556,7 +657,7 @@ private[privyspark] object GroupScanner {
           run,
           "group",
           group.directoryPath,
-          fallbackResults,
+          filteredFallbackResults,
           fallbackErrors.toSeq
         )
       }
@@ -569,9 +670,9 @@ private[privyspark] object GroupScanner {
       "schema" -> group.schemaSignature,
       "successful_files" -> successfulFileMetrics.size,
       "failed_files" -> fallbackErrors.size,
-      "result_rows" -> fallbackResults.size
+      "result_rows" -> filteredFallbackResults.size
     )
-    (fallbackResults.toSeq, fallbackErrors.toSeq)
+    (filteredFallbackResults.toSeq, fallbackErrors.toSeq)
   }
 
   def scanGroupBatch(
@@ -583,6 +684,8 @@ private[privyspark] object GroupScanner {
     timestamp: String,
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
+    allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
+    allowlistInputRoot: Option[String] = None,
     selectedSourceKeys: Option[Seq[String]] = None
   ): Seq[ScanResult] = {
     DriverLogger.debug(
@@ -654,15 +757,24 @@ private[privyspark] object GroupScanner {
               sampledRowCount,
               DetectionAggregator.countNonEmpty(sampledDf, matchCounts.map(_.columnName).distinct),
               matchCounts,
-              sampleValues
+              sampleValues,
+              effectiveSelectedSourceKeys.flatMap(group.fileSizesByKey.get).sum,
+              effectiveSelectedSourceKeys.flatMap(group.fileMtimesByKey.get).foldLeft(0L)(math.max)
+            )
+            val filteredResults = applyAllowlist(
+              spark.sparkContext.hadoopConfiguration,
+              datasetPath,
+              allowlistMatcher,
+              allowlistInputRoot,
+              results
             )
             DriverLogger.debug(
               "group_scan_batch_complete",
               "directory" -> group.directoryPath,
-              "result_rows" -> results.size,
+              "result_rows" -> filteredResults.size,
               "mode" -> "directory_identifier"
             )
-            results
+            filteredResults
           }
         case Some(columnName) =>
           val sampledRowsByFile = sampledDf
@@ -701,6 +813,7 @@ private[privyspark] object GroupScanner {
             val groupScanTimestamp = currentScanTimestamp()
             val results = matchCountsByFile.flatMap { matchCount =>
               sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
+                val sourceKey = resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier)
                 buildScanResults(
                   datasetPath,
                   groupScanTimestamp,
@@ -711,17 +824,26 @@ private[privyspark] object GroupScanner {
                   sampleValuesByFile
                     .get((matchCount.fileIdentifier, matchCount.metricAlias))
                     .map(value => Map(matchCount.metricAlias -> value))
-                    .getOrElse(Map.empty)
+                    .getOrElse(Map.empty),
+                  sourceKey.flatMap(group.fileSizesByKey.get).getOrElse(0L),
+                  sourceKey.flatMap(group.fileMtimesByKey.get).getOrElse(0L)
                 ).headOption
               }
             }
+            val filteredResults = applyAllowlist(
+              spark.sparkContext.hadoopConfiguration,
+              datasetPath,
+              allowlistMatcher,
+              allowlistInputRoot,
+              results
+            )
             DriverLogger.debug(
               "group_scan_batch_complete",
               "directory" -> group.directoryPath,
-              "result_rows" -> results.size,
+              "result_rows" -> filteredResults.size,
               "mode" -> "file_identifier"
             )
-            results
+            filteredResults
           }
       }
     }
@@ -747,6 +869,8 @@ private[privyspark] object GroupScanner {
 
     try {
       withFileReadRetry(spark, Seq(physicalPath), "file_scan") {
+        val fileStatus = new org.apache.hadoop.fs.Path(physicalPath).getFileSystem(spark.sparkContext.hadoopConfiguration)
+          .getFileStatus(new org.apache.hadoop.fs.Path(physicalPath))
         val format = formatOverride.orElse(detectPhysicalFormat(spark.sparkContext.hadoopConfiguration, physicalPath)).getOrElse {
           DriverLogger.debug("scan_file_error", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "reason" -> "Unsupported file format")
           return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $fileIdentifier"))
@@ -771,7 +895,16 @@ private[privyspark] object GroupScanner {
 
         if (sampledRowCount == 0L) {
           DriverLogger.debug("scan_file_complete", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "matches" -> 0)
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, Map.empty, Seq.empty, Map.empty, currentScanTimestamp()))
+          Right(FileScanMetrics(
+            fileIdentifier,
+            sampledRowCount,
+            Map.empty,
+            Seq.empty,
+            Map.empty,
+            fileStatus.getLen,
+            fileStatus.getModificationTime,
+            currentScanTimestamp()
+          ))
         } else {
           val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
           val nonEmptyValueCounts = DetectionAggregator.countNonEmpty(
@@ -785,7 +918,16 @@ private[privyspark] object GroupScanner {
             "file_identifier" -> fileIdentifier,
             "matches" -> matchCounts.size
           )
-          Right(FileScanMetrics(fileIdentifier, sampledRowCount, nonEmptyValueCounts, matchCounts, sampleValues, currentScanTimestamp()))
+          Right(FileScanMetrics(
+            fileIdentifier,
+            sampledRowCount,
+            nonEmptyValueCounts,
+            matchCounts,
+            sampleValues,
+            fileStatus.getLen,
+            fileStatus.getModificationTime,
+            currentScanTimestamp()
+          ))
         }
       }
     } catch {
@@ -812,7 +954,9 @@ private[privyspark] object GroupScanner {
         fileMetrics.sampledRowCount,
         fileMetrics.nonEmptyValueCounts,
         fileMetrics.matchCounts,
-        fileMetrics.sampleValues
+        fileMetrics.sampleValues,
+        fileMetrics.fileSize,
+        fileMetrics.fileMtimeEpochMs
       )
     }
   }
@@ -901,6 +1045,8 @@ private[privyspark] object GroupScanner {
     fileParallelism: Int,
     fileSampleRatio: Option[Double],
     fileSampleMinFiles: Int,
+    allowlistMatcher: AllowlistMatcher,
+    allowlistInputRoot: Option[String],
     progressRun: Option[ProgressRun],
     csvHeadCache: CsvHeadCache
   ): (Seq[ScanResult], Seq[ScanError]) = {
@@ -946,6 +1092,8 @@ private[privyspark] object GroupScanner {
         fileParallelism,
         fileSampleRatio,
         fileSampleMinFiles,
+        allowlistMatcher,
+        allowlistInputRoot,
         progressRun,
         csvHeadCache
       )

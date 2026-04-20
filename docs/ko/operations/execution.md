@@ -1,12 +1,12 @@
 # 실행과 운영
 
 ## 실행 모델
-- 명령은 `privyspark scan` 단일 진입점입니다.
+- 공개 명령은 `privyspark scan`, `privyspark review apply`입니다.
 - 입력/출력 경로는 절대경로 또는 URI만 허용합니다.
 - Spark on YARN cluster 실행을 기본 전제로 합니다.
 - 빌드 산출물은 Shadow fat JAR(`*-all.jar`)입니다.
 
-## CLI 인자
+## `scan` CLI 인자
 - `--path <ABS_PATH_OR_URI>`: 입력 경로
 - `--output <ABS_PATH_OR_URI>`: 출력 경로
 - `--output-format <parquet|csv|excel>`: 반복 지정 가능한 최종 출력 포맷, 기본 `parquet`
@@ -19,6 +19,14 @@
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
+- `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
+
+## `review apply` CLI 인자
+- `--scan-results <ABS_PATH_OR_URI>`: 담당자가 편집한 `scan_results` 입력 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
+- `--input-root <ABS_PATH_OR_URI>`: 원본 스캔 대상 루트 경로
+- `--allowlist <ABS_PATH_OR_URI>`: 생성 또는 갱신할 allowlist JSONL 경로
+- `--reviewer <STRING>`: 검토자 식별자
+- `--dry-run`: 실제 파일 기록 없이 반영 예정 엔트리 수만 계산
 
 ## Ignore 패턴
 - `/`가 없는 패턴은 basename 기준으로 매칭합니다. 예: `_SUCCESS`, `*.crc`
@@ -30,6 +38,8 @@
 - `--ignore-file`은 Hadoop `FileSystem`으로 읽습니다. YARN cluster에서 client 로컬 파일을 쓰려면 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 먼저 배포한 뒤 alias 경로를 `--ignore-file`에 넘겨야 합니다.
 
 ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로그, 백업 파일처럼 스캔 가치가 낮은 입력 때문에 불필요한 I/O, 오류 리포트, 결과 노이즈가 늘어나는 것을 막기 위해서입니다.
+
+allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 자체를 제외하고, allowlist는 탐지 이후 `(file_identifier, column_name, pii_type)` 단위 false positive만 suppress합니다.
 
 ## 병렬도
 - CLI 값을 주면 해당 값이 앱 로직에 직접 전달됩니다.

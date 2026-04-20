@@ -39,7 +39,12 @@ final case class ScanResult(
   non_empty_match_ratio: Double,
   confidence: Double,
   sample_raw_value: String,
-  sample_matched_fragment: String
+  sample_matched_fragment: String,
+  file_size: Long = 0L,
+  file_mtime_epoch_ms: Long = 0L,
+  review_status: String = "pending",
+  review_reason: String = "",
+  review_invalidated: Boolean = false
 )
 
 final case class ScanError(

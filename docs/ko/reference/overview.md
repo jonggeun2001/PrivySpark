@@ -3,7 +3,7 @@
 PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서 잠재적 개인정보를 탐지하고 집계된 결과 리포트와 오류 리포트를 생성합니다.
 
 ## 지원 범위
-- 실행 명령은 `privyspark scan` 단일 진입점입니다.
+- 공개 명령은 `privyspark scan`, `privyspark review apply`입니다.
 - 입력 경로는 절대경로 또는 URI만 허용합니다.
 - 지원 포맷은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`와 archive 계열 `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`입니다.
 - `gzip`, `bzip2`로 감싼 direct text-style data file(`csv`, `json/jsonl/ndjson`)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
@@ -37,3 +37,4 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 - 입력 포맷과 그룹화: [input-formats.md](input-formats.md)
 - ruleset과 탐지 제약: [rules-and-detection.md](rules-and-detection.md)
 - 결과/오류 리포트: [reports-and-errors.md](reports-and-errors.md)
+- false positive 검토 워크플로우: [review-workflow.md](review-workflow.md)

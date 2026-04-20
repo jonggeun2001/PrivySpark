@@ -101,6 +101,18 @@ private[privyspark] object PathIdentifiers {
     datasetPath: String,
     physicalPath: String
   ): String = {
+    resolveSourceKeyForPhysicalPath(group, physicalPath) match {
+      case Some(sourceKey) =>
+        resolveLogicalIdentifier(group, datasetPath, sourceKey)
+      case None =>
+        resolveRelativeIdentifier(datasetPath, physicalPath)
+    }
+  }
+
+  def resolveSourceKeyForPhysicalPath(
+    group: ScanGroup,
+    physicalPath: String
+  ): Option[String] = {
     val canonicalPhysicalPath = canonicalizePath(physicalPath)
     val exactMatches = group.filePaths.filter { sourceKey =>
       canonicalizePath(resolvePhysicalPath(group, sourceKey)) == canonicalPhysicalPath
@@ -117,9 +129,9 @@ private[privyspark] object PathIdentifiers {
 
     matchingSourceKeys.distinct match {
       case Seq(sourceKey) =>
-        resolveLogicalIdentifier(group, datasetPath, sourceKey)
+        Some(sourceKey)
       case Seq() =>
-        resolveRelativeIdentifier(datasetPath, physicalPath)
+        None
       case multiple =>
         throw new IllegalStateException(
           s"Ambiguous logical identifier mapping for physical path: $physicalPath (${multiple.mkString(",")})"

@@ -8,6 +8,8 @@ private[privyspark] final case class ScanFileEntry(
   directoryPath: String,
   format: String,
   logicalIdentifier: String,
+  fileSize: Long = 0L,
+  fileMtimeEpochMs: Long = 0L,
   readOptions: ScanReadOptions = ScanReadOptions(),
   allowDirectoryIdentifier: Boolean = true
 )
@@ -23,6 +25,8 @@ private[privyspark] final case class ScanGroup(
   csvHasHeader: Boolean = true,
   physicalPathsByKey: Map[String, String] = Map.empty,
   logicalIdentifiersByKey: Map[String, String] = Map.empty,
+  fileSizesByKey: Map[String, Long] = Map.empty,
+  fileMtimesByKey: Map[String, Long] = Map.empty,
   readOptionsByKey: Map[String, ScanReadOptions] = Map.empty,
   allowDirectoryIdentifier: Boolean = true
 )
@@ -42,6 +46,8 @@ private[privyspark] final case class FileScanMetrics(
   nonEmptyValueCounts: Map[String, Long],
   matchCounts: Seq[MatchCount],
   sampleValues: Map[String, SampleValue],
+  fileSize: Long,
+  fileMtimeEpochMs: Long,
   scanTimestamp: String
 )
 
