@@ -3644,6 +3644,26 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules records archive open failures for invalid 7z inputs") {
+    val inputDir = Files.createTempDirectory("privyspark-invalid-7z-fixture-")
+    val timestamp = "2026-04-17T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("broken.7z"), "not a real 7z archive\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(results.isEmpty)
+      assert(errors.exists(error =>
+        error.file_identifier == "broken.7z" &&
+          error.error_message.contains("Archive read failed")
+      ))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules expands rar archives and keeps nested identifiers") {
     val inputDir = Files.createTempDirectory("privyspark-rar-fixture-")
     val timestamp = "2026-04-17T00:00:00Z"
