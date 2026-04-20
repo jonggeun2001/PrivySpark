@@ -72,12 +72,36 @@ private[privyspark] object GroupScanner {
   private def buildReviewScopeFileFingerprints(
     conf: org.apache.hadoop.conf.Configuration,
     datasetPath: String,
-    fileIdentifiers: Seq[String]
+    fileIdentifiers: Seq[String],
+    expectedMetadataByFileIdentifier: Map[String, (Long, Long)]
   ): String = {
     val recordedFingerprints = ArrayBuffer.empty[RecordedFileFingerprint]
     fileIdentifiers.distinct.foreach { fileIdentifier =>
+      val expectedMetadata = expectedMetadataByFileIdentifier.get(fileIdentifier)
+      if (expectedMetadata.isEmpty) {
+        DriverLogger.warn(
+          "review_scope_fingerprint_metadata_missing",
+          "file_identifier" -> fileIdentifier
+        )
+        return ""
+      }
       FileIdentifierResolver.resolveFingerprints(conf, datasetPath, fileIdentifier) match {
         case Right(resolvedFingerprints) =>
+          val (expectedFileSize, expectedFileMtimeEpochMs) = expectedMetadata.get
+          val snapshotMatches = resolvedFingerprints.forall { fingerprint =>
+            fingerprint.fileIdentifier == fileIdentifier &&
+              fingerprint.fileSize == expectedFileSize &&
+              fingerprint.fileMtimeEpochMs == expectedFileMtimeEpochMs
+          }
+          if (!snapshotMatches) {
+            DriverLogger.warn(
+              "review_scope_fingerprint_snapshot_mismatch",
+              "file_identifier" -> fileIdentifier,
+              "expected_file_size" -> expectedFileSize,
+              "expected_file_mtime_epoch_ms" -> expectedFileMtimeEpochMs
+            )
+            return ""
+          }
           recordedFingerprints ++= resolvedFingerprints.map(RecordedFileFingerprint.fromResolved)
         case Left(errorMessage) =>
           DriverLogger.warn(
@@ -604,10 +628,14 @@ private[privyspark] object GroupScanner {
 
     val fallbackResults = if (group.useDirectoryIdentifier && fallbackErrors.isEmpty) {
       val reviewScopeFileIdentifiers = successfulFileMetrics.map(_.fileIdentifier)
+      val expectedScopeMetadata = successfulFileMetrics.map { fileMetrics =>
+        fileMetrics.fileIdentifier -> (fileMetrics.fileSize -> fileMetrics.fileMtimeEpochMs)
+      }.toMap
       val reviewScopeFileFingerprints = buildReviewScopeFileFingerprints(
         spark.sparkContext.hadoopConfiguration,
         datasetPath,
-        reviewScopeFileIdentifiers
+        reviewScopeFileIdentifiers,
+        expectedScopeMetadata
       )
       val sampledRowCount = successfulFileMetrics.map(_.sampledRowCount).sum
       val aggregatedMatchCounts = successfulFileMetrics
@@ -785,10 +813,15 @@ private[privyspark] object GroupScanner {
             val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts)
             val groupScanTimestamp = currentScanTimestamp()
             val reviewScopeFileIdentifiers = effectiveSelectedSourceKeys.map(sourceKey => resolveLogicalIdentifier(group, datasetPath, sourceKey))
+            val expectedScopeMetadata = effectiveSelectedSourceKeys.map { sourceKey =>
+              resolveLogicalIdentifier(group, datasetPath, sourceKey) ->
+                (group.fileSizesByKey.getOrElse(sourceKey, 0L) -> group.fileMtimesByKey.getOrElse(sourceKey, 0L))
+            }.toMap
             val reviewScopeFileFingerprints = buildReviewScopeFileFingerprints(
               spark.sparkContext.hadoopConfiguration,
               datasetPath,
-              reviewScopeFileIdentifiers
+              reviewScopeFileIdentifiers,
+              expectedScopeMetadata
             )
             val results = buildScanResults(
               datasetPath,

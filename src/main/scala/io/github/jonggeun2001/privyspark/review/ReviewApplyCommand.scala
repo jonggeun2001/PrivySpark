@@ -13,6 +13,7 @@ import java.io.{BufferedWriter, OutputStreamWriter}
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.UUID
+import scala.collection.JavaConverters._
 
 object ReviewApplyCommand {
   private final case class ReviewDecision(
@@ -123,8 +124,13 @@ object ReviewApplyCommand {
     requiredColumns.foreach { columnName =>
       require(normalizedColumns.contains(columnName), s"scan_results is missing required column: $columnName")
     }
+    val selectedColumnNames =
+      (requiredColumns ++ Seq("source_run_id", "review_scope_file_identifiers", "review_scope_file_fingerprints"))
+        .flatMap(normalizedColumns.get)
+        .distinct
+    val projectedDf = df.select(selectedColumnNames.map(df.col): _*)
 
-    df.collect().flatMap { row =>
+    projectedDf.toLocalIterator().asScala.flatMap { row =>
       val reviewStatus = valueOf(row, normalizedColumns("review_status"))
       ReviewStatus.normalize(reviewStatus) match {
         case Some(normalizedReviewStatus) =>
