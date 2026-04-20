@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark.scan
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
 import io.github.jonggeun2001.privyspark.format.ByteProbe.detectPhysicalFormat
 import io.github.jonggeun2001.privyspark.format.CsvInference._
+import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.deleteStagingPath
 import io.github.jonggeun2001.privyspark.scan.DirectoryScanner.splitGroupBySchema
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers._
@@ -14,13 +15,25 @@ import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressReco
 import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, FileIdentifierResolver, RecordedFileFingerprint, ReviewScopeFingerprintCodec}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{col, input_file_name}
+import org.apache.hadoop.fs.Path
 
+import java.io.{InputStream, OutputStream}
 import java.time.Instant
+import java.util.UUID
+import java.util.zip.CRC32
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 import scala.util.control.NonFatal
 
 private[privyspark] object GroupScanner {
+  private final case class StagedFileSnapshot(
+    stagedRoot: String,
+    stagedPath: String,
+    recordedFingerprint: RecordedFileFingerprint
+  )
+
+  private val CopyBufferSize = 8192
+
   private def effectiveRulesForFormat(format: String, rules: Seq[PiiRule]): Seq[PiiRule] = {
     rules
   }
@@ -69,50 +82,80 @@ private[privyspark] object GroupScanner {
     }
   }
 
-  private def buildReviewScopeFileFingerprints(
+  private def stageFileSnapshot(
     conf: org.apache.hadoop.conf.Configuration,
     datasetPath: String,
-    fileIdentifiers: Seq[String],
-    expectedMetadataByFileIdentifier: Map[String, (Long, Long)]
-  ): String = {
-    val recordedFingerprints = ArrayBuffer.empty[RecordedFileFingerprint]
-    fileIdentifiers.distinct.foreach { fileIdentifier =>
-      val expectedMetadata = expectedMetadataByFileIdentifier.get(fileIdentifier)
-      if (expectedMetadata.isEmpty) {
-        DriverLogger.warn(
-          "review_scope_fingerprint_metadata_missing",
-          "file_identifier" -> fileIdentifier
-        )
-        return ""
+    group: ScanGroup,
+    sourceKey: String
+  ): Either[String, StagedFileSnapshot] = {
+    val sourcePath = new Path(resolvePhysicalPath(group, sourceKey))
+    val sourceFs = sourcePath.getFileSystem(conf)
+    val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
+    val stagingBase = new Path(sourceFs.getHomeDirectory, ".privyspark-scan-staging")
+    val stagingRoot = new Path(stagingBase, UUID.randomUUID().toString)
+    val stagedPath = new Path(stagingRoot, sourcePath.getName)
+    var inputStream: InputStream = null
+    var outputStream: OutputStream = null
+
+    try {
+      val sourceStatus = sourceFs.getFileStatus(sourcePath)
+      val expectedFileSize = group.fileSizesByKey.getOrElse(sourceKey, sourceStatus.getLen)
+      val expectedFileMtimeEpochMs = group.fileMtimesByKey.getOrElse(sourceKey, sourceStatus.getModificationTime)
+      if (!sourceFs.exists(stagingBase) && !sourceFs.mkdirs(stagingBase)) {
+        return Left(s"Scan staging base creation failed: ${stagingBase.toString}")
       }
-      FileIdentifierResolver.resolveFingerprints(conf, datasetPath, fileIdentifier) match {
-        case Right(resolvedFingerprints) =>
-          val (expectedFileSize, expectedFileMtimeEpochMs) = expectedMetadata.get
-          val snapshotMatches = resolvedFingerprints.forall { fingerprint =>
-            fingerprint.fileIdentifier == fileIdentifier &&
-              fingerprint.fileSize == expectedFileSize &&
-              fingerprint.fileMtimeEpochMs == expectedFileMtimeEpochMs
-          }
-          if (!snapshotMatches) {
-            DriverLogger.warn(
-              "review_scope_fingerprint_snapshot_mismatch",
-              "file_identifier" -> fileIdentifier,
-              "expected_file_size" -> expectedFileSize,
-              "expected_file_mtime_epoch_ms" -> expectedFileMtimeEpochMs
-            )
-            return ""
-          }
-          recordedFingerprints ++= resolvedFingerprints.map(RecordedFileFingerprint.fromResolved)
-        case Left(errorMessage) =>
-          DriverLogger.warn(
-            "review_scope_fingerprint_resolution_failed",
-            "file_identifier" -> fileIdentifier,
-            "reason" -> errorMessage
-          )
-          return ""
+      if (!sourceFs.mkdirs(stagingRoot) && !sourceFs.exists(stagingRoot)) {
+        return Left(s"Scan staging directory creation failed: ${stagingRoot.toString}")
+      }
+
+      inputStream = sourceFs.open(sourcePath)
+      outputStream = sourceFs.create(stagedPath, true)
+      val crc32 = new CRC32()
+      val buffer = new Array[Byte](CopyBufferSize)
+      var bytesRead = inputStream.read(buffer)
+      while (bytesRead >= 0) {
+        if (bytesRead > 0) {
+          outputStream.write(buffer, 0, bytesRead)
+          crc32.update(buffer, 0, bytesRead)
+        }
+        bytesRead = inputStream.read(buffer)
+      }
+
+      Right(StagedFileSnapshot(
+        stagedRoot = stagingRoot.toString,
+        stagedPath = stagedPath.toString,
+        recordedFingerprint = RecordedFileFingerprint(
+          fileIdentifier = logicalIdentifier,
+          fileSize = expectedFileSize,
+          fileMtimeEpochMs = expectedFileMtimeEpochMs,
+          fileChecksumAlgo = FileIdentifierResolver.DefaultChecksumAlgo,
+          fileChecksum = f"${crc32.getValue}%08x"
+        )
+      ))
+    } catch {
+      case NonFatal(e) =>
+        deleteStagingPath(conf, stagingRoot.toString)
+        Left(s"Scan staging failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}")
+    } finally {
+      if (outputStream != null) {
+        try outputStream.close() catch {
+          case NonFatal(_) => ()
+        }
+      }
+      if (inputStream != null) {
+        try inputStream.close() catch {
+          case NonFatal(_) => ()
+        }
       }
     }
-    ReviewScopeFingerprintCodec.encode(recordedFingerprints.toSeq)
+  }
+
+  private def parseReviewScopeIdentifiers(rawValue: String): Seq[String] = {
+    Option(rawValue)
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map(_.split("\\|").toSeq.map(_.trim).filter(_.nonEmpty))
+      .getOrElse(Seq.empty)
   }
 
   private def applyAllowlist(
@@ -127,14 +170,33 @@ private[privyspark] object GroupScanner {
     } else {
       val inputRoot = allowlistInputRoot.get
       results.flatMap { result =>
+        val reviewScopeIdentifiers = parseReviewScopeIdentifiers(result.review_scope_file_identifiers)
         val hasCandidate =
-          allowlistMatcher.hasExactCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type) ||
-            allowlistMatcher.hasDirectoryCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)
+          allowlistMatcher.hasDirectoryCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type) ||
+            (if (reviewScopeIdentifiers.nonEmpty) {
+              reviewScopeIdentifiers.exists(identifier =>
+                allowlistMatcher.hasExactCandidate(result.dataset_path, identifier, result.column_name, result.pii_type)
+              )
+            } else {
+              allowlistMatcher.hasExactCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)
+            })
 
         if (!hasCandidate) {
           Some(result)
         } else {
-          FileIdentifierResolver.resolveFingerprints(conf, inputRoot, result.file_identifier) match {
+          val identifiersToResolve = if (reviewScopeIdentifiers.nonEmpty) reviewScopeIdentifiers else Seq(result.file_identifier)
+          val resolvedFingerprints = identifiersToResolve.foldLeft[Either[String, Vector[io.github.jonggeun2001.privyspark.review.ResolvedFileFingerprint]]](Right(Vector.empty)) {
+            case (Right(fingerprints), identifier) =>
+              FileIdentifierResolver.resolveFingerprints(conf, inputRoot, identifier) match {
+                case Right(resolved) =>
+                  Right(fingerprints ++ resolved)
+                case Left(errorMessage) =>
+                  Left(s"$identifier: $errorMessage")
+              }
+            case (left, _) =>
+              left
+          }
+          resolvedFingerprints match {
             case Right(fingerprints) =>
               val evaluation = allowlistMatcher.evaluate(result.dataset_path, result.column_name, result.pii_type, fingerprints)
               applyAllowlistEvaluation(result, evaluation)
@@ -328,7 +390,7 @@ private[privyspark] object GroupScanner {
       return exactSplitResult
     }
 
-    if (!supportsBatchScan(group)) {
+    if (!supportsBatchScan(group) || group.useDirectoryIdentifier) {
       val effectiveSelectedSourceKeys =
         selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
       val fallbackResult = scanGroupByFile(
@@ -354,7 +416,7 @@ private[privyspark] object GroupScanner {
         "schema" -> group.schemaSignature,
         "result_rows" -> fallbackResult._1.size,
         "error_rows" -> fallbackResult._2.size,
-        "mode" -> "direct_file_scan"
+        "mode" -> (if (group.useDirectoryIdentifier) "directory_file_scan" else "direct_file_scan")
       )
       return fallbackResult
     }
@@ -530,6 +592,7 @@ private[privyspark] object GroupScanner {
     )
     val successfulFileMetrics = ArrayBuffer.empty[FileScanMetrics]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
+    val conf = spark.sparkContext.hadoopConfiguration
     executeInParallel(parallelism, effectiveSelectedSourceKeys.map { sourceKey =>
       () => {
         val physicalPath = resolvePhysicalPath(group, sourceKey)
@@ -538,20 +601,50 @@ private[privyspark] object GroupScanner {
         DriverLogger.debug("group_scan_fallback_file_start", "file" -> physicalPath, "directory" -> group.directoryPath)
         val csvHasHeaderOverride =
           if (group.format == "csv" && group.schemaSampled) None else Some(group.csvHasHeader)
-        sourceKey -> scanFileMetrics(
-          spark,
-          datasetPath,
-          sourceKey,
-          rules,
-          effectiveSampleRatio,
-          timestamp,
-          csvHasHeaderOverride,
-          formatOverride = Some(group.format),
-          logicalIdentifierOverride = Some(logicalIdentifier),
-          physicalPathOverride = Some(physicalPath),
-          readOptions = readOptions,
-          csvHeadCache = csvHeadCache
-        )
+        val fileMetrics = if (group.useDirectoryIdentifier) {
+          stageFileSnapshot(conf, datasetPath, group, sourceKey) match {
+            case Right(stagedSnapshot) =>
+              try {
+                scanFileMetrics(
+                  spark,
+                  datasetPath,
+                  sourceKey,
+                  rules,
+                  effectiveSampleRatio,
+                  timestamp,
+                  csvHasHeaderOverride,
+                  formatOverride = Some(group.format),
+                  logicalIdentifierOverride = Some(logicalIdentifier),
+                  physicalPathOverride = Some(stagedSnapshot.stagedPath),
+                  fileSizeOverride = Some(stagedSnapshot.recordedFingerprint.fileSize),
+                  fileMtimeEpochMsOverride = Some(stagedSnapshot.recordedFingerprint.fileMtimeEpochMs),
+                  recordedFingerprint = Some(stagedSnapshot.recordedFingerprint),
+                  readOptions = readOptions,
+                  csvHeadCache = csvHeadCache
+                )
+              } finally {
+                deleteStagingPath(conf, stagedSnapshot.stagedRoot)
+              }
+            case Left(errorMessage) =>
+              Left(ScanError(datasetPath, timestamp, logicalIdentifier, errorMessage))
+          }
+        } else {
+          scanFileMetrics(
+            spark,
+            datasetPath,
+            sourceKey,
+            rules,
+            effectiveSampleRatio,
+            timestamp,
+            csvHasHeaderOverride,
+            formatOverride = Some(group.format),
+            logicalIdentifierOverride = Some(logicalIdentifier),
+            physicalPathOverride = Some(physicalPath),
+            readOptions = readOptions,
+            csvHeadCache = csvHeadCache
+          )
+        }
+        sourceKey -> fileMetrics
           .fold(
             error => {
               if (!group.useDirectoryIdentifier) {
@@ -628,15 +721,12 @@ private[privyspark] object GroupScanner {
 
     val fallbackResults = if (group.useDirectoryIdentifier && fallbackErrors.isEmpty) {
       val reviewScopeFileIdentifiers = successfulFileMetrics.map(_.fileIdentifier)
-      val expectedScopeMetadata = successfulFileMetrics.map { fileMetrics =>
-        fileMetrics.fileIdentifier -> (fileMetrics.fileSize -> fileMetrics.fileMtimeEpochMs)
-      }.toMap
-      val reviewScopeFileFingerprints = buildReviewScopeFileFingerprints(
-        spark.sparkContext.hadoopConfiguration,
-        datasetPath,
-        reviewScopeFileIdentifiers,
-        expectedScopeMetadata
-      )
+      val reviewScopeFileFingerprints =
+        if (successfulFileMetrics.forall(_.recordedFingerprint.nonEmpty)) {
+          ReviewScopeFingerprintCodec.encode(successfulFileMetrics.flatMap(_.recordedFingerprint))
+        } else {
+          ""
+        }
       val sampledRowCount = successfulFileMetrics.map(_.sampledRowCount).sum
       val aggregatedMatchCounts = successfulFileMetrics
         .flatMap(_.matchCounts)
@@ -750,6 +840,7 @@ private[privyspark] object GroupScanner {
     allowlistInputRoot: Option[String] = None,
     selectedSourceKeys: Option[Seq[String]] = None
   ): Seq[ScanResult] = {
+    require(!group.useDirectoryIdentifier, "scanGroupBatch does not support directory identifiers; use scanGroupByFile")
     DriverLogger.debug(
       "group_scan_batch_start",
       "directory" -> group.directoryPath,
@@ -793,64 +884,7 @@ private[privyspark] object GroupScanner {
 
       fileIdentifierColumn match {
         case None =>
-          val sampledRowCount = sampledDf.count()
-          DriverLogger.debug(
-            "group_scan_batch_sampled_rows",
-            "directory" -> group.directoryPath,
-            "sampled_rows" -> sampledRowCount,
-            "mode" -> "directory_identifier"
-          )
-          if (sampledRowCount == 0L) {
-            DriverLogger.debug(
-              "group_scan_batch_complete",
-              "directory" -> group.directoryPath,
-              "result_rows" -> 0,
-              "mode" -> "directory_identifier"
-            )
-            Seq.empty
-          } else {
-            val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
-            val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts)
-            val groupScanTimestamp = currentScanTimestamp()
-            val reviewScopeFileIdentifiers = effectiveSelectedSourceKeys.map(sourceKey => resolveLogicalIdentifier(group, datasetPath, sourceKey))
-            val expectedScopeMetadata = effectiveSelectedSourceKeys.map { sourceKey =>
-              resolveLogicalIdentifier(group, datasetPath, sourceKey) ->
-                (group.fileSizesByKey.getOrElse(sourceKey, 0L) -> group.fileMtimesByKey.getOrElse(sourceKey, 0L))
-            }.toMap
-            val reviewScopeFileFingerprints = buildReviewScopeFileFingerprints(
-              spark.sparkContext.hadoopConfiguration,
-              datasetPath,
-              reviewScopeFileIdentifiers,
-              expectedScopeMetadata
-            )
-            val results = buildScanResults(
-              datasetPath,
-              groupScanTimestamp,
-              resolveDirectoryIdentifier(datasetPath, group.directoryPath),
-              sampledRowCount,
-              DetectionAggregator.countNonEmpty(sampledDf, matchCounts.map(_.columnName).distinct),
-              matchCounts,
-              sampleValues,
-              effectiveSelectedSourceKeys.flatMap(group.fileSizesByKey.get).sum,
-              effectiveSelectedSourceKeys.flatMap(group.fileMtimesByKey.get).foldLeft(0L)(math.max),
-              reviewScopeFileIdentifiers,
-              reviewScopeFileFingerprints
-            )
-            val filteredResults = applyAllowlist(
-              spark.sparkContext.hadoopConfiguration,
-              datasetPath,
-              allowlistMatcher,
-              allowlistInputRoot,
-              results
-            )
-            DriverLogger.debug(
-              "group_scan_batch_complete",
-              "directory" -> group.directoryPath,
-              "result_rows" -> filteredResults.size,
-              "mode" -> "directory_identifier"
-            )
-            filteredResults
-          }
+          throw new IllegalStateException("scanGroupBatch does not support directory identifiers; use scanGroupByFile")
         case Some(columnName) =>
           val sampledRowsByFile = sampledDf
             .groupBy(col(columnName))
@@ -935,6 +969,9 @@ private[privyspark] object GroupScanner {
     formatOverride: Option[String] = None,
     logicalIdentifierOverride: Option[String] = None,
     physicalPathOverride: Option[String] = None,
+    fileSizeOverride: Option[Long] = None,
+    fileMtimeEpochMsOverride: Option[Long] = None,
+    recordedFingerprint: Option[RecordedFileFingerprint] = None,
     readOptions: ScanReadOptions = ScanReadOptions(),
     csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Either[ScanError, FileScanMetrics] = {
@@ -976,9 +1013,10 @@ private[privyspark] object GroupScanner {
             Map.empty,
             Seq.empty,
             Map.empty,
-            fileStatus.getLen,
-            fileStatus.getModificationTime,
-            currentScanTimestamp()
+            fileSizeOverride.getOrElse(fileStatus.getLen),
+            fileMtimeEpochMsOverride.getOrElse(fileStatus.getModificationTime),
+            currentScanTimestamp(),
+            recordedFingerprint
           ))
         } else {
           val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
@@ -999,9 +1037,10 @@ private[privyspark] object GroupScanner {
             nonEmptyValueCounts,
             matchCounts,
             sampleValues,
-            fileStatus.getLen,
-            fileStatus.getModificationTime,
-            currentScanTimestamp()
+            fileSizeOverride.getOrElse(fileStatus.getLen),
+            fileMtimeEpochMsOverride.getOrElse(fileStatus.getModificationTime),
+            currentScanTimestamp(),
+            recordedFingerprint
           ))
         }
       }

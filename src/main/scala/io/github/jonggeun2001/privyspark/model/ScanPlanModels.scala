@@ -1,5 +1,7 @@
 package io.github.jonggeun2001.privyspark.model
 
+import io.github.jonggeun2001.privyspark.review.RecordedFileFingerprint
+
 private[privyspark] final case class ScanReadOptions(sheetName: Option[String] = None)
 
 private[privyspark] final case class ScanFileEntry(
@@ -48,7 +50,8 @@ private[privyspark] final case class FileScanMetrics(
   sampleValues: Map[String, SampleValue],
   fileSize: Long,
   fileMtimeEpochMs: Long,
-  scanTimestamp: String
+  scanTimestamp: String,
+  recordedFingerprint: Option[RecordedFileFingerprint] = None
 )
 
 private[privyspark] final case class CachedSchemaSignature(signature: String, csvHasHeader: Boolean)
