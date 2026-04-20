@@ -17,6 +17,7 @@ import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistM
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{col, input_file_name}
 import org.apache.hadoop.fs.Path
+import org.apache.spark.util.SerializableConfiguration
 
 import java.io.{InputStream, OutputStream}
 import java.time.Instant
@@ -158,6 +159,29 @@ private[privyspark] object GroupScanner {
     fileSize: Long,
     fileMtimeEpochMs: Long
   ): RecordedFileFingerprint = {
+    val checksum = crc32Hex(conf, physicalPath)
+    recordedFingerprint(fileIdentifier, fileSize, fileMtimeEpochMs, checksum)
+  }
+
+  private def recordedFingerprint(
+    fileIdentifier: String,
+    fileSize: Long,
+    fileMtimeEpochMs: Long,
+    checksum: String
+  ): RecordedFileFingerprint = {
+    RecordedFileFingerprint(
+      fileIdentifier = fileIdentifier,
+      fileSize = fileSize,
+      fileMtimeEpochMs = fileMtimeEpochMs,
+      fileChecksumAlgo = FileIdentifierResolver.DefaultChecksumAlgo,
+      fileChecksum = checksum
+    )
+  }
+
+  private def crc32Hex(
+    conf: org.apache.hadoop.conf.Configuration,
+    physicalPath: String
+  ): String = {
     val sourcePath = new Path(physicalPath)
     val fs = sourcePath.getFileSystem(conf)
     var inputStream: InputStream = null
@@ -173,19 +197,38 @@ private[privyspark] object GroupScanner {
         }
         bytesRead = inputStream.read(buffer)
       }
-
-      RecordedFileFingerprint(
-        fileIdentifier = fileIdentifier,
-        fileSize = fileSize,
-        fileMtimeEpochMs = fileMtimeEpochMs,
-        fileChecksumAlgo = FileIdentifierResolver.DefaultChecksumAlgo,
-        fileChecksum = f"${crc32.getValue}%08x"
-      )
+      f"${crc32.getValue}%08x"
     } finally {
       if (inputStream != null) {
         try inputStream.close() catch {
           case NonFatal(_) => ()
         }
+      }
+    }
+  }
+
+  private def captureChecksumsDistributed(
+    spark: SparkSession,
+    physicalPaths: Seq[String]
+  ): Map[String, String] = {
+    val distinctPhysicalPaths = physicalPaths.distinct
+    if (distinctPhysicalPaths.isEmpty) {
+      Map.empty
+    } else {
+      val serializableConf = spark.sparkContext.broadcast(
+        new SerializableConfiguration(spark.sparkContext.hadoopConfiguration)
+      )
+      try {
+        val partitions = math.min(distinctPhysicalPaths.size, math.max(1, spark.sparkContext.defaultParallelism))
+        spark.sparkContext
+          .parallelize(distinctPhysicalPaths, partitions)
+          .map { physicalPath =>
+            canonicalizePath(physicalPath) -> crc32Hex(serializableConf.value.value, physicalPath)
+          }
+          .collect()
+          .toMap
+      } finally {
+        serializableConf.destroy()
       }
     }
   }
@@ -916,18 +959,21 @@ private[privyspark] object GroupScanner {
     val fileSamplingApplied = effectiveSelectedSourceKeys.size < group.filePaths.size
     val physicalPaths = effectiveSelectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
+      val checksumsByPhysicalPath = captureChecksumsDistributed(spark, physicalPaths)
       val recordedFingerprintsBySourceKey = effectiveSelectedSourceKeys
         .map { sourceKey =>
           val physicalPath = resolvePhysicalPath(group, sourceKey)
           val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
           val filePath = new Path(physicalPath)
           val fileStatus = filePath.getFileSystem(spark.sparkContext.hadoopConfiguration).getFileStatus(filePath)
-          sourceKey -> captureRecordedFingerprint(
-            spark.sparkContext.hadoopConfiguration,
+          sourceKey -> recordedFingerprint(
             logicalIdentifier,
-            physicalPath,
             group.fileSizesByKey.getOrElse(sourceKey, fileStatus.getLen),
-            group.fileMtimesByKey.getOrElse(sourceKey, fileStatus.getModificationTime)
+            group.fileMtimesByKey.getOrElse(sourceKey, fileStatus.getModificationTime),
+            checksumsByPhysicalPath.getOrElse(
+              canonicalizePath(physicalPath),
+              throw new IllegalStateException(s"Missing batch review fingerprint for $physicalPath")
+            )
           )
         }
         .toMap

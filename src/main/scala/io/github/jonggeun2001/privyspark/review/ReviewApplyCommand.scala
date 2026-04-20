@@ -261,6 +261,10 @@ object ReviewApplyCommand {
     decision: ReviewDecision,
     fingerprints: Seq[ResolvedFileFingerprint]
   ): Unit = {
+    require(
+      decision.reviewScopeFileFingerprints.nonEmpty,
+      s"False positive review rows require review_scope_file_fingerprints: ${decision.fileIdentifier}"
+    )
     if (decision.reviewScopeFileIdentifiers.nonEmpty) {
       require(
         decision.reviewScopeFileFingerprints.nonEmpty,

@@ -29,6 +29,7 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
       val usersCsv = inputRoot.resolve("users.csv")
       Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
       val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
+      val fileFingerprint = scopeFingerprints(inputRoot.toString, Seq("users.csv"))
       val scanResultsPath = writeScanResultsCsv(
         inputRoot,
         "scan_results.csv",
@@ -40,7 +41,8 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
           reviewStatus = ReviewStatus.FalsePositive,
           reviewReason = "known dummy data",
           fileSize = fileSize,
-          fileMtimeEpochMs = fileMtimeEpochMs
+          fileMtimeEpochMs = fileMtimeEpochMs,
+          reviewScopeFileFingerprints = fileFingerprint
         ))
       )
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
@@ -116,6 +118,7 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
       val usersCsv = inputRoot.resolve("users.csv")
       Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
       val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
+      val fileFingerprint = scopeFingerprints(inputRoot.toString, Seq("users.csv"))
       val scanResultsPath = writeScanResultsCsv(
         inputRoot,
         "scan_results.csv",
@@ -127,7 +130,8 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
           reviewStatus = ReviewStatus.FalsePositive,
           reviewReason = "known dummy data",
           fileSize = fileSize,
-          fileMtimeEpochMs = fileMtimeEpochMs
+          fileMtimeEpochMs = fileMtimeEpochMs,
+          reviewScopeFileFingerprints = fileFingerprint
         ))
       )
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
@@ -156,6 +160,7 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
       val usersCsv = inputRoot.resolve("users.csv")
       Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
       val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
+      val fileFingerprint = scopeFingerprints(inputRoot.toString, Seq("users.csv"))
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
 
       ReviewApplyCommand.run(
@@ -172,7 +177,8 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
               reviewStatus = ReviewStatus.FalsePositive,
               reviewReason = "known dummy data",
               fileSize = fileSize,
-              fileMtimeEpochMs = fileMtimeEpochMs
+              fileMtimeEpochMs = fileMtimeEpochMs,
+              reviewScopeFileFingerprints = fileFingerprint
             ))
           ).toString,
           inputRoot = inputRoot.toString,
@@ -251,42 +257,42 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     }
   }
 
-  test("run fails when scan result metadata is stale before writing allowlist") {
-    val inputRoot = Files.createTempDirectory("privyspark-review-apply-stale-metadata-")
+  test("run trusts fingerprint metadata over legacy aggregate columns for false_positive rows") {
+    val inputRoot = Files.createTempDirectory("privyspark-review-apply-fingerprint-authoritative-")
 
     try {
       val usersCsv = inputRoot.resolve("users.csv")
       Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
       val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
+      val fileFingerprint = scopeFingerprints(inputRoot.toString, Seq("users.csv"))
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
 
-      val error = intercept[IllegalArgumentException] {
-        ReviewApplyCommand.run(
-          spark,
-          ReviewApplyCliConfig(
-            scanResultsPath = writeScanResultsCsv(
-              inputRoot,
-              "scan_results_stale.csv",
-              Seq(scanResultRow(
-                datasetPath = inputRoot.toString,
-                fileIdentifier = "users.csv",
-                columnName = "email",
-                piiType = "email",
-                reviewStatus = ReviewStatus.FalsePositive,
-                reviewReason = "known dummy data",
-                fileSize = fileSize + 1L,
-                fileMtimeEpochMs = fileMtimeEpochMs
-              ))
-            ).toString,
-            inputRoot = inputRoot.toString,
-            allowlistPath = allowlistPath.toString,
-            reviewer = "reviewer@example.com"
-          )
+      ReviewApplyCommand.run(
+        spark,
+        ReviewApplyCliConfig(
+          scanResultsPath = writeScanResultsCsv(
+            inputRoot,
+            "scan_results_stale.csv",
+            Seq(scanResultRow(
+              datasetPath = inputRoot.toString,
+              fileIdentifier = "users.csv",
+              columnName = "email",
+              piiType = "email",
+              reviewStatus = ReviewStatus.FalsePositive,
+              reviewReason = "known dummy data",
+              fileSize = fileSize + 1L,
+              fileMtimeEpochMs = fileMtimeEpochMs + 1L,
+              reviewScopeFileFingerprints = fileFingerprint
+            ))
+          ).toString,
+          inputRoot = inputRoot.toString,
+          allowlistPath = allowlistPath.toString,
+          reviewer = "reviewer@example.com"
         )
-      }
+      )
 
-      assert(error.getMessage.contains("Scan result metadata is stale"))
-      assert(!Files.exists(allowlistPath))
+      val matcher = AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, allowlistPath.toString)
+      assert(matcher.hasExactCandidate(inputRoot.toString, "users.csv", "email", "email"))
     } finally {
       deleteRecursively(inputRoot)
     }
@@ -393,6 +399,45 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
 
       assert(error.getMessage.contains("Scan result metadata is stale"))
       assert(!Files.exists(allowlistPath))
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
+  test("run fails when a false_positive non-directory row omits fingerprint metadata") {
+    val inputRoot = Files.createTempDirectory("privyspark-review-apply-missing-file-fingerprint-")
+
+    try {
+      val usersCsv = inputRoot.resolve("users.csv")
+      Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
+
+      val error = intercept[IllegalArgumentException] {
+        ReviewApplyCommand.run(
+          spark,
+          ReviewApplyCliConfig(
+            scanResultsPath = writeScanResultsCsv(
+              inputRoot,
+              "scan_results_missing_file_fingerprint.csv",
+              Seq(scanResultRow(
+                datasetPath = inputRoot.toString,
+                fileIdentifier = "users.csv",
+                columnName = "email",
+                piiType = "email",
+                reviewStatus = ReviewStatus.FalsePositive,
+                reviewReason = "known dummy data",
+                fileSize = fileSize,
+                fileMtimeEpochMs = fileMtimeEpochMs
+              ))
+            ).toString,
+            inputRoot = inputRoot.toString,
+            allowlistPath = inputRoot.resolve("allowlist.jsonl").toString,
+            reviewer = "reviewer@example.com"
+          )
+        )
+      }
+
+      assert(error.getMessage.contains("review_scope_file_fingerprints"))
     } finally {
       deleteRecursively(inputRoot)
     }
