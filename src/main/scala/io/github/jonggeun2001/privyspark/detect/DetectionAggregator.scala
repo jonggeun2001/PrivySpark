@@ -470,11 +470,11 @@ object DetectionAggregator {
   private def buildMetrics(columns: Seq[String], rules: Seq[PiiRule], suppressions: SuppressionSet): Seq[Metric] = {
     columns.zipWithIndex.flatMap {
       case (columnName, columnIndex) =>
-        val normalizedColumnName = columnName.toLowerCase
+        val normalizedColumnName = SuppressionSet.normalizeColumnName(columnName)
         rules.zipWithIndex.flatMap {
           case (rule, ruleIndex) =>
             val passesHint =
-              rule.columnHints.isEmpty || rule.columnHints.exists(hint => normalizedColumnName.contains(hint.toLowerCase))
+              rule.columnHints.isEmpty || rule.columnHints.exists(hint => normalizedColumnName.contains(SuppressionSet.normalizeColumnName(hint)))
             val notSuppressed = !suppressions.isSuppressed(normalizedColumnName, rule.piiType)
             val shouldTestColumn = passesHint && notSuppressed
 

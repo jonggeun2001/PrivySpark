@@ -17,6 +17,7 @@ import org.scalatestplus.junit.JUnitRunner
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(classOf[JUnitRunner])
@@ -183,6 +184,23 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     assert(actual == Seq(MatchCount("PRDCTCD", "phone_number", 2L)))
     assert(coveredColumns == Seq("PRDCTCD"))
+  }
+
+  test("suppression lookup reuses trim and locale-stable normalization") {
+    val previousLocale = Locale.getDefault
+    Locale.setDefault(new Locale("tr", "TR"))
+
+    try {
+      val df = Seq("010-1234-5678").toDF(" PII ")
+      val rules = Seq(PiiRule("phone_number", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b"))
+      val suppressions = SuppressionSet.from(Seq(Suppression("pii", "phone_number")))
+
+      val actual = DetectionAggregator.aggregate(df, rules, suppressions = suppressions)
+
+      assert(actual.isEmpty)
+    } finally {
+      Locale.setDefault(previousLocale)
+    }
   }
 
   test("counts only full-value matches for full-column rules") {

@@ -30,7 +30,7 @@ object SuppressionSet {
     )
   }
 
-  private def normalizeColumnName(columnName: String): String = {
+  private[privyspark] def normalizeColumnName(columnName: String): String = {
     Option(columnName).map(_.trim.toLowerCase(Locale.ROOT)).getOrElse("")
   }
 }
