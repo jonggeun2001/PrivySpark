@@ -32,6 +32,7 @@
 - `review_status`
 - `review_reason`
 - `review_invalidated`
+- `review_scope_file_identifiers`
 
 `scan_results.scan_timestamp`는 CLI 시작 시각 고정값이 아니라, 각 결과 row가 실제로 만들어진 시점의 UTC ISO-8601 시각입니다. 따라서 장시간 스캔이나 다중 그룹 스캔에서는 결과 row마다 값이 달라질 수 있습니다.
 
@@ -52,6 +53,7 @@
 - `review_status` 기본값은 `pending`입니다. 운영 검토에서 `false_positive`, `true_positive`로 편집할 수 있습니다.
 - `review_reason`은 검토 사유 텍스트입니다. `false_positive` 판정 시 필수로 채우는 것을 권장합니다.
 - `review_invalidated=true`는 이전 allowlist와 같은 `(file_identifier, column_name, pii_type)` 조합이 있었지만, 현재 파일 메타데이터와 checksum이 달라져 재검토가 필요함을 의미합니다.
+- `review_scope_file_identifiers`는 디렉토리 집계 row가 실제로 포함한 concrete file identifier 목록입니다. `|` 구분 문자열로 저장되고 `review apply`는 이 목록만 allowlist로 전개합니다.
 - `--allowlist`를 쓰지 않으면 review 관련 필드는 기본값만 채워집니다.
 
 ## 비율 필드

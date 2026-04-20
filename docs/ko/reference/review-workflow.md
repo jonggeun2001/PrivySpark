@@ -29,9 +29,11 @@ privyspark review apply \
 동작 요약:
 - `review_status=false_positive` row만 읽습니다.
 - 각 row의 `file_identifier`를 실제 파일로 역해석합니다.
-- directory identifier는 해당 디렉터리의 direct child file identifier로 전개합니다.
+- directory identifier는 `review_scope_file_identifiers`에 기록된 concrete file identifier만 allowlist로 전개합니다.
 - 현재 파일의 `file_size`, `file_mtime_epoch_ms`, `CRC32`를 계산합니다.
 - 같은 key가 이미 있으면 최신 review로 덮어씁니다.
+
+같은 `scan_results` 파일에서 `true_positive` 또는 `pending`으로 바뀐 key는 기존 allowlist에서 제거됩니다.
 
 `--dry-run`을 주면 파일은 쓰지 않고 staged entry 수만 계산합니다.
 

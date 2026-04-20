@@ -60,16 +60,25 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
       Files.write(
         scanResultsPath,
         (
-          "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason\n" +
-            s"${inputRoot.toString},reviews,resident_registration_number,rrn,false_positive,dummy data\n"
+          "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason,review_scope_file_identifiers\n" +
+          s"${inputRoot.toString},reviews,resident_registration_number,rrn,false_positive,dummy data\n"
         ).getBytes(StandardCharsets.UTF_8)
       )
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
 
+      val scopedResultsPath = inputRoot.resolve("scan_results_scoped.csv")
+      Files.write(
+        scopedResultsPath,
+        (
+          "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason,review_scope_file_identifiers\n" +
+            s"${inputRoot.toString},reviews,resident_registration_number,rrn,false_positive,dummy data,reviews/a.csv|reviews/b.csv\n"
+        ).getBytes(StandardCharsets.UTF_8)
+      )
+
       ReviewApplyCommand.run(
         spark,
         ReviewApplyCliConfig(
-          scanResultsPath = scanResultsPath.toString,
+          scanResultsPath = scopedResultsPath.toString,
           inputRoot = inputRoot.toString,
           allowlistPath = allowlistPath.toString,
           reviewer = "reviewer@example.com"
@@ -114,6 +123,56 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     } finally {
       deleteRecursively(inputRoot)
     }
+  }
+
+  test("run removes existing allowlist entries when a reviewed row is no longer false_positive") {
+    val inputRoot = Files.createTempDirectory("privyspark-review-apply-reclassify-")
+
+    try {
+      Files.write(inputRoot.resolve("users.csv"), "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val allowlistPath = inputRoot.resolve("allowlist.jsonl")
+
+      ReviewApplyCommand.run(
+        spark,
+        ReviewApplyCliConfig(
+          scanResultsPath = writeScanResultsCsv(
+            inputRoot,
+            "scan_results_false_positive.csv",
+            "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason\n" +
+              s"${inputRoot.toString},users.csv,email,email,false_positive,known dummy data\n"
+          ).toString,
+          inputRoot = inputRoot.toString,
+          allowlistPath = allowlistPath.toString,
+          reviewer = "reviewer@example.com"
+        )
+      )
+
+      ReviewApplyCommand.run(
+        spark,
+        ReviewApplyCliConfig(
+          scanResultsPath = writeScanResultsCsv(
+            inputRoot,
+            "scan_results_true_positive.csv",
+            "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason\n" +
+              s"${inputRoot.toString},users.csv,email,email,true_positive,\n"
+          ).toString,
+          inputRoot = inputRoot.toString,
+          allowlistPath = allowlistPath.toString,
+          reviewer = "reviewer@example.com"
+        )
+      )
+
+      val matcher = AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, allowlistPath.toString)
+      assert(!matcher.hasExactCandidate(inputRoot.toString, "users.csv", "email", "email"))
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
+  private def writeScanResultsCsv(root: Path, fileName: String, contents: String): Path = {
+    val path = root.resolve(fileName)
+    Files.write(path, contents.getBytes(StandardCharsets.UTF_8))
+    path
   }
 
   private def deleteRecursively(path: Path): Unit = {

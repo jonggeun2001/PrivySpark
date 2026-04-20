@@ -34,7 +34,8 @@ private[privyspark] object GroupScanner {
     matchCounts: Seq[MatchCount],
     sampleValues: Map[String, SampleValue] = Map.empty,
     fileSize: Long = 0L,
-    fileMtimeEpochMs: Long = 0L
+    fileMtimeEpochMs: Long = 0L,
+    reviewScopeFileIdentifiers: Seq[String] = Seq.empty
   ): Seq[ScanResult] = {
     if (sampledRowCount <= 0L) {
       Seq.empty
@@ -59,7 +60,8 @@ private[privyspark] object GroupScanner {
           sample_raw_value = sampleValue.map(_.sampleRawValue).getOrElse(""),
           sample_matched_fragment = sampleValue.map(_.sampleMatchedFragment).getOrElse(""),
           file_size = fileSize,
-          file_mtime_epoch_ms = fileMtimeEpochMs
+          file_mtime_epoch_ms = fileMtimeEpochMs,
+          review_scope_file_identifiers = reviewScopeFileIdentifiers.mkString("|")
         )
       }
     }
@@ -609,7 +611,8 @@ private[privyspark] object GroupScanner {
           }
           .toMap,
         successfulFileMetrics.map(_.fileSize).sum,
-        successfulFileMetrics.map(_.fileMtimeEpochMs).foldLeft(0L)(math.max)
+        successfulFileMetrics.map(_.fileMtimeEpochMs).foldLeft(0L)(math.max),
+        successfulFileMetrics.map(_.fileIdentifier)
       )
     } else {
       if (group.useDirectoryIdentifier && fallbackErrors.nonEmpty) {
@@ -759,7 +762,8 @@ private[privyspark] object GroupScanner {
               matchCounts,
               sampleValues,
               effectiveSelectedSourceKeys.flatMap(group.fileSizesByKey.get).sum,
-              effectiveSelectedSourceKeys.flatMap(group.fileMtimesByKey.get).foldLeft(0L)(math.max)
+              effectiveSelectedSourceKeys.flatMap(group.fileMtimesByKey.get).foldLeft(0L)(math.max),
+              effectiveSelectedSourceKeys.map(sourceKey => resolveLogicalIdentifier(group, datasetPath, sourceKey))
             )
             val filteredResults = applyAllowlist(
               spark.sparkContext.hadoopConfiguration,

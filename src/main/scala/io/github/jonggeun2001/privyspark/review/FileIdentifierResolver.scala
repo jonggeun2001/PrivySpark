@@ -75,11 +75,19 @@ object FileIdentifierResolver {
       .filter(status => status.isFile)
       .sortBy(_.getPath.toString)
 
-    Right(statuses.map { status =>
+    val fingerprints = scala.collection.mutable.ArrayBuffer.empty[ResolvedFileFingerprint]
+    statuses.foreach { status =>
       val childPath = status.getPath.toString
       val childIdentifier = resolveRelativeIdentifier(inputRoot, childPath)
-      resolveFlatFileFingerprint(conf, childIdentifier, childPath, status).right.get
-    })
+      resolveFlatFileFingerprint(conf, childIdentifier, childPath, status) match {
+        case Right(fingerprint) =>
+          fingerprints += fingerprint
+        case Left(errorMessage) =>
+          return Left(errorMessage)
+      }
+    }
+
+    Right(fingerprints.toSeq)
   }
 
   private def resolveFlatFileFingerprint(
@@ -274,17 +282,21 @@ object FileIdentifierResolver {
           while (entry != null) {
             if (!entry.isDirectory && normalizeArchiveEntryName(entry.getName) == entryName) {
               val entryInputStream = archiveFile.getInputStream(entry)
-              val checksum = checksumFromInputStream(entryInputStream).right.get
-              return Right(
-                ResolvedFileFingerprint(
-                  fileIdentifier = originalIdentifier,
-                  physicalPath = archivePath,
-                  fileSize = if (entry.getSize >= 0L) entry.getSize else checksum._1,
-                  fileMtimeEpochMs = status.getModificationTime,
-                  fileChecksumAlgo = DefaultChecksumAlgo,
-                  fileChecksum = checksum._2
-                )
-              )
+              checksumFromInputStream(entryInputStream) match {
+                case Right((fileSize, checksum)) =>
+                  return Right(
+                    ResolvedFileFingerprint(
+                      fileIdentifier = originalIdentifier,
+                      physicalPath = archivePath,
+                      fileSize = if (entry.getSize >= 0L) entry.getSize else fileSize,
+                      fileMtimeEpochMs = status.getModificationTime,
+                      fileChecksumAlgo = DefaultChecksumAlgo,
+                      fileChecksum = checksum
+                    )
+                  )
+                case Left(errorMessage) =>
+                  return Left(errorMessage)
+              }
             }
             entry = archiveFile.getNextEntry
           }

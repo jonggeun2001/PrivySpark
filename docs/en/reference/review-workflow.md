@@ -29,9 +29,11 @@ privyspark review apply \
 What this command does:
 - Reads only rows where `review_status=false_positive`
 - Resolves each `file_identifier` back to the current input file
-- Expands directory identifiers into direct child file identifiers
+- Expands directory identifiers only through the recorded `review_scope_file_identifiers`
 - Calculates current `file_size`, `file_mtime_epoch_ms`, and `CRC32`
 - Upserts the latest review for the same key
+
+Keys from the same `scan_results` input that are now marked `true_positive` or `pending` are removed from the existing allowlist.
 
 With `--dry-run`, the command only reports staged entry counts and does not write the file.
 

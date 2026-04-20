@@ -44,7 +44,8 @@ final case class ScanResult(
   file_mtime_epoch_ms: Long = 0L,
   review_status: String = "pending",
   review_reason: String = "",
-  review_invalidated: Boolean = false
+  review_invalidated: Boolean = false,
+  review_scope_file_identifiers: String = ""
 )
 
 final case class ScanError(

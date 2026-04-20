@@ -13,16 +13,17 @@ import java.io.{BufferedWriter, OutputStreamWriter}
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.UUID
-import scala.collection.mutable.ArrayBuffer
 
 object ReviewApplyCommand {
-  private final case class ReviewCandidate(
+  private final case class ReviewDecision(
     datasetPath: String,
     fileIdentifier: String,
+    reviewStatus: String,
     columnName: String,
     piiType: String,
     reviewReason: String,
-    sourceRunId: String
+    sourceRunId: String,
+    reviewScopeFileIdentifiers: Seq[String]
   )
 
   def run(spark: SparkSession, config: ReviewApplyCliConfig): Unit = {
@@ -35,34 +36,48 @@ object ReviewApplyCommand {
       "dry_run" -> config.dryRun
     )
     val conf = spark.sparkContext.hadoopConfiguration
-    val reviewCandidates = loadReviewCandidates(spark, config)
+    val reviewDecisions = loadReviewDecisions(spark, config)
     val reviewedAt = Instant.now().toString
-    val stagedEntries = reviewCandidates.flatMap { candidate =>
-      FileIdentifierResolver.resolveFingerprints(conf, config.inputRoot, candidate.fileIdentifier) match {
-        case Right(fingerprints) =>
-          fingerprints.map { fingerprint =>
-            AllowlistEntry(
-              datasetPath = candidate.datasetPath,
-              fileIdentifier = fingerprint.fileIdentifier,
-              columnName = candidate.columnName,
-              piiType = candidate.piiType,
-              reason = candidate.reviewReason,
-              reviewer = config.reviewer,
-              reviewedAt = reviewedAt,
-              sourceRunId = candidate.sourceRunId,
-              fileSize = fingerprint.fileSize,
-              fileMtimeEpochMs = fingerprint.fileMtimeEpochMs,
-              fileChecksumAlgo = fingerprint.fileChecksumAlgo,
-              fileChecksum = fingerprint.fileChecksum
-            )
+    val resolvedDecisions = reviewDecisions.map { decision =>
+      decision -> concreteScopeIdentifiers(conf, config, decision)
+    }
+    val affectedKeys = resolvedDecisions.flatMap {
+      case (decision, concreteIdentifiers) =>
+        concreteIdentifiers.map(identifier =>
+          AllowlistKey(decision.datasetPath, identifier, decision.columnName, decision.piiType)
+        )
+    }.toSet
+    val stagedEntries = resolvedDecisions.flatMap {
+      case (decision, concreteIdentifiers) if decision.reviewStatus == ReviewStatus.FalsePositive =>
+        concreteIdentifiers.flatMap { concreteIdentifier =>
+          FileIdentifierResolver.resolveFingerprints(conf, config.inputRoot, concreteIdentifier) match {
+            case Right(fingerprints) =>
+              fingerprints.map { fingerprint =>
+                AllowlistEntry(
+                  datasetPath = decision.datasetPath,
+                  fileIdentifier = fingerprint.fileIdentifier,
+                  columnName = decision.columnName,
+                  piiType = decision.piiType,
+                  reason = decision.reviewReason,
+                  reviewer = config.reviewer,
+                  reviewedAt = reviewedAt,
+                  sourceRunId = decision.sourceRunId,
+                  fileSize = fingerprint.fileSize,
+                  fileMtimeEpochMs = fingerprint.fileMtimeEpochMs,
+                  fileChecksumAlgo = fingerprint.fileChecksumAlgo,
+                  fileChecksum = fingerprint.fileChecksum
+                )
+              }
+            case Left(errorMessage) =>
+              throw new IllegalArgumentException(s"Failed to resolve $concreteIdentifier: $errorMessage")
           }
-        case Left(errorMessage) =>
-          throw new IllegalArgumentException(s"Failed to resolve ${candidate.fileIdentifier}: $errorMessage")
-      }
+        }
+      case _ =>
+        Seq.empty
     }
 
     val existingEntries = loadExistingEntries(conf, config.allowlistPath)
-    val mergedEntries = (existingEntries ++ stagedEntries)
+    val mergedEntries = (existingEntries.filterNot(entry => affectedKeys.contains(entry.key)) ++ stagedEntries)
       .groupBy(_.key)
       .map {
         case (_, groupedEntries) => groupedEntries.last
@@ -72,7 +87,8 @@ object ReviewApplyCommand {
 
     DriverLogger.info(
       "review_apply_ready",
-      "review_rows" -> reviewCandidates.size,
+      "review_rows" -> reviewDecisions.size,
+      "affected_keys" -> affectedKeys.size,
       "staged_entries" -> stagedEntries.size,
       "final_entries" -> mergedEntries.size,
       "dry_run" -> config.dryRun
@@ -83,10 +99,10 @@ object ReviewApplyCommand {
     }
   }
 
-  private def loadReviewCandidates(
+  private def loadReviewDecisions(
     spark: SparkSession,
     config: ReviewApplyCliConfig
-  ): Seq[ReviewCandidate] = {
+  ): Seq[ReviewDecision] = {
     val df = readScanResults(spark, config.scanResultsPath)
     val normalizedColumns = df.columns.map(columnName => columnName.toLowerCase -> columnName).toMap
     val requiredColumns = Seq("dataset_path", "file_identifier", "column_name", "pii_type", "review_status", "review_reason")
@@ -97,16 +113,22 @@ object ReviewApplyCommand {
     df.collect().flatMap { row =>
       val reviewStatus = valueOf(row, normalizedColumns("review_status"))
       ReviewStatus.normalize(reviewStatus) match {
-        case Some(ReviewStatus.FalsePositive) =>
+        case Some(normalizedReviewStatus) =>
           val reviewReason = valueOf(row, normalizedColumns("review_reason")).trim
-          require(reviewReason.nonEmpty, s"review_reason is required for false_positive: ${valueOf(row, normalizedColumns("file_identifier"))}")
-          Some(ReviewCandidate(
+          if (normalizedReviewStatus == ReviewStatus.FalsePositive) {
+            require(reviewReason.nonEmpty, s"review_reason is required for false_positive: ${valueOf(row, normalizedColumns("file_identifier"))}")
+          }
+          Some(ReviewDecision(
             datasetPath = valueOf(row, normalizedColumns("dataset_path")),
             fileIdentifier = valueOf(row, normalizedColumns("file_identifier")),
+            reviewStatus = normalizedReviewStatus,
             columnName = valueOf(row, normalizedColumns("column_name")),
             piiType = valueOf(row, normalizedColumns("pii_type")),
             reviewReason = reviewReason,
-            sourceRunId = normalizedColumns.get("source_run_id").map(columnName => valueOf(row, columnName)).getOrElse("")
+            sourceRunId = normalizedColumns.get("source_run_id").map(columnName => valueOf(row, columnName)).getOrElse(""),
+            reviewScopeFileIdentifiers = normalizedColumns.get("review_scope_file_identifiers")
+              .map(columnName => parseScopeIdentifiers(valueOf(row, columnName)))
+              .getOrElse(Seq.empty)
           ))
         case _ =>
           None
@@ -190,6 +212,45 @@ object ReviewApplyCommand {
       fs.delete(tempPath, false)
       throw new IllegalStateException(s"Allowlist rename failed: $allowlistPath")
     }
+  }
+
+  private def concreteScopeIdentifiers(
+    conf: org.apache.hadoop.conf.Configuration,
+    config: ReviewApplyCliConfig,
+    decision: ReviewDecision
+  ): Seq[String] = {
+    if (decision.reviewScopeFileIdentifiers.nonEmpty) {
+      decision.reviewScopeFileIdentifiers
+    } else if (isDirectoryIdentifier(conf, config.inputRoot, decision.fileIdentifier)) {
+      throw new IllegalArgumentException(
+        s"Directory review rows require review_scope_file_identifiers: ${decision.fileIdentifier}"
+      )
+    } else {
+      Seq(decision.fileIdentifier)
+    }
+  }
+
+  private def isDirectoryIdentifier(
+    conf: org.apache.hadoop.conf.Configuration,
+    inputRoot: String,
+    fileIdentifier: String
+  ): Boolean = {
+    val resolvedPath = if (fileIdentifier == "." || fileIdentifier.isEmpty) {
+      inputRoot
+    } else {
+      new Path(new Path(inputRoot), fileIdentifier).toString
+    }
+    val path = new Path(resolvedPath)
+    val fs = path.getFileSystem(conf)
+    fs.exists(path) && fs.getFileStatus(path).isDirectory
+  }
+
+  private def parseScopeIdentifiers(rawValue: String): Seq[String] = {
+    Option(rawValue)
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map(_.split("\\|").toSeq.map(_.trim).filter(_.nonEmpty))
+      .getOrElse(Seq.empty)
   }
 
   private def allowlistEntryToJson(entry: AllowlistEntry): String =

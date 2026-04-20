@@ -32,6 +32,7 @@
 - `review_status`
 - `review_reason`
 - `review_invalidated`
+- `review_scope_file_identifiers`
 
 `scan_results.scan_timestamp` is the UTC ISO-8601 time when each result row is actually materialized, not a fixed CLI start timestamp. Long-running scans and multi-group scans can therefore contain different values across result rows.
 
@@ -52,6 +53,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 - `review_status` defaults to `pending`. Operators can edit it to `false_positive` or `true_positive`.
 - `review_reason` stores the operator note. It should be filled when a row is marked `false_positive`.
 - `review_invalidated=true` means the same `(file_identifier, column_name, pii_type)` tuple existed in the allowlist before, but the current file metadata and checksum no longer match and the row should be reviewed again.
+- `review_scope_file_identifiers` stores the concrete file identifiers included in a directory-level row. It is encoded as a `|`-delimited string, and `review apply` expands only this recorded scope.
 - When `--allowlist` is not provided, all review fields stay at their default values.
 
 ## Ratio Fields
