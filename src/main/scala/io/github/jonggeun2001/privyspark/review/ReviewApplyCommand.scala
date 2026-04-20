@@ -23,7 +23,9 @@ object ReviewApplyCommand {
     piiType: String,
     reviewReason: String,
     sourceRunId: String,
-    reviewScopeFileIdentifiers: Seq[String]
+    reviewScopeFileIdentifiers: Seq[String],
+    scanFileSize: Long,
+    scanFileMtimeEpochMs: Long
   )
 
   def run(spark: SparkSession, config: ReviewApplyCliConfig): Unit = {
@@ -49,28 +51,30 @@ object ReviewApplyCommand {
     }.toSet
     val stagedEntries = resolvedDecisions.flatMap {
       case (decision, concreteIdentifiers) if decision.reviewStatus == ReviewStatus.FalsePositive =>
-        concreteIdentifiers.flatMap { concreteIdentifier =>
+        val fingerprints = concreteIdentifiers.flatMap { concreteIdentifier =>
           FileIdentifierResolver.resolveFingerprints(conf, config.inputRoot, concreteIdentifier) match {
-            case Right(fingerprints) =>
-              fingerprints.map { fingerprint =>
-                AllowlistEntry(
-                  datasetPath = decision.datasetPath,
-                  fileIdentifier = fingerprint.fileIdentifier,
-                  columnName = decision.columnName,
-                  piiType = decision.piiType,
-                  reason = decision.reviewReason,
-                  reviewer = config.reviewer,
-                  reviewedAt = reviewedAt,
-                  sourceRunId = decision.sourceRunId,
-                  fileSize = fingerprint.fileSize,
-                  fileMtimeEpochMs = fingerprint.fileMtimeEpochMs,
-                  fileChecksumAlgo = fingerprint.fileChecksumAlgo,
-                  fileChecksum = fingerprint.fileChecksum
-                )
-              }
+            case Right(resolvedFingerprints) =>
+              resolvedFingerprints
             case Left(errorMessage) =>
               throw new IllegalArgumentException(s"Failed to resolve $concreteIdentifier: $errorMessage")
           }
+        }
+        validateScanMetadata(decision, fingerprints)
+        fingerprints.map { fingerprint =>
+          AllowlistEntry(
+            datasetPath = decision.datasetPath,
+            fileIdentifier = fingerprint.fileIdentifier,
+            columnName = decision.columnName,
+            piiType = decision.piiType,
+            reason = decision.reviewReason,
+            reviewer = config.reviewer,
+            reviewedAt = reviewedAt,
+            sourceRunId = decision.sourceRunId,
+            fileSize = fingerprint.fileSize,
+            fileMtimeEpochMs = fingerprint.fileMtimeEpochMs,
+            fileChecksumAlgo = fingerprint.fileChecksumAlgo,
+            fileChecksum = fingerprint.fileChecksum
+          )
         }
       case _ =>
         Seq.empty
@@ -105,7 +109,16 @@ object ReviewApplyCommand {
   ): Seq[ReviewDecision] = {
     val df = readScanResults(spark, config.scanResultsPath)
     val normalizedColumns = df.columns.map(columnName => columnName.toLowerCase -> columnName).toMap
-    val requiredColumns = Seq("dataset_path", "file_identifier", "column_name", "pii_type", "review_status", "review_reason")
+    val requiredColumns = Seq(
+      "dataset_path",
+      "file_identifier",
+      "column_name",
+      "pii_type",
+      "review_status",
+      "review_reason",
+      "file_size",
+      "file_mtime_epoch_ms"
+    )
     requiredColumns.foreach { columnName =>
       require(normalizedColumns.contains(columnName), s"scan_results is missing required column: $columnName")
     }
@@ -128,7 +141,9 @@ object ReviewApplyCommand {
             sourceRunId = normalizedColumns.get("source_run_id").map(columnName => valueOf(row, columnName)).getOrElse(""),
             reviewScopeFileIdentifiers = normalizedColumns.get("review_scope_file_identifiers")
               .map(columnName => parseScopeIdentifiers(valueOf(row, columnName)))
-              .getOrElse(Seq.empty)
+              .getOrElse(Seq.empty),
+            scanFileSize = valueOf(row, normalizedColumns("file_size")).toLong,
+            scanFileMtimeEpochMs = valueOf(row, normalizedColumns("file_mtime_epoch_ms")).toLong
           ))
         case None =>
           throw new IllegalArgumentException(
@@ -230,6 +245,19 @@ object ReviewApplyCommand {
     } else {
       Seq(decision.fileIdentifier)
     }
+  }
+
+  private def validateScanMetadata(
+    decision: ReviewDecision,
+    fingerprints: Seq[ResolvedFileFingerprint]
+  ): Unit = {
+    val currentFileSize = fingerprints.map(_.fileSize).sum
+    val currentFileMtimeEpochMs = fingerprints.map(_.fileMtimeEpochMs).foldLeft(0L)(math.max)
+
+    require(
+      decision.scanFileSize == currentFileSize && decision.scanFileMtimeEpochMs == currentFileMtimeEpochMs,
+      s"Scan result metadata is stale for ${decision.fileIdentifier}; rerun scan before review apply"
+    )
   }
 
   private def isDirectoryIdentifier(

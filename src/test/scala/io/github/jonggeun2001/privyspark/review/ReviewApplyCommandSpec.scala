@@ -11,6 +11,9 @@ import java.nio.file.{Files, Path}
 
 @RunWith(classOf[JUnitRunner])
 class ReviewApplyCommandSpec extends AnyFunSuite {
+  private val BaseScanResultHeader =
+    "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason,file_size,file_mtime_epoch_ms"
+
   private lazy val spark = SparkSession.builder()
     .appName("ReviewApplyCommandSpec")
     .master("local[2]")
@@ -21,14 +24,22 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     val inputRoot = Files.createTempDirectory("privyspark-review-apply-")
 
     try {
-      Files.write(inputRoot.resolve("users.csv"), "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
-      val scanResultsPath = inputRoot.resolve("scan_results.csv")
-      Files.write(
-        scanResultsPath,
-        (
-          "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason\n" +
-            s"${inputRoot.toString},users.csv,email,email,false_positive,known dummy data\n"
-        ).getBytes(StandardCharsets.UTF_8)
+      val usersCsv = inputRoot.resolve("users.csv")
+      Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
+      val scanResultsPath = writeScanResultsCsv(
+        inputRoot,
+        "scan_results.csv",
+        Seq(scanResultRow(
+          datasetPath = inputRoot.toString,
+          fileIdentifier = "users.csv",
+          columnName = "email",
+          piiType = "email",
+          reviewStatus = ReviewStatus.FalsePositive,
+          reviewReason = "known dummy data",
+          fileSize = fileSize,
+          fileMtimeEpochMs = fileMtimeEpochMs
+        ))
       )
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
 
@@ -54,24 +65,29 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
 
     try {
       val reviewsDir = Files.createDirectories(inputRoot.resolve("reviews"))
-      Files.write(reviewsDir.resolve("a.csv"), "id\n1\n".getBytes(StandardCharsets.UTF_8))
-      Files.write(reviewsDir.resolve("b.csv"), "id\n2\n".getBytes(StandardCharsets.UTF_8))
-      val scanResultsPath = inputRoot.resolve("scan_results.csv")
-      Files.write(
-        scanResultsPath,
-        (
-          "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason,review_scope_file_identifiers\n" +
-          s"${inputRoot.toString},reviews,resident_registration_number,rrn,false_positive,dummy data\n"
-        ).getBytes(StandardCharsets.UTF_8)
-      )
+      val firstCsv = reviewsDir.resolve("a.csv")
+      val secondCsv = reviewsDir.resolve("b.csv")
+      Files.write(firstCsv, "id\n1\n".getBytes(StandardCharsets.UTF_8))
+      Files.write(secondCsv, "id\n2\n".getBytes(StandardCharsets.UTF_8))
+      val (fileSize, fileMtimeEpochMs) = aggregateMetadata(Seq(firstCsv, secondCsv))
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
 
       val scopedResultsPath = inputRoot.resolve("scan_results_scoped.csv")
       Files.write(
         scopedResultsPath,
         (
-          "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason,review_scope_file_identifiers\n" +
-            s"${inputRoot.toString},reviews,resident_registration_number,rrn,false_positive,dummy data,reviews/a.csv|reviews/b.csv\n"
+          s"$BaseScanResultHeader,review_scope_file_identifiers\n" +
+            scanResultRow(
+              datasetPath = inputRoot.toString,
+              fileIdentifier = "reviews",
+              columnName = "resident_registration_number",
+              piiType = "rrn",
+              reviewStatus = ReviewStatus.FalsePositive,
+              reviewReason = "dummy data",
+              fileSize = fileSize,
+              fileMtimeEpochMs = fileMtimeEpochMs,
+              reviewScopeFileIdentifiers = Seq("reviews/a.csv", "reviews/b.csv")
+            ) + "\n"
         ).getBytes(StandardCharsets.UTF_8)
       )
 
@@ -97,14 +113,22 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     val inputRoot = Files.createTempDirectory("privyspark-review-apply-dry-run-")
 
     try {
-      Files.write(inputRoot.resolve("users.csv"), "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
-      val scanResultsPath = inputRoot.resolve("scan_results.csv")
-      Files.write(
-        scanResultsPath,
-        (
-          "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason\n" +
-            s"${inputRoot.toString},users.csv,email,email,false_positive,known dummy data\n"
-        ).getBytes(StandardCharsets.UTF_8)
+      val usersCsv = inputRoot.resolve("users.csv")
+      Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
+      val scanResultsPath = writeScanResultsCsv(
+        inputRoot,
+        "scan_results.csv",
+        Seq(scanResultRow(
+          datasetPath = inputRoot.toString,
+          fileIdentifier = "users.csv",
+          columnName = "email",
+          piiType = "email",
+          reviewStatus = ReviewStatus.FalsePositive,
+          reviewReason = "known dummy data",
+          fileSize = fileSize,
+          fileMtimeEpochMs = fileMtimeEpochMs
+        ))
       )
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
 
@@ -129,7 +153,9 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     val inputRoot = Files.createTempDirectory("privyspark-review-apply-reclassify-")
 
     try {
-      Files.write(inputRoot.resolve("users.csv"), "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val usersCsv = inputRoot.resolve("users.csv")
+      Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
       val allowlistPath = inputRoot.resolve("allowlist.jsonl")
 
       ReviewApplyCommand.run(
@@ -138,8 +164,16 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
           scanResultsPath = writeScanResultsCsv(
             inputRoot,
             "scan_results_false_positive.csv",
-            "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason\n" +
-              s"${inputRoot.toString},users.csv,email,email,false_positive,known dummy data\n"
+            Seq(scanResultRow(
+              datasetPath = inputRoot.toString,
+              fileIdentifier = "users.csv",
+              columnName = "email",
+              piiType = "email",
+              reviewStatus = ReviewStatus.FalsePositive,
+              reviewReason = "known dummy data",
+              fileSize = fileSize,
+              fileMtimeEpochMs = fileMtimeEpochMs
+            ))
           ).toString,
           inputRoot = inputRoot.toString,
           allowlistPath = allowlistPath.toString,
@@ -153,8 +187,16 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
           scanResultsPath = writeScanResultsCsv(
             inputRoot,
             "scan_results_true_positive.csv",
-            "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason\n" +
-              s"${inputRoot.toString},users.csv,email,email,true_positive,\n"
+            Seq(scanResultRow(
+              datasetPath = inputRoot.toString,
+              fileIdentifier = "users.csv",
+              columnName = "email",
+              piiType = "email",
+              reviewStatus = ReviewStatus.TruePositive,
+              reviewReason = "",
+              fileSize = fileSize,
+              fileMtimeEpochMs = fileMtimeEpochMs
+            ))
           ).toString,
           inputRoot = inputRoot.toString,
           allowlistPath = allowlistPath.toString,
@@ -173,7 +215,9 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     val inputRoot = Files.createTempDirectory("privyspark-review-apply-invalid-status-")
 
     try {
-      Files.write(inputRoot.resolve("users.csv"), "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val usersCsv = inputRoot.resolve("users.csv")
+      Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
 
       val error = intercept[IllegalArgumentException] {
         ReviewApplyCommand.run(
@@ -182,8 +226,16 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
             scanResultsPath = writeScanResultsCsv(
               inputRoot,
               "scan_results_invalid_status.csv",
-              "dataset_path,file_identifier,column_name,pii_type,review_status,review_reason\n" +
-                s"${inputRoot.toString},users.csv,email,email,false-postive,typo\n"
+              Seq(scanResultRow(
+                datasetPath = inputRoot.toString,
+                fileIdentifier = "users.csv",
+                columnName = "email",
+                piiType = "email",
+                reviewStatus = "false-postive",
+                reviewReason = "typo",
+                fileSize = fileSize,
+                fileMtimeEpochMs = fileMtimeEpochMs
+              ))
             ).toString,
             inputRoot = inputRoot.toString,
             allowlistPath = inputRoot.resolve("allowlist.jsonl").toString,
@@ -199,8 +251,88 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     }
   }
 
-  private def writeScanResultsCsv(root: Path, fileName: String, contents: String): Path = {
+  test("run fails when scan result metadata is stale before writing allowlist") {
+    val inputRoot = Files.createTempDirectory("privyspark-review-apply-stale-metadata-")
+
+    try {
+      val usersCsv = inputRoot.resolve("users.csv")
+      Files.write(usersCsv, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val (fileSize, fileMtimeEpochMs) = metadataOf(usersCsv)
+      val allowlistPath = inputRoot.resolve("allowlist.jsonl")
+
+      val error = intercept[IllegalArgumentException] {
+        ReviewApplyCommand.run(
+          spark,
+          ReviewApplyCliConfig(
+            scanResultsPath = writeScanResultsCsv(
+              inputRoot,
+              "scan_results_stale.csv",
+              Seq(scanResultRow(
+                datasetPath = inputRoot.toString,
+                fileIdentifier = "users.csv",
+                columnName = "email",
+                piiType = "email",
+                reviewStatus = ReviewStatus.FalsePositive,
+                reviewReason = "known dummy data",
+                fileSize = fileSize + 1L,
+                fileMtimeEpochMs = fileMtimeEpochMs
+              ))
+            ).toString,
+            inputRoot = inputRoot.toString,
+            allowlistPath = allowlistPath.toString,
+            reviewer = "reviewer@example.com"
+          )
+        )
+      }
+
+      assert(error.getMessage.contains("Scan result metadata is stale"))
+      assert(!Files.exists(allowlistPath))
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
+  private def metadataOf(path: Path): (Long, Long) = {
+    Files.size(path) -> Files.getLastModifiedTime(path).toMillis
+  }
+
+  private def aggregateMetadata(paths: Seq[Path]): (Long, Long) = {
+    paths.map(metadataOf).foldLeft(0L -> 0L) {
+      case ((totalSize, latestMtime), (fileSize, fileMtimeEpochMs)) =>
+        (totalSize + fileSize) -> math.max(latestMtime, fileMtimeEpochMs)
+    }
+  }
+
+  private def scanResultRow(
+    datasetPath: String,
+    fileIdentifier: String,
+    columnName: String,
+    piiType: String,
+    reviewStatus: String,
+    reviewReason: String,
+    fileSize: Long,
+    fileMtimeEpochMs: Long,
+    reviewScopeFileIdentifiers: Seq[String] = Seq.empty
+  ): String = {
+    val values = Seq(
+      datasetPath,
+      fileIdentifier,
+      columnName,
+      piiType,
+      reviewStatus,
+      reviewReason,
+      fileSize.toString,
+      fileMtimeEpochMs.toString
+    ) ++ (if (reviewScopeFileIdentifiers.nonEmpty) Seq(reviewScopeFileIdentifiers.mkString("|")) else Seq.empty)
+    values.mkString(",")
+  }
+
+  private def writeScanResultsCsv(root: Path, fileName: String, rows: Seq[String]): Path = {
     val path = root.resolve(fileName)
+    val includesScopeColumn = rows.exists(_.count(_ == ',') == BaseScanResultHeader.count(_ == ',') + 1)
+    val header =
+      if (includesScopeColumn) s"$BaseScanResultHeader,review_scope_file_identifiers" else BaseScanResultHeader
+    val contents = s"$header\n${rows.mkString("\n")}\n"
     Files.write(path, contents.getBytes(StandardCharsets.UTF_8))
     path
   }

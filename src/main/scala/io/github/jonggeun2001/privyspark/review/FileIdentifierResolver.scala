@@ -50,7 +50,7 @@ object FileIdentifierResolver {
     inputRoot: String,
     fileIdentifier: String
   ): Either[String, Seq[ResolvedFileFingerprint]] = {
-    val resolvedPath = resolveInputPath(inputRoot, fileIdentifier)
+    val resolvedPath = resolveInputPath(conf, inputRoot, fileIdentifier)
     val path = new Path(resolvedPath)
     val fs = path.getFileSystem(conf)
     if (!fs.exists(path)) {
@@ -115,7 +115,7 @@ object FileIdentifierResolver {
     sheetName: String,
     originalIdentifier: String
   ): Either[String, ResolvedFileFingerprint] = {
-    val workbookPath = resolveInputPath(inputRoot, workbookIdentifier)
+    val workbookPath = resolveInputPath(conf, inputRoot, workbookIdentifier)
     val path = new Path(workbookPath)
     val fs = path.getFileSystem(conf)
 
@@ -150,7 +150,7 @@ object FileIdentifierResolver {
     entryName: String,
     originalIdentifier: String
   ): Either[String, ResolvedFileFingerprint] = {
-    val archivePath = resolveInputPath(inputRoot, archiveIdentifier)
+    val archivePath = resolveInputPath(conf, inputRoot, archiveIdentifier)
     val path = new Path(archivePath)
     val fs = path.getFileSystem(conf)
     if (!fs.exists(path)) {
@@ -434,7 +434,7 @@ object FileIdentifierResolver {
       None
     } else {
       val workbookIdentifier = fileIdentifier.substring(0, separatorIndex)
-      val workbookPath = resolveInputPath(inputRoot, workbookIdentifier)
+      val workbookPath = resolveInputPath(conf, inputRoot, workbookIdentifier)
       val path = new Path(workbookPath)
       val fs = path.getFileSystem(conf)
 
@@ -446,9 +446,25 @@ object FileIdentifierResolver {
     }
   }
 
-  private def resolveInputPath(inputRoot: String, relativeIdentifier: String): String = {
-    if (relativeIdentifier == "." || relativeIdentifier.isEmpty) inputRoot
-    else new Path(new Path(inputRoot), relativeIdentifier).toString
+  private def resolveInputPath(
+    conf: Configuration,
+    inputRoot: String,
+    relativeIdentifier: String
+  ): String = {
+    val inputPath = new Path(inputRoot)
+    val fs = inputPath.getFileSystem(conf)
+    val inputIsFile = fs.exists(inputPath) && fs.getFileStatus(inputPath).isFile
+    val normalizedIdentifier = Option(relativeIdentifier).getOrElse("")
+
+    if (normalizedIdentifier == "." || normalizedIdentifier.isEmpty) {
+      inputRoot
+    } else if (inputIsFile && normalizedIdentifier == inputPath.getName) {
+      inputRoot
+    } else if (inputIsFile) {
+      Option(inputPath.getParent).map(parent => new Path(parent, normalizedIdentifier).toString).getOrElse(inputRoot)
+    } else {
+      new Path(inputPath, normalizedIdentifier).toString
+    }
   }
 
   private def withLocalArchiveFile[T](
