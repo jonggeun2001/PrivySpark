@@ -88,7 +88,7 @@ object AllowlistMatcher {
     if (normalizedPath.isEmpty) {
       empty
     } else {
-      fromEntries(loadEntries(conf, normalizedPath))
+      fromEntries(loadEntries(conf, resolveReadableAllowlistPath(conf, normalizedPath).getOrElse(normalizedPath)))
     }
   }
 
@@ -97,7 +97,20 @@ object AllowlistMatcher {
     if (normalizedPath.isEmpty) {
       Seq.empty
     } else {
-      readLines(conf, normalizedPath).flatMap(parseEntry)
+      readLines(conf, resolveReadableAllowlistPath(conf, normalizedPath).getOrElse(normalizedPath)).flatMap(parseEntry)
+    }
+  }
+
+  private def resolveReadableAllowlistPath(conf: Configuration, path: String): Option[String] = {
+    Seq(path, s"$path.bak").collectFirst {
+      case candidate if allowlistPathExists(conf, candidate) => candidate
+    }
+  }
+
+  private def allowlistPathExists(conf: Configuration, path: String): Boolean = {
+    resolveLocalAllowlistFile(path).exists(Files.exists(_)) || {
+      val hadoopPath = new Path(path)
+      hadoopPath.getFileSystem(conf).exists(hadoopPath)
     }
   }
 

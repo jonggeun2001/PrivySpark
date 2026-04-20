@@ -209,7 +209,8 @@ object ReviewApplyCommand {
   ): Seq[AllowlistEntry] = {
     val path = new Path(allowlistPath)
     val fs = path.getFileSystem(conf)
-    if (fs.exists(path)) AllowlistMatcher.loadEntries(conf, allowlistPath) else Seq.empty
+    val backupPath = new Path(s"${allowlistPath}.bak")
+    if (fs.exists(path) || fs.exists(backupPath)) AllowlistMatcher.loadEntries(conf, allowlistPath) else Seq.empty
   }
 
   private def writeAllowlist(
@@ -220,7 +221,7 @@ object ReviewApplyCommand {
     val path = new Path(allowlistPath)
     val fs = path.getFileSystem(conf)
     val tempPath = new Path(s"${allowlistPath}.tmp-${UUID.randomUUID().toString}")
-    val backupPath = new Path(s"${allowlistPath}.bak-${UUID.randomUUID().toString}")
+    val backupPath = new Path(s"${allowlistPath}.bak")
     val writer = new BufferedWriter(new OutputStreamWriter(fs.create(tempPath, true), StandardCharsets.UTF_8))
 
     try {
@@ -230,6 +231,11 @@ object ReviewApplyCommand {
       }
     } finally {
       writer.close()
+    }
+
+    if (fs.exists(backupPath) && !fs.delete(backupPath, false)) {
+      fs.delete(tempPath, false)
+      throw new IllegalStateException(s"Stale allowlist backup cleanup failed: ${backupPath.toString}")
     }
 
     if (fs.exists(path) && !fs.rename(path, backupPath)) {
@@ -310,11 +316,12 @@ object ReviewApplyCommand {
   }
 
   private def parseScopeIdentifiers(rawValue: String): Seq[String] = {
-    Option(rawValue)
-      .map(_.trim)
-      .filter(_.nonEmpty)
-      .map(_.split("\\|").toSeq.map(_.trim).filter(_.nonEmpty))
-      .getOrElse(Seq.empty)
+    ReviewScopeIdentifierCodec.decode(rawValue) match {
+      case Right(identifiers) =>
+        identifiers
+      case Left(errorMessage) =>
+        throw new IllegalArgumentException(errorMessage)
+    }
   }
 
   private def parseScopeFingerprints(rawValue: String): Seq[RecordedFileFingerprint] = {

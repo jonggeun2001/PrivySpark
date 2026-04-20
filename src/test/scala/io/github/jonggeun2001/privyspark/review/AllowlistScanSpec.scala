@@ -139,8 +139,12 @@ class AllowlistScanSpec extends AnyFunSuite {
         errorMessage => fail(errorMessage),
         identity
       )
+      val scopeIdentifiers = ReviewScopeIdentifierCodec.decode(result.review_scope_file_identifiers).fold(
+        errorMessage => fail(errorMessage),
+        identity
+      )
 
-      assert(result.review_scope_file_identifiers == "reviews/a.csv|reviews/b.csv")
+      assert(scopeIdentifiers == Seq("reviews/a.csv", "reviews/b.csv"))
       assert(scopeFingerprints.map(_.fileIdentifier) == Seq("reviews/a.csv", "reviews/b.csv"))
       assert(scopeFingerprints.forall(_.fileChecksum.nonEmpty))
     } finally {

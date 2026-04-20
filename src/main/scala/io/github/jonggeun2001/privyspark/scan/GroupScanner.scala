@@ -13,7 +13,7 @@ import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion.supportsBatchScan
 import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, PiiRule, ProgressRun, SampleValue, ScanError, ScanGroup, ScanReadOptions, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
-import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, FileIdentifierResolver, RecordedFileFingerprint, ReviewScopeFingerprintCodec}
+import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, FileIdentifierResolver, RecordedFileFingerprint, ReviewScopeFingerprintCodec, ReviewScopeIdentifierCodec}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{col, input_file_name}
 import org.apache.hadoop.fs.Path
@@ -77,7 +77,7 @@ private[privyspark] object GroupScanner {
           sample_matched_fragment = sampleValue.map(_.sampleMatchedFragment).getOrElse(""),
           file_size = fileSize,
           file_mtime_epoch_ms = fileMtimeEpochMs,
-          review_scope_file_identifiers = reviewScopeFileIdentifiers.mkString("|"),
+          review_scope_file_identifiers = ReviewScopeIdentifierCodec.encode(reviewScopeFileIdentifiers),
           review_scope_file_fingerprints = reviewScopeFileFingerprints
         )
       }
@@ -234,11 +234,12 @@ private[privyspark] object GroupScanner {
   }
 
   private def parseReviewScopeIdentifiers(rawValue: String): Seq[String] = {
-    Option(rawValue)
-      .map(_.trim)
-      .filter(_.nonEmpty)
-      .map(_.split("\\|").toSeq.map(_.trim).filter(_.nonEmpty))
-      .getOrElse(Seq.empty)
+    ReviewScopeIdentifierCodec.decode(rawValue) match {
+      case Right(identifiers) =>
+        identifiers
+      case Left(errorMessage) =>
+        throw new IllegalArgumentException(errorMessage)
+    }
   }
 
   private def encodeRecordedFingerprint(recordedFingerprint: Option[RecordedFileFingerprint]): String =
