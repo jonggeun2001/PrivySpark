@@ -27,6 +27,8 @@ class CliSpec extends AnyFunSuite {
     assert(config.ignorePatterns.isEmpty)
     assert(config.ignoreFile.isEmpty)
     assert(config.allowlist.isEmpty)
+    assert(config.suppressions.isEmpty)
+    assert(config.suppressionFile.isEmpty)
     assert(config.effectiveOutputFormats == Seq("parquet"))
   }
 
@@ -64,7 +66,15 @@ class CliSpec extends AnyFunSuite {
         "--allowlist",
         "/etc/privyspark/allowlist.jsonl",
         "--ignore-file",
-        "/etc/privyspark/ignore.txt"
+        "/etc/privyspark/ignore.txt",
+        "--suppress",
+        "prdctcd:driver_license_number",
+        "--suppress",
+        "foo:email",
+        "--suppress",
+        "ns:email:email",
+        "--suppression-file",
+        "/etc/privyspark/suppressions.txt"
       )
     )
 
@@ -81,6 +91,8 @@ class CliSpec extends AnyFunSuite {
     assert(config.ignorePatterns == Seq("_SUCCESS", "backup/**"))
     assert(config.allowlist.contains("/etc/privyspark/allowlist.jsonl"))
     assert(config.ignoreFile.contains("/etc/privyspark/ignore.txt"))
+    assert(config.suppressions == Seq("prdctcd:driver_license_number", "foo:email", "ns:email:email"))
+    assert(config.suppressionFile.contains("/etc/privyspark/suppressions.txt"))
   }
 
   test("rejects invalid sampling, parallelism, and output format values") {
@@ -103,6 +115,14 @@ class CliSpec extends AnyFunSuite {
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--file-parallelism", "-1"))
     val invalidOutputFormat =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--output-format", "json"))
+    val missingSuppressionSeparator =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd"))
+    val missingSuppressionColumn =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", ":email"))
+    val missingSuppressionPiiType =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd:"))
+    val blankSuppressionFile =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppression-file", "   "))
 
     assert(zeroRatio.isEmpty)
     assert(overOneRatio.isEmpty)
@@ -115,6 +135,10 @@ class CliSpec extends AnyFunSuite {
     assert(zeroGroupParallelism.isEmpty)
     assert(negativeFileParallelism.isEmpty)
     assert(invalidOutputFormat.isEmpty)
+    assert(missingSuppressionSeparator.isEmpty)
+    assert(missingSuppressionColumn.isEmpty)
+    assert(missingSuppressionPiiType.isEmpty)
+    assert(blankSuppressionFile.isEmpty)
   }
 
   test("parses review apply subcommand") {
@@ -154,6 +178,10 @@ class CliSpec extends AnyFunSuite {
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--file-sample-min-files", "0"))
     val invalidOutputFormat =
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--output-format", "json"))
+    val invalidSuppression =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd"))
+    val invalidSuppressionFile =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--suppression-file", " "))
     val invalidReviewApply = Cli.parseWithErrors(Array("review", "apply", "--scan-results", "/tmp/results.xlsx"))
 
     assert(missingPath.command.isEmpty)
@@ -166,6 +194,10 @@ class CliSpec extends AnyFunSuite {
     assert(invalidFileSampleMinFiles.errors.exists(_.contains("file-sample-min-files must be >= 1")))
     assert(invalidOutputFormat.command.isEmpty)
     assert(invalidOutputFormat.errors.exists(_.contains("output-format must be one of: parquet, csv, excel")))
+    assert(invalidSuppression.command.isEmpty)
+    assert(invalidSuppression.errors.exists(_.contains("suppress must use column:pii_type with non-empty values")))
+    assert(invalidSuppressionFile.command.isEmpty)
+    assert(invalidSuppressionFile.errors.exists(_.contains("suppression-file must not be blank")))
     assert(invalidReviewApply.command.isEmpty)
     assert(invalidReviewApply.errors.exists(_.contains("--input-root")))
   }

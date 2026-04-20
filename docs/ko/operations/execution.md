@@ -20,6 +20,8 @@
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
 - `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
+- `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
+- `--suppression-file <PATH>`: 줄 단위 suppression 파일 경로, `#` 주석과 빈 줄 무시
 
 ## `review apply` CLI 인자
 - `--scan-results <ABS_PATH_OR_URI>`: 담당자가 편집한 `scan_results` 입력 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
@@ -40,6 +42,12 @@
 ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로그, 백업 파일처럼 스캔 가치가 낮은 입력 때문에 불필요한 I/O, 오류 리포트, 결과 노이즈가 늘어나는 것을 막기 위해서입니다.
 
 allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 자체를 제외하고, allowlist는 탐지 이후 `(file_identifier, column_name, pii_type)` 단위 false positive만 suppress합니다.
+
+## Suppression
+- suppression은 특정 `(column, pii_type)` 결과만 제외합니다. 컬럼명은 대소문자를 무시하고 exact match 합니다.
+- `--suppress`는 `column:pii_type` 형식만 허용합니다.
+- `--suppression-file`은 Hadoop `FileSystem`으로 읽습니다. YARN cluster에서 client 로컬 파일을 쓰려면 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 먼저 배포한 뒤 alias 경로를 `--suppression-file`에 넘겨야 합니다.
+- CLI suppression은 ruleset YAML의 `suppressions:`와 union으로 합쳐집니다.
 
 ## 병렬도
 - CLI 값을 주면 해당 값이 앱 로직에 직접 전달됩니다.

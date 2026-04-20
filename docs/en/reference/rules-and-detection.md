@@ -25,7 +25,55 @@ Rulesets are validated before scanning so long-running jobs do not fail late bec
 - Each rule must include `pii_type` and `regex`.
 - `column_hints` is optional and limits the rule to matching column names.
 - `match_type` is optional and defaults to `value`.
+- Top-level `suppressions` is optional and removes specific `(column, pii_type)` result pairs.
 - Supported `match_type` values are `value` and `full_column`.
+
+## Suppressing False Positives
+When one column repeatedly produces noise for only one PII type, you can keep the rule enabled and suppress just that result pair. Suppression matches on case-insensitive exact column name plus exact `pii_type`.
+
+### Ruleset YAML
+
+```yaml
+rules:
+  - pii_type: driver_license_number
+    regex: '...'
+
+suppressions:
+  - column: prdctcd
+    pii_type: driver_license_number
+  - column: PRDCTCD
+    pii_type: phone_number
+```
+
+### CLI Overrides
+- `--suppress <column:pii_type>` is repeatable.
+- `--suppression-file <path>` reads UTF-8 lines in `column:pii_type` format and ignores blank lines plus `#` comments.
+- CLI/file parsing uses the last `:` as the delimiter, so column names may themselves contain `:`.
+- CLI suppressions merge with ruleset `suppressions:`. They do not replace them.
+- In YARN cluster mode, distribute client-local suppression files first with `--files` or `PRIVYSPARK_SPARK_FILES`, then pass the distributed alias to `--suppression-file`.
+
+Example:
+
+```bash
+bin/privyspark-submit \
+  scan \
+  --path /abs/input \
+  --output /abs/output \
+  --ruleset default \
+  --suppress prdctcd:driver_license_number \
+  --suppression-file scan.suppressions
+```
+
+### Matching Semantics
+- Column names are trimmed, lowercased, and matched by exact equality.
+- `pii_type` is trimmed and matched by exact equality.
+- Suppression happens before metric planning, so suppressed pairs never produce `match_count`, ratios, confidence, or sample values.
+- Other `pii_type` matches on the same column still remain visible.
+
+### Scope and Non-goals
+- Suppressions that reference an undefined `pii_type` only emit a warning so the same suppression file can be reused across rulesets.
+- Suppressions do not support value-based exceptions or glob/regex column matching.
+- After changing suppressions, rerun the scan instead of reusing old outputs.
 
 ## Unsupported Rule Shapes
 - `pii_type: name`

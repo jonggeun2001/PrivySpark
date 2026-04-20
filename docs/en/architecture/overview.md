@@ -9,7 +9,7 @@
 - `cli/Cli.scala`: CLI arguments and default execution options
 - `format/FormatDetector.scala`: first-stage format detection by extension
 - `format/CompressionStreams.scala`: codec wrapping for direct compressed text-style files and compressed tar streams
-- `RulesetLoader.scala`: built-in and external ruleset loading and validation
+- `RulesetLoader.scala`: built-in/external ruleset loading, suppression loading, and regex validation
 - `util/DriverLogger.scala`: driver log level parsing and structured log format
 - `detect/DetectionAggregator.scala`: metric aggregation and fallback strategies
 - `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: input expansion, grouping, and scan execution
@@ -23,7 +23,7 @@
 
 ## Processing Flow
 1. validate input path
-2. load ruleset and pre-validate regexes
+2. load ruleset, pre-validate regexes, and merge ruleset/CLI suppressions
 3. collect physical files and apply ignore-pattern filtering
 4. expand archive entries and workbook sheets, pass through direct compressed text-style inputs, probe magic bytes, normalize text fallback, and filter ignored archive entries
 5. build first-pass groups by `(directory, format)`
@@ -41,6 +41,7 @@
 - `scan_results` stores two interpretation aids: `sample_matched_fragment` keeps the detected fragment itself, and `sample_raw_value` keeps only up to 50 characters of surrounding context on each side.
 - `--pre-scan-parallelism` applies to directory discovery, input expansion, format probing, and schema split.
 - `--ignore` and `--ignore-file` apply immediately after physical file discovery and again during archive entry expansion.
+- Suppression is applied during `DetectionAggregator.buildMetrics`, before metric planning, so excluded `(column, pii_type)` pairs never materialize result rows.
 - Directory discovery uses breadth-first traversal and parallelizes `listStatus` per BFS level, capped by the safety ceiling `64`.
 - After file discovery, effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
 - `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.

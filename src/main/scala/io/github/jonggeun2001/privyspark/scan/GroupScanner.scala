@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark.scan
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
 import io.github.jonggeun2001.privyspark.format.ByteProbe.detectPhysicalFormat
 import io.github.jonggeun2001.privyspark.format.CsvInference._
+import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.deleteStagingPath
 import io.github.jonggeun2001.privyspark.scan.DirectoryScanner.splitGroupBySchema
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
@@ -271,6 +272,7 @@ private[privyspark] object GroupScanner {
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
     allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
@@ -310,6 +312,7 @@ private[privyspark] object GroupScanner {
             fileParallelism,
             fileSampleRatio,
             fileSampleMinFiles,
+            suppressions,
             allowlistMatcher,
             allowlistInputRoot,
             progressRun,
@@ -342,6 +345,7 @@ private[privyspark] object GroupScanner {
     fileParallelism: Int = -1,
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
     allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
@@ -373,6 +377,7 @@ private[privyspark] object GroupScanner {
         fileParallelism,
         fileSampleRatio,
         fileSampleMinFiles,
+        suppressions,
         allowlistMatcher,
         allowlistInputRoot,
         progressRun,
@@ -401,6 +406,7 @@ private[privyspark] object GroupScanner {
         sampleRatio,
         timestamp,
         fileParallelism,
+        suppressions,
         allowlistMatcher,
         allowlistInputRoot,
         progressRun,
@@ -434,6 +440,7 @@ private[privyspark] object GroupScanner {
         timestamp,
         fileSampleRatio,
         fileSampleMinFiles,
+        suppressions,
         allowlistMatcher,
         allowlistInputRoot,
         selectedSourceKeys = Some(effectiveSelectedSourceKeys)
@@ -497,6 +504,7 @@ private[privyspark] object GroupScanner {
             fileParallelism,
             fileSampleRatio,
             fileSampleMinFiles,
+            suppressions,
             allowlistMatcher,
             allowlistInputRoot,
             progressRun,
@@ -522,6 +530,7 @@ private[privyspark] object GroupScanner {
             sampleRatio,
             timestamp,
             fileParallelism,
+            suppressions,
             allowlistMatcher,
             allowlistInputRoot,
             progressRun,
@@ -552,6 +561,7 @@ private[privyspark] object GroupScanner {
     sampleRatio: Double,
     timestamp: String,
     fileParallelism: Int = -1,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
     allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
@@ -620,6 +630,7 @@ private[privyspark] object GroupScanner {
                   fileMtimeEpochMsOverride = Some(stagedSnapshot.recordedFingerprint.fileMtimeEpochMs),
                   recordedFingerprint = Some(stagedSnapshot.recordedFingerprint),
                   readOptions = readOptions,
+                  suppressions = suppressions,
                   csvHeadCache = csvHeadCache
                 )
               } finally {
@@ -643,6 +654,7 @@ private[privyspark] object GroupScanner {
             fileSizeOverride = group.fileSizesByKey.get(sourceKey),
             fileMtimeEpochMsOverride = group.fileMtimesByKey.get(sourceKey),
             readOptions = readOptions,
+            suppressions = suppressions,
             csvHeadCache = csvHeadCache
           )
         }
@@ -838,6 +850,7 @@ private[privyspark] object GroupScanner {
     timestamp: String,
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
     allowlistInputRoot: Option[String] = None,
     selectedSourceKeys: Option[Seq[String]] = None
@@ -918,8 +931,14 @@ private[privyspark] object GroupScanner {
             )
             Seq.empty
           } else {
-            val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules)
-            val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(sampledDf, columnName, effectiveRules, matchCountsByFile)
+            val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules, suppressions = suppressions)
+            val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(
+              sampledDf,
+              columnName,
+              effectiveRules,
+              matchCountsByFile,
+              suppressions = suppressions
+            )
             val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
             val groupScanTimestamp = currentScanTimestamp()
             val results = matchCountsByFile.flatMap { matchCount =>
@@ -975,6 +994,7 @@ private[privyspark] object GroupScanner {
     fileMtimeEpochMsOverride: Option[Long] = None,
     recordedFingerprint: Option[RecordedFileFingerprint] = None,
     readOptions: ScanReadOptions = ScanReadOptions(),
+    suppressions: SuppressionSet = SuppressionSet.empty,
     csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): Either[ScanError, FileScanMetrics] = {
     val physicalPath = physicalPathOverride.getOrElse(filePath)
@@ -1021,12 +1041,12 @@ private[privyspark] object GroupScanner {
             recordedFingerprint
           ))
         } else {
-          val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules)
+          val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules, suppressions = suppressions)
           val nonEmptyValueCounts = DetectionAggregator.countNonEmpty(
             sampledDf,
-            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules)
+            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules, suppressions)
           )
-          val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts)
+          val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts, suppressions = suppressions)
           DriverLogger.debug(
             "scan_file_complete",
             "file" -> physicalPath,
@@ -1060,9 +1080,10 @@ private[privyspark] object GroupScanner {
     filePath: String,
     rules: Seq[PiiRule],
     sampleRatio: Double,
-    timestamp: String
+    timestamp: String,
+    suppressions: SuppressionSet = SuppressionSet.empty
   ): Either[ScanError, Seq[ScanResult]] = {
-    scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp).map { fileMetrics =>
+    scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp, suppressions = suppressions).map { fileMetrics =>
       buildScanResults(
         datasetPath,
         fileMetrics.scanTimestamp,
@@ -1161,6 +1182,7 @@ private[privyspark] object GroupScanner {
     fileParallelism: Int,
     fileSampleRatio: Option[Double],
     fileSampleMinFiles: Int,
+    suppressions: SuppressionSet,
     allowlistMatcher: AllowlistMatcher,
     allowlistInputRoot: Option[String],
     progressRun: Option[ProgressRun],
@@ -1208,6 +1230,7 @@ private[privyspark] object GroupScanner {
         fileParallelism,
         fileSampleRatio,
         fileSampleMinFiles,
+        suppressions,
         allowlistMatcher,
         allowlistInputRoot,
         progressRun,
