@@ -170,12 +170,12 @@ object AllowlistMatcher {
   private def resolveLocalAllowlistFile(path: String): Option[java.nio.file.Path] = {
     val hadoopPath = new Path(path)
     val uri = hadoopPath.toUri
+    val workingDirectoryCandidate = Paths.get(path)
 
-    if (uri.getScheme != null || uri.getAuthority != null) {
+    if (uri.getScheme != null || uri.getAuthority != null || workingDirectoryCandidate.isAbsolute) {
       None
     } else {
       val sparkFilesCandidate = Option(SparkEnv.get).map(_ => Paths.get(SparkFiles.get(path)))
-      val workingDirectoryCandidate = Paths.get(path)
 
       Seq(sparkFilesCandidate, Some(workingDirectoryCandidate)).flatten.collectFirst {
         case candidate if Files.exists(candidate) => candidate.toAbsolutePath.normalize()

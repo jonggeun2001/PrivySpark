@@ -4,6 +4,8 @@ import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
+import java.nio.file.Files
+
 @RunWith(classOf[JUnitRunner])
 class AllowlistMatcherSpec extends AnyFunSuite {
   test("evaluate suppresses an exact file match when metadata is unchanged") {
@@ -101,6 +103,22 @@ class AllowlistMatcherSpec extends AnyFunSuite {
     assert(!keepEvaluation.shouldSuppress)
     assert(!keepEvaluation.reviewInvalidated)
     assert(matcher.hasDirectoryCandidate("/data", "reviews", "resident_registration_number", "rrn"))
+  }
+
+  test("local allowlist fallback ignores absolute paths without a scheme") {
+    val tempFile = Files.createTempFile("privyspark-allowlist-absolute-", ".jsonl")
+
+    try {
+      val method = AllowlistMatcher.getClass.getDeclaredMethod("resolveLocalAllowlistFile", classOf[String])
+      method.setAccessible(true)
+
+      val resolved = method.invoke(AllowlistMatcher, tempFile.toAbsolutePath.toString)
+        .asInstanceOf[Option[java.nio.file.Path]]
+
+      assert(resolved.isEmpty)
+    } finally {
+      Files.deleteIfExists(tempFile)
+    }
   }
 
   private def allowlistEntry(fileIdentifier: String): AllowlistEntry =

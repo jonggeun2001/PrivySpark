@@ -220,6 +220,7 @@ object ReviewApplyCommand {
     val path = new Path(allowlistPath)
     val fs = path.getFileSystem(conf)
     val tempPath = new Path(s"${allowlistPath}.tmp-${UUID.randomUUID().toString}")
+    val backupPath = new Path(s"${allowlistPath}.bak-${UUID.randomUUID().toString}")
     val writer = new BufferedWriter(new OutputStreamWriter(fs.create(tempPath, true), StandardCharsets.UTF_8))
 
     try {
@@ -231,12 +232,20 @@ object ReviewApplyCommand {
       writer.close()
     }
 
-    if (fs.exists(path) && !fs.delete(path, false)) {
+    if (fs.exists(path) && !fs.rename(path, backupPath)) {
       fs.delete(tempPath, false)
-      throw new IllegalStateException(s"Existing allowlist replace failed: $allowlistPath")
+      throw new IllegalStateException(s"Existing allowlist backup failed: $allowlistPath")
     }
-    if (!fs.rename(tempPath, path)) {
+
+    if (fs.rename(tempPath, path)) {
+      if (fs.exists(backupPath) && !fs.delete(backupPath, false)) {
+        DriverLogger.warn("allowlist_backup_cleanup_failed", "allowlist" -> allowlistPath, "backup" -> backupPath.toString)
+      }
+    } else {
       fs.delete(tempPath, false)
+      if (fs.exists(backupPath) && !fs.rename(backupPath, path)) {
+        throw new IllegalStateException(s"Allowlist replace failed and backup restore failed: $allowlistPath")
+      }
       throw new IllegalStateException(s"Allowlist rename failed: $allowlistPath")
     }
   }
