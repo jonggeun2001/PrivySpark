@@ -38,6 +38,7 @@ private[privyspark] object ArchiveExpanders {
   ): (Seq[ScanFileEntry], Seq[ScanError], Int) = {
     val sourcePath = new Path(archivePath)
     val fs = sourcePath.getFileSystem(conf)
+    val archiveModifiedTime = fs.getFileStatus(sourcePath).getModificationTime
     val extractedEntries = ArrayBuffer.empty[ScanFileEntry]
     val archiveErrors = ArrayBuffer.empty[ScanError]
     val ignoredArchiveEntries = new AtomicInteger(0)
@@ -231,6 +232,8 @@ private[privyspark] object ArchiveExpanders {
                               childLogicalIdentifier,
                               logicalIdentifier,
                               stagingPaths,
+                              fileSize = if (declaredSize > 0L) declaredSize else fs.getFileStatus(targetPath).getLen,
+                              fileMtimeEpochMs = archiveModifiedTime,
                               ignoreMatcher = ignoreMatcher,
                               archiveExpansionDepth = archiveExpansionDepth,
                               forceDisableDirectoryIdentifier = true

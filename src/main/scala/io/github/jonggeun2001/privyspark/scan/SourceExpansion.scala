@@ -28,6 +28,8 @@ private[privyspark] object SourceExpansion {
     logicalIdentifier: String,
     groupingDirectoryPath: String,
     stagingPaths: ArrayBuffer[String],
+    fileSize: Long = 0L,
+    fileMtimeEpochMs: Long = 0L,
     ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty,
     archiveExpansionDepth: Int = 0,
     forceDisableDirectoryIdentifier: Boolean = false
@@ -75,7 +77,8 @@ private[privyspark] object SourceExpansion {
           0
         )
       case Some(XlsxFormat) =>
-        val (entries, errors) = expandWorkbookSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier)
+        val (entries, errors) =
+          expandWorkbookSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier, fileSize, fileMtimeEpochMs)
         (entries, errors, 0)
       case Some(format) =>
         (
@@ -86,6 +89,8 @@ private[privyspark] object SourceExpansion {
               directoryPath = groupingDirectoryPath,
               format = format,
               logicalIdentifier = logicalIdentifier,
+              fileSize = fileSize,
+              fileMtimeEpochMs = fileMtimeEpochMs,
               allowDirectoryIdentifier = !forceDisableDirectoryIdentifier && !NonDirectoryIdentifierFormats.contains(format)
             )
           ),
@@ -106,7 +111,9 @@ private[privyspark] object SourceExpansion {
     datasetPath: String,
     timestamp: String,
     physicalPath: String,
-    logicalIdentifier: String
+    logicalIdentifier: String,
+    fileSize: Long = 0L,
+    fileMtimeEpochMs: Long = 0L
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
     listVisibleWorkbookSheets(conf, physicalPath) match {
       case Right(sheetNames) =>
@@ -118,6 +125,8 @@ private[privyspark] object SourceExpansion {
               directoryPath = logicalIdentifier,
               format = XlsxFormat,
               logicalIdentifier = s"$logicalIdentifier#$sheetName",
+              fileSize = fileSize,
+              fileMtimeEpochMs = fileMtimeEpochMs,
               readOptions = ScanReadOptions(sheetName = Some(sheetName)),
               allowDirectoryIdentifier = false
             )

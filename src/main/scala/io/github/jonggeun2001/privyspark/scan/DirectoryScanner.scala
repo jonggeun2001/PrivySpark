@@ -218,6 +218,7 @@ private[privyspark] object DirectoryScanner {
                     skipped = true
                   )
                 case Right(false) =>
+                  val fileStatus = fs.getFileStatus(new Path(filePath))
                   val (expandedEntries, expandedErrors, ignoredEntries) =
                     expandPhysicalSource(
                       conf,
@@ -227,6 +228,8 @@ private[privyspark] object DirectoryScanner {
                       logicalIdentifier,
                       parentDirectory,
                       localStagingPaths,
+                      fileSize = fileStatus.getLen,
+                      fileMtimeEpochMs = fileStatus.getModificationTime,
                       ignoreMatcher = ignoreMatcher
                     )
                   PreScanFileOutcome(
@@ -353,6 +356,8 @@ private[privyspark] object DirectoryScanner {
               filePaths = sortedFiles.map(_.sourceKey),
               physicalPathsByKey = sortedFiles.map(file => file.sourceKey -> file.physicalPath).toMap,
               logicalIdentifiersByKey = sortedFiles.map(file => file.sourceKey -> file.logicalIdentifier).toMap,
+              fileSizesByKey = sortedFiles.map(file => file.sourceKey -> file.fileSize).toMap,
+              fileMtimesByKey = sortedFiles.map(file => file.sourceKey -> file.fileMtimeEpochMs).toMap,
               readOptionsByKey = sortedFiles.collect {
                 case file if file.readOptions != ScanReadOptions() => file.sourceKey -> file.readOptions
               }.toMap,

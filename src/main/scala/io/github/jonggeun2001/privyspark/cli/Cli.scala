@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.cli
 
 import io.github.jonggeun2001.privyspark.report.OutputFormats
 import scopt.OParser
-import scopt.{DefaultOParserSetup, OEffectSetup}
+import scopt.{DefaultOParserSetup, OEffect, OEffectSetup}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -19,16 +19,34 @@ final case class CliConfig(
   outputFormats: Seq[String] = Seq.empty,
   ignorePatterns: Seq[String] = Seq.empty,
   ignoreFile: Option[String] = None,
+  allowlist: Option[String] = None,
   suppressions: Seq[String] = Seq.empty,
   suppressionFile: Option[String] = None
 ) {
   def effectiveOutputFormats: Seq[String] = OutputFormats.normalizeAll(outputFormats)
 }
 
-private[privyspark] final case class CliParseResult(config: Option[CliConfig], errors: Seq[String])
+final case class ReviewApplyCliConfig(
+  scanResultsPath: String = "",
+  inputRoot: String = "",
+  allowlistPath: String = "",
+  reviewer: String = "",
+  dryRun: Boolean = false
+)
+
+sealed trait CliCommand
+
+object CliCommand {
+  final case class Scan(config: CliConfig) extends CliCommand
+  final case class ReviewApply(config: ReviewApplyCliConfig) extends CliCommand
+}
+
+private[privyspark] final case class CliParseResult(command: Option[CliCommand], errors: Seq[String])
 
 object Cli {
-  private val builder = OParser.builder[CliConfig]
+  private val scanBuilder = OParser.builder[CliConfig]
+  private val reviewApplyBuilder = OParser.builder[ReviewApplyCliConfig]
+
   private object QuietParserSetup extends DefaultOParserSetup {
     override def showUsageOnError: Option[Boolean] = Some(false)
   }
@@ -46,8 +64,8 @@ object Cli {
     }
   }
 
-  private val parser = {
-    import builder._
+  private val scanParser = {
+    import scanBuilder._
 
     OParser.sequence(
       programName("privyspark scan"),
@@ -132,6 +150,10 @@ object Cli {
         .optional()
         .action((value, config) => config.copy(ignoreFile = Some(value)))
         .text("줄 단위 ignore 패턴 파일 경로"),
+      opt[String]("allowlist")
+        .optional()
+        .action((value, config) => config.copy(allowlist = Some(value)))
+        .text("false positive suppression allowlist JSONL 경로"),
       opt[String]("suppress")
         .unbounded()
         .optional()
@@ -149,13 +171,64 @@ object Cli {
     )
   }
 
-  def parse(args: Array[String]): Option[CliConfig] = parseWithErrors(args).config
+  private val reviewApplyParser = {
+    import reviewApplyBuilder._
+
+    OParser.sequence(
+      programName("privyspark review apply"),
+      head("PrivySpark", "0.1.0"),
+      opt[String]("scan-results")
+        .required()
+        .action((value, config) => config.copy(scanResultsPath = value))
+        .text("편집된 scan_results 입력 파일 경로"),
+      opt[String]("input-root")
+        .required()
+        .action((value, config) => config.copy(inputRoot = value))
+        .text("원본 스캔 대상 루트 경로"),
+      opt[String]("allowlist")
+        .required()
+        .action((value, config) => config.copy(allowlistPath = value))
+        .text("allowlist JSONL 출력 경로"),
+      opt[String]("reviewer")
+        .required()
+        .action((value, config) => config.copy(reviewer = value))
+        .text("검토자 식별자"),
+      opt[Unit]("dry-run")
+        .optional()
+        .action((_, config) => config.copy(dryRun = true))
+        .text("쓰기 없이 적용 예정 내용만 출력")
+    )
+  }
+
+  def parse(args: Array[String]): Option[CliCommand] = parseWithErrors(args).command
 
   private[privyspark] def parseWithErrors(args: Array[String]): CliParseResult = {
-    val (config, effects) = OParser.runParser(parser, args.toSeq, CliConfig(), QuietParserSetup)
+    args.toList match {
+      case "review" :: "apply" :: tail =>
+        parseReviewApply(tail)
+      case "review" :: _ =>
+        CliParseResult(None, Seq("review subcommand must be one of: apply"))
+      case "scan" :: tail =>
+        parseScan(tail)
+      case _ =>
+        parseScan(args.toSeq)
+    }
+  }
+
+  private def parseScan(args: Seq[String]): CliParseResult = {
+    val (config, effects) = OParser.runParser(scanParser, args, CliConfig(), QuietParserSetup)
+    CliParseResult(config.map(CliCommand.Scan), collectErrors(effects))
+  }
+
+  private def parseReviewApply(args: Seq[String]): CliParseResult = {
+    val (config, effects) = OParser.runParser(reviewApplyParser, args, ReviewApplyCliConfig(), QuietParserSetup)
+    CliParseResult(config.map(CliCommand.ReviewApply), collectErrors(effects))
+  }
+
+  private def collectErrors(effects: Seq[OEffect]): Seq[String] = {
     val errors = ArrayBuffer.empty[String]
 
-    OParser.runEffects(effects, new OEffectSetup {
+    OParser.runEffects(effects.toList, new OEffectSetup {
       override def displayToOut(message: String): Unit = ()
 
       override def displayToErr(message: String): Unit = ()
@@ -169,6 +242,6 @@ object Cli {
       override def terminate(exitState: Either[String, Unit]): Unit = ()
     })
 
-    CliParseResult(config, errors.toSeq.filter(_.trim.nonEmpty).distinct)
+    errors.toSeq.filter(_.trim.nonEmpty).distinct
   }
 }
