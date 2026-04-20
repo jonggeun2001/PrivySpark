@@ -916,6 +916,21 @@ private[privyspark] object GroupScanner {
     val fileSamplingApplied = effectiveSelectedSourceKeys.size < group.filePaths.size
     val physicalPaths = effectiveSelectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
+      val recordedFingerprintsBySourceKey = effectiveSelectedSourceKeys
+        .map { sourceKey =>
+          val physicalPath = resolvePhysicalPath(group, sourceKey)
+          val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
+          val filePath = new Path(physicalPath)
+          val fileStatus = filePath.getFileSystem(spark.sparkContext.hadoopConfiguration).getFileStatus(filePath)
+          sourceKey -> captureRecordedFingerprint(
+            spark.sparkContext.hadoopConfiguration,
+            logicalIdentifier,
+            physicalPath,
+            group.fileSizesByKey.getOrElse(sourceKey, fileStatus.getLen),
+            group.fileMtimesByKey.getOrElse(sourceKey, fileStatus.getModificationTime)
+          )
+        }
+        .toMap
       val effectiveRules = effectiveRulesForFormat(group.format, rules)
       val baseDf = readSource(spark, group.format, physicalPaths, group.csvHasHeader)
       val fileIdentifierColumn = if (group.useDirectoryIdentifier) {
@@ -985,23 +1000,6 @@ private[privyspark] object GroupScanner {
             )
             val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
             val groupScanTimestamp = currentScanTimestamp()
-            val recordedFingerprintsBySourceKey = matchCountsByFile
-              .flatMap(matchCount => resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier))
-              .distinct
-              .map { sourceKey =>
-                val physicalPath = resolvePhysicalPath(group, sourceKey)
-                val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
-                val filePath = new Path(physicalPath)
-                val fileStatus = filePath.getFileSystem(spark.sparkContext.hadoopConfiguration).getFileStatus(filePath)
-                sourceKey -> captureRecordedFingerprint(
-                  spark.sparkContext.hadoopConfiguration,
-                  logicalIdentifier,
-                  physicalPath,
-                  group.fileSizesByKey.getOrElse(sourceKey, fileStatus.getLen),
-                  group.fileMtimesByKey.getOrElse(sourceKey, fileStatus.getModificationTime)
-                )
-              }
-              .toMap
             val results = matchCountsByFile.flatMap { matchCount =>
               sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
                 val sourceKey = resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier)
