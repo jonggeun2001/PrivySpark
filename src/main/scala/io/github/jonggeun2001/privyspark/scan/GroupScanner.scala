@@ -260,7 +260,29 @@ private[privyspark] object GroupScanner {
     )
   }
 
-  private def scanSourceKeyWithSnapshot(
+  private def captureSourceKeySnapshotFingerprint(
+    spark: SparkSession,
+    datasetPath: String,
+    group: ScanGroup,
+    sourceKey: String,
+    timestamp: String
+  ): Either[ScanError, RecordedFileFingerprint] = {
+    val conf = spark.sparkContext.hadoopConfiguration
+    val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
+
+    stageFileSnapshot(conf, datasetPath, group, sourceKey) match {
+      case Right(stagedSnapshot) =>
+        try {
+          Right(stagedSnapshot.recordedFingerprint)
+        } finally {
+          deleteStagingPath(conf, stagedSnapshot.stagedRoot)
+        }
+      case Left(errorMessage) =>
+        Left(ScanError(datasetPath, timestamp, logicalIdentifier, errorMessage))
+    }
+  }
+
+  private def scanSourceKeyUsingSnapshot(
     spark: SparkSession,
     datasetPath: String,
     group: ScanGroup,
@@ -269,8 +291,7 @@ private[privyspark] object GroupScanner {
     sampleRatio: Double,
     timestamp: String,
     suppressions: SuppressionSet,
-    csvHeadCache: CsvHeadCache,
-    injectedFileIdentifierColumn: Option[(String, String)] = None
+    csvHeadCache: CsvHeadCache
   ): Either[ScanError, FileScanMetrics] = {
     val conf = spark.sparkContext.hadoopConfiguration
     val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
@@ -289,8 +310,7 @@ private[privyspark] object GroupScanner {
             suppressions,
             csvHeadCache,
             captureRecordedFingerprintWhenMissing = false,
-            stagedSnapshot = Some(stagedSnapshot),
-            injectedFileIdentifierColumn = injectedFileIdentifierColumn
+            stagedSnapshot = Some(stagedSnapshot)
           )
         } finally {
           deleteStagingPath(conf, stagedSnapshot.stagedRoot)
@@ -345,81 +365,35 @@ private[privyspark] object GroupScanner {
     DriverLogger.debug("group_scan_review_snapshot_skipped", (baseFields ++ optionalFields): _*)
   }
 
-  private def rescanBatchMatchedFilesWithSnapshots(
+  private def captureBatchMatchedFingerprints(
     spark: SparkSession,
     datasetPath: String,
     group: ScanGroup,
-    rules: Seq[PiiRule],
-    sampleRatio: Double,
     timestamp: String,
-    suppressions: SuppressionSet,
-    allowlistMatcher: AllowlistMatcher,
-    allowlistInputRoot: Option[String],
     matchedSourceKeys: Seq[String],
-    batchFileIdentifierColumnName: String,
-    selectedFileCount: Int,
-    csvHeadCache: CsvHeadCache = new CsvHeadCache()
-  ): Seq[ScanResult] = {
+    selectedFileCount: Int
+  ): Map[String, RecordedFileFingerprint] = {
     if (matchedSourceKeys.isEmpty) {
       logReviewSnapshotSkipped("batch", matchedFiles = 0, selectedFiles = selectedFileCount)
-      Seq.empty
+      Map.empty
     } else {
       logReviewSnapshotStart("batch", matchedSourceKeys.size, selectedFileCount)
       val parallelism = resolveFileParallelism(spark, matchedSourceKeys.size)
-      val rescannedMetrics = executeInParallel(parallelism, matchedSourceKeys.map { sourceKey =>
+      executeInParallel(parallelism, matchedSourceKeys.map { sourceKey =>
         () => {
           val physicalPath = resolvePhysicalPath(group, sourceKey)
           val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
           logReviewSnapshotFile("batch", physicalPath, logicalIdentifier)
-          sourceKey -> scanSourceKeyWithSnapshot(
-            spark,
-            datasetPath,
-            group,
-            sourceKey,
-            rules,
-            sampleRatio,
-            timestamp,
-            suppressions,
-            csvHeadCache,
-            injectedFileIdentifierColumn = Some(batchFileIdentifierColumnName -> physicalPath)
-          )
+          sourceKey -> captureSourceKeySnapshotFingerprint(spark, datasetPath, group, sourceKey, timestamp)
         }
-      })
-
-      val metricMap = rescannedMetrics.map {
-        case (_, Right(fileMetrics)) =>
-          fileMetrics.fileIdentifier -> fileMetrics
+      }).map {
+        case (_, Right(recordedFingerprint)) =>
+          recordedFingerprint.fileIdentifier -> recordedFingerprint
         case (sourceKey, Left(error)) =>
           throw new IllegalStateException(
-            s"Batch review snapshot rescan failed for ${resolveLogicalIdentifier(group, datasetPath, sourceKey)}: ${error.error_message}"
+            s"Batch review snapshot capture failed for ${resolveLogicalIdentifier(group, datasetPath, sourceKey)}: ${error.error_message}"
           )
       }.toMap
-
-      val results = matchedSourceKeys.flatMap { sourceKey =>
-        val fileIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
-        metricMap.get(fileIdentifier).toSeq.flatMap { fileMetrics =>
-          buildScanResults(
-            datasetPath,
-            fileMetrics.scanTimestamp,
-            fileMetrics.fileIdentifier,
-            fileMetrics.sampledRowCount,
-            fileMetrics.nonEmptyValueCounts,
-            fileMetrics.matchCounts,
-            fileMetrics.sampleValues,
-            fileMetrics.fileSize,
-            fileMetrics.fileMtimeEpochMs,
-            reviewScopeFileFingerprints = encodeRecordedFingerprint(fileMetrics.recordedFingerprint)
-          )
-        }
-      }
-
-      applyAllowlist(
-        spark.sparkContext.hadoopConfiguration,
-        datasetPath,
-        allowlistMatcher,
-        allowlistInputRoot,
-        results
-      )
     }
   }
 
@@ -872,7 +846,7 @@ private[privyspark] object GroupScanner {
         val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
         DriverLogger.debug("group_scan_fallback_file_start", "file" -> physicalPath, "directory" -> group.directoryPath)
         val fileMetrics = if (group.useDirectoryIdentifier) {
-          scanSourceKeyWithSnapshot(
+          scanSourceKeyUsingSnapshot(
             spark,
             datasetPath,
             group,
@@ -908,17 +882,8 @@ private[privyspark] object GroupScanner {
             } else {
               logReviewSnapshotStart("file", matchedFiles = 1, selectedFiles = 1)
               logReviewSnapshotFile("file", physicalPath, logicalIdentifier)
-              scanSourceKeyWithSnapshot(
-                spark,
-                datasetPath,
-                group,
-                sourceKey,
-                rules,
-                effectiveSampleRatio,
-                timestamp,
-                suppressions,
-                csvHeadCache
-              )
+              captureSourceKeySnapshotFingerprint(spark, datasetPath, group, sourceKey, timestamp)
+                .map(recordedFingerprint => provisionalMetrics.copy(recordedFingerprint = Some(recordedFingerprint)))
             }
           }
         }
@@ -1137,7 +1102,6 @@ private[privyspark] object GroupScanner {
       selectedSourceKeys.getOrElse(resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
     val fileSamplingApplied = effectiveSelectedSourceKeys.size < group.filePaths.size
     val physicalPaths = effectiveSelectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
-    val effectiveSampleRatio = if (fileSamplingApplied) 1.0 else sampleRatio
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
       val effectiveRules = effectiveRulesForFormat(group.format, rules)
       val baseDf = readSource(spark, group.format, physicalPaths, group.csvHasHeader)
@@ -1199,6 +1163,14 @@ private[privyspark] object GroupScanner {
             Seq.empty
           } else {
             val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules, suppressions = suppressions)
+            val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(
+              sampledDf,
+              columnName,
+              effectiveRules,
+              matchCountsByFile,
+              suppressions = suppressions
+            )
+            val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
             val matchedSourceKeys = matchCountsByFile
               .map { matchCount =>
                 resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier).getOrElse {
@@ -1206,19 +1178,47 @@ private[privyspark] object GroupScanner {
                 }
               }
               .distinct
-            val filteredResults = rescanBatchMatchedFilesWithSnapshots(
+            val recordedFingerprintsByFileIdentifier = captureBatchMatchedFingerprints(
               spark,
               datasetPath,
               group,
-              rules,
-              effectiveSampleRatio,
               timestamp,
-              suppressions,
+              matchedSourceKeys,
+              selectedFileCount = effectiveSelectedSourceKeys.size
+            )
+            val groupScanTimestamp = currentScanTimestamp()
+            val results = matchCountsByFile.flatMap { matchCount =>
+              sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
+                val sourceKey = resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier)
+                val reviewScopeFileFingerprints = sourceKey
+                  .flatMap(source => recordedFingerprintsByFileIdentifier.get(resolveLogicalIdentifier(group, datasetPath, source)))
+                  .map(fingerprint => ReviewScopeFingerprintCodec.encode(Seq(fingerprint)))
+                  .getOrElse {
+                    throw new IllegalStateException(s"Missing batch review fingerprint for ${matchCount.fileIdentifier}")
+                  }
+                buildScanResults(
+                  datasetPath,
+                  groupScanTimestamp,
+                  resolveLogicalIdentifierForPhysicalPath(group, datasetPath, matchCount.fileIdentifier),
+                  sampledRowCount,
+                  Map(matchCount.columnName -> nonEmptyCountsByFile.getOrElse((matchCount.fileIdentifier, matchCount.columnName), sampledRowCount)),
+                  Seq(MatchCount(matchCount.columnName, matchCount.piiType, matchCount.count, matchCount.metricAlias)),
+                  sampleValuesByFile
+                    .get((matchCount.fileIdentifier, matchCount.metricAlias))
+                    .map(value => Map(matchCount.metricAlias -> value))
+                    .getOrElse(Map.empty),
+                  sourceKey.flatMap(group.fileSizesByKey.get).getOrElse(0L),
+                  sourceKey.flatMap(group.fileMtimesByKey.get).getOrElse(0L),
+                  reviewScopeFileFingerprints = reviewScopeFileFingerprints
+                ).headOption
+              }
+            }
+            val filteredResults = applyAllowlist(
+              spark.sparkContext.hadoopConfiguration,
+              datasetPath,
               allowlistMatcher,
               allowlistInputRoot,
-              matchedSourceKeys,
-              columnName,
-              selectedFileCount = effectiveSelectedSourceKeys.size
+              results
             )
             DriverLogger.debug(
               "group_scan_batch_complete",
