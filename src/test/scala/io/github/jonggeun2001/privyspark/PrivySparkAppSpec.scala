@@ -2805,6 +2805,57 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanGroupBatch keeps sampled review rows stable across snapshot rescans") {
+    val inputDir = Files.createTempDirectory("privyspark-group-batch-review-sampling-")
+
+    try {
+      val matchedFile = inputDir.resolve("part-0001.csv")
+      val cleanFile = inputDir.resolve("part-0002.csv")
+      val matchedRows =
+        (1 to 24)
+          .map(index => s"user$index,user$index@example.com")
+          .mkString("name,email\n", "\n", "\n")
+
+      writeText(matchedFile, matchedRows)
+      writeText(cleanFile,
+        "name,email\n" +
+          "bob,not-an-email\n")
+
+      val group = ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = Seq(matchedFile.toString, cleanFile.toString)
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val snapshots = (1 to 4).map { _ =>
+        GroupScanner.scanGroupBatch(
+          spark,
+          inputDir.toString,
+          group,
+          rules,
+          sampleRatio = 0.5,
+          timestamp = "2026-04-20T00:15:00Z"
+        ).map(result =>
+          (
+            result.file_identifier,
+            result.column_name,
+            result.match_count,
+            result.sampled_row_count,
+            result.sample_raw_value,
+            result.sample_matched_fragment
+          )
+        )
+      }
+
+      assert(snapshots.distinct.size == 1)
+      assert(snapshots.head.nonEmpty)
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroupBatch samples files and ignores row sampling when file-sample-ratio is configured") {
     val inputDir = Files.createTempDirectory("privyspark-group-batch-file-sampling-")
 
