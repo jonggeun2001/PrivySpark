@@ -1,23 +1,32 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.cli.{Cli, CliConfig, PathValidator}
+import io.github.jonggeun2001.privyspark.cli.{Cli, CliCommand, CliConfig, PathValidator, ReviewApplyCliConfig}
+import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, RulesetLoader, SuppressionSet}
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
+import io.github.jonggeun2001.privyspark.model.{ProgressRun, Suppression}
+import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
+import io.github.jonggeun2001.privyspark.progress.ProgressRunManager._
+import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewApplyCommand}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{renderConfiguredParallelism, resolveCliParallelism}
 import io.github.jonggeun2001.privyspark.util.{DriverLogLevel, DriverLogger}
-import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
-import io.github.jonggeun2001.privyspark.config.RulesetLoader
-import io.github.jonggeun2001.privyspark.model.ProgressRun
-import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
-import io.github.jonggeun2001.privyspark.progress.ProgressRunManager._
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.Path
+import org.apache.spark.{SparkEnv, SparkFiles}
 import org.apache.spark.sql.SparkSession
 
+import java.io.{BufferedReader, InputStreamReader}
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Paths}
 import java.time.Instant
 import java.util.concurrent.ScheduledExecutorService
+import scala.collection.mutable.ArrayBuffer
 import scala.util.control.ControlThrowable
 import scala.util.control.NonFatal
 
 object PrivySparkApp {
+  private[privyspark] final case class ParsedSuppression(suppression: Suppression, source: String)
+
   private[privyspark] def resetDebugCache(): Unit = {
     DriverLogger.resetCache()
   }
@@ -29,44 +38,45 @@ object PrivySparkApp {
   private[privyspark] def runMain(
     args: Array[String],
     createSparkSession: () => SparkSession = () => SparkSession.builder().appName("PrivySpark").getOrCreate(),
-    exitWith: Int => Unit = code => System.exit(code)
+    exitWith: Int => Unit = code => System.exit(code),
+    runScanCommand: (SparkSession, CliConfig) => Unit = runScan,
+    runReviewApplyCommand: (SparkSession, ReviewApplyCliConfig) => Unit = ReviewApplyCommand.run
   ): Unit = {
-    val normalizedArgs = if (args.headOption.contains("scan")) args.drop(1) else args
-
-    val parseResult = Cli.parseWithErrors(normalizedArgs)
-    val config = parseResult.config.getOrElse {
+    val parseResult = Cli.parseWithErrors(args)
+    val command = parseResult.command.getOrElse {
       DriverLogger.emitAlways(
         DriverLogLevel.Error,
         "cli_argument_invalid",
         "errors" -> parseResult.errors.mkString(" | "),
-        "args" -> normalizedArgs.mkString(" ")
+        "args" -> args.mkString(" ")
       )
       exitWith(2)
       return
     }
 
-    if (!PathValidator.isAbsolute(config.inputPath)) {
-      DriverLogger.emitAlways(
-        DriverLogLevel.Error,
-        "cli_argument_invalid",
-        "argument" -> "--path",
-        "reason" -> "must_be_absolute_path_or_uri",
-        "value" -> config.inputPath
-      )
-      exitWith(2)
-      return
-    }
-
-    if (!PathValidator.isAbsolute(config.outputPath)) {
-      DriverLogger.emitAlways(
-        DriverLogLevel.Error,
-        "cli_argument_invalid",
-        "argument" -> "--output",
-        "reason" -> "must_be_absolute_path_or_uri",
-        "value" -> config.outputPath
-      )
-      exitWith(2)
-      return
+    command match {
+      case CliCommand.Scan(config) =>
+        if (!validateAbsoluteArgument("--path", config.inputPath, exitWith)) {
+          return
+        }
+        if (!validateAbsoluteArgument("--output", config.outputPath, exitWith)) {
+          return
+        }
+        if (config.allowlist.exists(path => !PathValidator.isAbsolute(path))) {
+          emitAbsolutePathError("--allowlist", config.allowlist.get)
+          exitWith(2)
+          return
+        }
+      case CliCommand.ReviewApply(config) =>
+        if (!validateAbsoluteArgument("--scan-results", config.scanResultsPath, exitWith)) {
+          return
+        }
+        if (!validateAbsoluteArgument("--input-root", config.inputRoot, exitWith)) {
+          return
+        }
+        if (!validateAbsoluteArgument("--allowlist", config.allowlistPath, exitWith)) {
+          return
+        }
     }
 
     var spark: Option[SparkSession] = None
@@ -75,7 +85,12 @@ object PrivySparkApp {
       val session = createSparkSession()
       spark = Some(session)
       session.sparkContext.setLogLevel("WARN")
-      runScan(session, config)
+      command match {
+        case CliCommand.Scan(config) =>
+          runScanCommand(session, config)
+        case CliCommand.ReviewApply(config) =>
+          runReviewApplyCommand(session, config)
+      }
     } catch {
       case control: ControlThrowable =>
         throw control
@@ -92,6 +107,26 @@ object PrivySparkApp {
     }
   }
 
+  private def validateAbsoluteArgument(argument: String, value: String, exitWith: Int => Unit): Boolean = {
+    if (PathValidator.isAbsolute(value)) {
+      true
+    } else {
+      emitAbsolutePathError(argument, value)
+      exitWith(2)
+      false
+    }
+  }
+
+  private def emitAbsolutePathError(argument: String, value: String): Unit = {
+    DriverLogger.emitAlways(
+      DriverLogLevel.Error,
+      "cli_argument_invalid",
+      "argument" -> argument,
+      "reason" -> "must_be_absolute_path_or_uri",
+      "value" -> value
+    )
+  }
+
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
     val (preScanParallelism, groupParallelism, fileParallelism) =
       resolveCliParallelism(config.preScanParallelism, config.groupParallelism, config.fileParallelism)
@@ -104,6 +139,9 @@ object PrivySparkApp {
       config.ignorePatterns,
       config.ignoreFile
     )
+    val allowlistMatcher = config.allowlist
+      .map(path => AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, path))
+      .getOrElse(AllowlistMatcher.empty)
 
     DriverLogger.info(
       "scan_start",
@@ -119,11 +157,31 @@ object PrivySparkApp {
       "output_formats" -> outputFormats.mkString(","),
       "ignore_patterns" -> config.ignorePatterns.size,
       "ignore_file" -> config.ignoreFile.getOrElse("none"),
+      "allowlist" -> config.allowlist.getOrElse("none"),
+      "allowlist_entries" -> allowlistMatcher.size,
+      "suppressions" -> config.suppressions.size,
+      "suppression_file" -> config.suppressionFile.getOrElse("none"),
       "driver_log_level" -> DriverLogger.currentLogLevel.label.toLowerCase
     )
 
-    val rules = RulesetLoader.load(config.ruleset)
-    DriverLogger.debug("ruleset_loaded", "rules" -> rules.size, "ruleset" -> config.ruleset)
+    val bundle = RulesetLoader.loadBundle(config.ruleset)
+    val parsedCliSuppressions = parseCliSuppressionEntries(
+      spark.sparkContext.hadoopConfiguration,
+      config.suppressions,
+      config.suppressionFile
+    )
+    warnUnknownSuppressions(parsedCliSuppressions, bundle.rules.map(_.piiType).toSet)
+    val cliSuppressions = parsedCliSuppressions.map(_.suppression)
+    val suppressions = SuppressionSet.from(bundle.suppressions).merge(SuppressionSet.from(cliSuppressions))
+    val rules = bundle.rules
+    DriverLogger.debug(
+      "ruleset_loaded",
+      "rules" -> rules.size,
+      "ruleset_suppressions" -> bundle.suppressions.size,
+      "cli_suppressions" -> cliSuppressions.size,
+      "effective_suppressions" -> suppressions.size,
+      "ruleset" -> config.ruleset
+    )
 
     val timestamp = Instant.now().toString
     val scanPlan = DirectoryScanner.scanDirectoryStructure(
@@ -182,6 +240,9 @@ object PrivySparkApp {
         fileParallelism,
         config.fileSampleRatio,
         config.fileSampleMinFiles,
+        suppressions,
+        allowlistMatcher,
+        Some(config.inputPath),
         Some(preparedProgressRun),
         retainPayloads = false,
         csvHeadCache = csvHeadCache
@@ -238,6 +299,114 @@ object PrivySparkApp {
       schemaSigCache.clear()
       parseOkCache.clear()
       cleanupStagingPaths(spark.sparkContext.hadoopConfiguration, scanPlan.stagingPaths)
+    }
+  }
+
+  private[privyspark] def parseCliSuppressions(
+    conf: Configuration,
+    inline: Seq[String],
+    file: Option[String]
+  ): Seq[Suppression] = {
+    parseCliSuppressionEntries(conf, inline, file).map(_.suppression)
+  }
+
+  private def parseCliSuppressionEntries(
+    conf: Configuration,
+    inline: Seq[String],
+    file: Option[String]
+  ): Seq[ParsedSuppression] = {
+    inline.zipWithIndex.map {
+      case (rawValue, index) => parseSuppressionSpec(rawValue, s"cli:${index + 1}")
+    } ++ file.toSeq.flatMap(loadSuppressionFile(conf, _))
+  }
+
+  private def loadSuppressionFile(conf: Configuration, path: String): Seq[ParsedSuppression] = {
+    val normalizedPath = Option(path).map(_.trim).getOrElse("")
+    if (normalizedPath.isEmpty) {
+      throw new IllegalArgumentException("suppression-file must not be blank")
+    } else {
+      resolveLocalSuppressionFile(normalizedPath) match {
+        case Some(localPath) =>
+          val reader = Files.newBufferedReader(localPath, StandardCharsets.UTF_8)
+          readSuppressions(reader, s"file:$normalizedPath")
+        case None =>
+          val hadoopPath = new Path(normalizedPath)
+          val fs = hadoopPath.getFileSystem(conf)
+          val reader = new BufferedReader(new InputStreamReader(fs.open(hadoopPath), StandardCharsets.UTF_8))
+          readSuppressions(reader, s"file:$normalizedPath")
+      }
+    }
+  }
+
+  private def resolveLocalSuppressionFile(path: String): Option[java.nio.file.Path] = {
+    val hadoopPath = new Path(path)
+    val uri = hadoopPath.toUri
+
+    if (uri.getScheme != null || uri.getAuthority != null) {
+      None
+    } else {
+      val sparkFilesCandidate = Option(SparkEnv.get).map(_ => Paths.get(SparkFiles.get(path)))
+      val workingDirectoryCandidate = Paths.get(path)
+
+      Seq(sparkFilesCandidate, Some(workingDirectoryCandidate)).flatten.collectFirst {
+        case candidate if Files.exists(candidate) => candidate.toAbsolutePath.normalize()
+      }
+    }
+  }
+
+  private def readSuppressions(reader: BufferedReader, source: String): Seq[ParsedSuppression] = {
+    val suppressions = ArrayBuffer.empty[ParsedSuppression]
+
+    try {
+      var lineNumber = 1
+      var line = reader.readLine()
+      while (line != null) {
+        normalizeSuppressionLine(line).foreach { spec =>
+          suppressions += parseSuppressionSpec(spec, s"$source:$lineNumber")
+        }
+        line = reader.readLine()
+        lineNumber += 1
+      }
+    } finally {
+      reader.close()
+    }
+
+    suppressions.toSeq
+  }
+
+  private def normalizeSuppressionLine(rawValue: String): Option[String] = {
+    val trimmed = Option(rawValue).map(_.trim).getOrElse("")
+    if (trimmed.isEmpty || trimmed.startsWith("#")) None else Some(trimmed)
+  }
+
+  private def parseSuppressionSpec(rawValue: String, source: String): ParsedSuppression = {
+    val trimmed = Option(rawValue).map(_.trim).getOrElse("")
+    val delimiterIndex = trimmed.lastIndexOf(':')
+    val columnName =
+      if (delimiterIndex > 0 && delimiterIndex < trimmed.length - 1) trimmed.substring(0, delimiterIndex).trim else ""
+    val piiType =
+      if (delimiterIndex > 0 && delimiterIndex < trimmed.length - 1) trimmed.substring(delimiterIndex + 1).trim else ""
+
+    if (columnName.isEmpty || piiType.isEmpty) {
+      throw new IllegalArgumentException(s"Invalid suppression entry ($source): $rawValue")
+    }
+
+    ParsedSuppression(Suppression(columnName, piiType), source)
+  }
+
+  private[privyspark] def warnUnknownSuppressions(
+    suppressions: Seq[ParsedSuppression],
+    definedPiiTypes: Set[String]
+  ): Unit = {
+    suppressions.foreach { parsedSuppression =>
+      if (!definedPiiTypes.contains(parsedSuppression.suppression.piiType)) {
+        DriverLogger.warn(
+          "ruleset_suppression_unknown_pii_type",
+          "column" -> parsedSuppression.suppression.columnName,
+          "pii_type" -> parsedSuppression.suppression.piiType,
+          "suppression_source" -> parsedSuppression.source
+        )
+      }
     }
   }
 }

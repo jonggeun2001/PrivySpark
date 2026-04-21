@@ -1,10 +1,12 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
+import io.github.jonggeun2001.privyspark.model.Suppression
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
+import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import scala.util.matching.Regex
@@ -182,6 +184,101 @@ class RulesetLoaderSpec extends AnyFunSuite {
     }
   }
 
+  test("loadBundle parses suppressions and load keeps returning only rules") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-suppressions", ".yaml")
+    val yaml =
+      """rules:
+        |  - pii_type: email
+        |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        |suppressions:
+        |  - column: prdctcd
+        |    pii_type: driver_license_number
+        |  - column: PRDCTCD
+        |    pii_type: phone_number
+        |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val bundle = RulesetLoader.loadBundle(rulesetPath.toString)
+      val rules = RulesetLoader.load(rulesetPath.toString)
+
+      assert(bundle.rules.map(_.piiType) == Seq("email"))
+      assert(bundle.suppressions == Seq(
+        Suppression("prdctcd", "driver_license_number"),
+        Suppression("PRDCTCD", "phone_number")
+      ))
+      assert(rules == bundle.rules)
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
+  test("loadBundle returns empty suppressions when the key is absent") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-no-suppressions", ".yaml")
+    val yaml =
+      """rules:
+        |  - pii_type: email
+        |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val bundle = RulesetLoader.loadBundle(rulesetPath.toString)
+      assert(bundle.rules.map(_.piiType) == Seq("email"))
+      assert(bundle.suppressions.isEmpty)
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
+  test("loadBundle throws when a suppression entry is missing required keys") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-invalid-suppression", ".yaml")
+    val yaml =
+      """rules:
+        |  - pii_type: email
+        |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        |suppressions:
+        |  - column: prdctcd
+        |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val error = intercept[IllegalArgumentException] {
+        RulesetLoader.loadBundle(rulesetPath.toString)
+      }
+      assert(error.getMessage.contains("Each suppression must include column and pii_type"))
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
+  test("loadBundle warns but still loads suppressions for undefined pii types") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-warn-suppression", ".yaml")
+    val yaml =
+      """rules:
+        |  - pii_type: email
+        |    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        |suppressions:
+        |  - column: prdctcd
+        |    pii_type: driver_license_number
+        |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val logs = captureStderr {
+        val bundle = RulesetLoader.loadBundle(rulesetPath.toString)
+        assert(bundle.rules.map(_.piiType) == Seq("email"))
+        assert(bundle.suppressions == Seq(Suppression("prdctcd", "driver_license_number")))
+      }
+
+      assert(logs.contains("ruleset_suppression_unknown_pii_type"))
+      assert(logs.contains("pii_type=driver_license_number"))
+      assert(logs.contains("column=prdctcd"))
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
   test("throws on unsupported match type") {
     val rulesetPath = Files.createTempFile("privyspark-ruleset-invalid", ".yaml")
     val yaml =
@@ -305,4 +402,17 @@ class RulesetLoaderSpec extends AnyFunSuite {
     }
   }
 
+  private def captureStderr[A](block: => A): String = {
+    val output = new ByteArrayOutputStream()
+    val originalErr = System.err
+    val captureErr = new PrintStream(output, true, StandardCharsets.UTF_8.name())
+    try {
+      System.setErr(captureErr)
+      block
+    } finally {
+      captureErr.flush()
+      System.setErr(originalErr)
+    }
+    output.toString(StandardCharsets.UTF_8.name())
+  }
 }

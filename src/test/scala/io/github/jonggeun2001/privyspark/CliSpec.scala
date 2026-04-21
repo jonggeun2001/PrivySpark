@@ -1,31 +1,38 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.cli.Cli
+import io.github.jonggeun2001.privyspark.cli.CliCommand
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
 @RunWith(classOf[JUnitRunner])
 class CliSpec extends AnyFunSuite {
-  test("parses required arguments and applies defaults") {
+  test("parses scan arguments and applies defaults") {
     val parsed = Cli.parse(Array("--path", "/data/input", "--output", "/data/output"))
 
     assert(parsed.nonEmpty)
-    assert(parsed.get.inputPath == "/data/input")
-    assert(parsed.get.outputPath == "/data/output")
-    assert(parsed.get.ruleset == "default")
-    assert(parsed.get.sampleRatio == 0.2)
-    assert(parsed.get.fileSampleRatio.isEmpty)
-    assert(parsed.get.fileSampleMinFiles == 10)
-    assert(parsed.get.preScanParallelism.isEmpty)
-    assert(parsed.get.groupParallelism.isEmpty)
-    assert(parsed.get.fileParallelism.isEmpty)
-    assert(parsed.get.ignorePatterns.isEmpty)
-    assert(parsed.get.ignoreFile.isEmpty)
-    assert(parsed.get.effectiveOutputFormats == Seq("parquet"))
+    assert(parsed.get.isInstanceOf[CliCommand.Scan])
+
+    val config = parsed.get.asInstanceOf[CliCommand.Scan].config
+    assert(config.inputPath == "/data/input")
+    assert(config.outputPath == "/data/output")
+    assert(config.ruleset == "default")
+    assert(config.sampleRatio == 0.2)
+    assert(config.fileSampleRatio.isEmpty)
+    assert(config.fileSampleMinFiles == 10)
+    assert(config.preScanParallelism.isEmpty)
+    assert(config.groupParallelism.isEmpty)
+    assert(config.fileParallelism.isEmpty)
+    assert(config.ignorePatterns.isEmpty)
+    assert(config.ignoreFile.isEmpty)
+    assert(config.allowlist.isEmpty)
+    assert(config.suppressions.isEmpty)
+    assert(config.suppressionFile.isEmpty)
+    assert(config.effectiveOutputFormats == Seq("parquet"))
   }
 
-  test("parses optional ruleset, sampling, parallelism, ignore options, and output formats") {
+  test("parses optional scan ruleset, sampling, parallelism, ignore options, allowlist, and output formats") {
     val parsed = Cli.parse(
       Array(
         "--path",
@@ -56,22 +63,36 @@ class CliSpec extends AnyFunSuite {
         "_SUCCESS",
         "--ignore",
         "backup/**",
+        "--allowlist",
+        "/etc/privyspark/allowlist.jsonl",
         "--ignore-file",
-        "/etc/privyspark/ignore.txt"
+        "/etc/privyspark/ignore.txt",
+        "--suppress",
+        "prdctcd:driver_license_number",
+        "--suppress",
+        "foo:email",
+        "--suppress",
+        "ns:email:email",
+        "--suppression-file",
+        "/etc/privyspark/suppressions.txt"
       )
     )
 
     assert(parsed.nonEmpty)
-    assert(parsed.get.ruleset == "/etc/privyspark/rules.yaml")
-    assert(parsed.get.sampleRatio == 0.75)
-    assert(parsed.get.fileSampleRatio.contains(0.4))
-    assert(parsed.get.fileSampleMinFiles == 12)
-    assert(parsed.get.preScanParallelism.contains(3))
-    assert(parsed.get.groupParallelism.contains(8))
-    assert(parsed.get.fileParallelism.contains(6))
-    assert(parsed.get.effectiveOutputFormats == Seq("csv", "excel"))
-    assert(parsed.get.ignorePatterns == Seq("_SUCCESS", "backup/**"))
-    assert(parsed.get.ignoreFile.contains("/etc/privyspark/ignore.txt"))
+    val config = parsed.get.asInstanceOf[CliCommand.Scan].config
+    assert(config.ruleset == "/etc/privyspark/rules.yaml")
+    assert(config.sampleRatio == 0.75)
+    assert(config.fileSampleRatio.contains(0.4))
+    assert(config.fileSampleMinFiles == 12)
+    assert(config.preScanParallelism.contains(3))
+    assert(config.groupParallelism.contains(8))
+    assert(config.fileParallelism.contains(6))
+    assert(config.effectiveOutputFormats == Seq("csv", "excel"))
+    assert(config.ignorePatterns == Seq("_SUCCESS", "backup/**"))
+    assert(config.allowlist.contains("/etc/privyspark/allowlist.jsonl"))
+    assert(config.ignoreFile.contains("/etc/privyspark/ignore.txt"))
+    assert(config.suppressions == Seq("prdctcd:driver_license_number", "foo:email", "ns:email:email"))
+    assert(config.suppressionFile.contains("/etc/privyspark/suppressions.txt"))
   }
 
   test("rejects invalid sampling, parallelism, and output format values") {
@@ -94,6 +115,14 @@ class CliSpec extends AnyFunSuite {
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--file-parallelism", "-1"))
     val invalidOutputFormat =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--output-format", "json"))
+    val missingSuppressionSeparator =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd"))
+    val missingSuppressionColumn =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", ":email"))
+    val missingSuppressionPiiType =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd:"))
+    val blankSuppressionFile =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppression-file", "   "))
 
     assert(zeroRatio.isEmpty)
     assert(overOneRatio.isEmpty)
@@ -102,10 +131,42 @@ class CliSpec extends AnyFunSuite {
     assert(zeroFileSampleMinFiles.isEmpty)
     assert(zeroPreScanParallelism.isEmpty)
     assert(largePreScanParallelism.nonEmpty)
-    assert(largePreScanParallelism.get.preScanParallelism.contains(128))
+    assert(largePreScanParallelism.get.asInstanceOf[CliCommand.Scan].config.preScanParallelism.contains(128))
     assert(zeroGroupParallelism.isEmpty)
     assert(negativeFileParallelism.isEmpty)
     assert(invalidOutputFormat.isEmpty)
+    assert(missingSuppressionSeparator.isEmpty)
+    assert(missingSuppressionColumn.isEmpty)
+    assert(missingSuppressionPiiType.isEmpty)
+    assert(blankSuppressionFile.isEmpty)
+  }
+
+  test("parses review apply subcommand") {
+    val parsed = Cli.parse(
+      Array(
+        "review",
+        "apply",
+        "--scan-results",
+        "/data/output/excel/scan_results.xlsx",
+        "--input-root",
+        "/data/input",
+        "--allowlist",
+        "/data/review/allowlist.jsonl",
+        "--reviewer",
+        "reviewer@example.com",
+        "--dry-run"
+      )
+    )
+
+    assert(parsed.nonEmpty)
+    assert(parsed.get.isInstanceOf[CliCommand.ReviewApply])
+
+    val config = parsed.get.asInstanceOf[CliCommand.ReviewApply].config
+    assert(config.scanResultsPath == "/data/output/excel/scan_results.xlsx")
+    assert(config.inputRoot == "/data/input")
+    assert(config.allowlistPath == "/data/review/allowlist.jsonl")
+    assert(config.reviewer == "reviewer@example.com")
+    assert(config.dryRun)
   }
 
   test("captures parser errors without terminating") {
@@ -117,16 +178,27 @@ class CliSpec extends AnyFunSuite {
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--file-sample-min-files", "0"))
     val invalidOutputFormat =
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--output-format", "json"))
+    val invalidSuppression =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd"))
+    val invalidSuppressionFile =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--suppression-file", " "))
+    val invalidReviewApply = Cli.parseWithErrors(Array("review", "apply", "--scan-results", "/tmp/results.xlsx"))
 
-    assert(missingPath.config.isEmpty)
+    assert(missingPath.command.isEmpty)
     assert(missingPath.errors.exists(_.contains("--path")))
-    assert(invalidSampleRatio.config.isEmpty)
+    assert(invalidSampleRatio.command.isEmpty)
     assert(invalidSampleRatio.errors.exists(_.contains("sample-ratio must be > 0.0 and <= 1.0")))
-    assert(invalidFileSampleRatio.config.isEmpty)
+    assert(invalidFileSampleRatio.command.isEmpty)
     assert(invalidFileSampleRatio.errors.exists(_.contains("file-sample-ratio must be > 0.0 and <= 1.0")))
-    assert(invalidFileSampleMinFiles.config.isEmpty)
+    assert(invalidFileSampleMinFiles.command.isEmpty)
     assert(invalidFileSampleMinFiles.errors.exists(_.contains("file-sample-min-files must be >= 1")))
-    assert(invalidOutputFormat.config.isEmpty)
+    assert(invalidOutputFormat.command.isEmpty)
     assert(invalidOutputFormat.errors.exists(_.contains("output-format must be one of: parquet, csv, excel")))
+    assert(invalidSuppression.command.isEmpty)
+    assert(invalidSuppression.errors.exists(_.contains("suppress must use column:pii_type with non-empty values")))
+    assert(invalidSuppressionFile.command.isEmpty)
+    assert(invalidSuppressionFile.errors.exists(_.contains("suppression-file must not be blank")))
+    assert(invalidReviewApply.command.isEmpty)
+    assert(invalidReviewApply.errors.exists(_.contains("--input-root")))
   }
 }

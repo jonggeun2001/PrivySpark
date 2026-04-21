@@ -3,16 +3,18 @@
 PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서 잠재적 개인정보를 탐지하고 집계된 결과 리포트와 오류 리포트를 생성합니다.
 
 ## 지원 범위
-- 실행 명령은 `privyspark scan` 단일 진입점입니다.
+- 공개 명령은 `privyspark scan`, `privyspark review apply`입니다.
 - 입력 경로는 절대경로 또는 URI만 허용합니다.
 - 지원 포맷은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`와 archive 계열 `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`입니다.
 - `gzip`, `bzip2`로 감싼 direct text-style data file(`csv`, `json/jsonl/ndjson`)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
 - 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 검사하고, 텍스트처럼 보이면 내부 `text` 포맷으로 정규화해 스캔합니다.
 - 바이너리처럼 보이는 미지원 입력만 `Unsupported file format` 오류로 기록합니다.
 - `--ignore`, `--ignore-file`은 파일명 또는 입력 루트 기준 상대 경로로 스캔 제외 대상을 정의합니다.
+- `suppressions:` 또는 `--suppress`, `--suppression-file`은 특정 `(column, pii_type)` 결과만 제외합니다.
 
 ## 탐지 모델
 - 탐지는 ruleset 기반 regex 결과를 그대로 사용합니다.
+- suppression은 규칙을 끄지 않고 특정 컬럼-타입 조합만 오탐에서 제외합니다.
 - invalid regex는 ruleset 로드 단계에서 즉시 거부합니다.
 - 집계 결과는 `match_count`, `sampled_row_count`, `match_ratio`, `non_empty_match_ratio`, `confidence`, `sample_raw_value`, `sample_matched_fragment`를 포함합니다.
 - `sample_raw_value`는 매치가 발생한 셀의 전체 원문이 아니라, 매치 조각 기준 앞뒤 최대 50자 문맥만 저장합니다.
@@ -37,3 +39,4 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 - 입력 포맷과 그룹화: [input-formats.md](input-formats.md)
 - ruleset과 탐지 제약: [rules-and-detection.md](rules-and-detection.md)
 - 결과/오류 리포트: [reports-and-errors.md](reports-and-errors.md)
+- false positive 검토 워크플로우: [review-workflow.md](review-workflow.md)

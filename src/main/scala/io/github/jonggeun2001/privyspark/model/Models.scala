@@ -18,6 +18,8 @@ final case class PiiRule(
   matchType: String = PiiRuleMatchType.Value
 )
 
+final case class Suppression(columnName: String, piiType: String)
+
 private[privyspark] final case class MatchCount(
   columnName: String,
   piiType: String,
@@ -39,7 +41,14 @@ final case class ScanResult(
   non_empty_match_ratio: Double,
   confidence: Double,
   sample_raw_value: String,
-  sample_matched_fragment: String
+  sample_matched_fragment: String,
+  file_size: Long = 0L,
+  file_mtime_epoch_ms: Long = 0L,
+  review_status: String = "pending",
+  review_reason: String = "",
+  review_invalidated: Boolean = false,
+  review_scope_file_identifiers: String = "",
+  review_scope_file_fingerprints: String = ""
 )
 
 final case class ScanError(

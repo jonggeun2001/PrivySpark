@@ -1,6 +1,7 @@
 package io.github.jonggeun2001.privyspark.config
 
-import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
+import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType, Suppression}
+import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.yaml.snakeyaml.Yaml
 
 import java.io.FileInputStream
@@ -14,6 +15,10 @@ object RulesetLoader {
   private val RemovedRegexReference = "__KOREAN_NAME_RULE_REGEX__"
 
   def load(ruleset: String): Seq[PiiRule] = {
+    loadBundle(ruleset).rules
+  }
+
+  def loadBundle(ruleset: String): RulesetBundle = {
     val rulesetPath = resolvePath(ruleset)
     if (!Files.exists(rulesetPath)) {
       throw new IllegalArgumentException(s"Ruleset not found: ${rulesetPath.toAbsolutePath}")
@@ -22,43 +27,23 @@ object RulesetLoader {
     val input = new FileInputStream(rulesetPath.toFile)
     try {
       val yaml = new Yaml()
-      val root = yaml.load[java.util.Map[String, Object]](input)
-      val rawRules = Option(root.get("rules"))
-        .getOrElse(throw new IllegalArgumentException("rules key is required"))
-        .asInstanceOf[java.util.List[java.util.Map[String, Object]]]
+      val root = Option(yaml.load[java.util.Map[String, Object]](input)).getOrElse(new java.util.LinkedHashMap[String, Object]())
+      val rules = parseRules(root)
+      val suppressions = parseSuppressions(root)
+      val definedPiiTypes = rules.map(_.piiType).toSet
 
-      val parsed = rawRules.asScala.map { item =>
-        val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
-        val regex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
-        val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
-        if (piiType.isEmpty || regex.isEmpty) {
-          throw new IllegalArgumentException("Each rule must include pii_type and regex")
-        }
-        if (piiType.equalsIgnoreCase("name")) {
-          throw new IllegalArgumentException("pii_type 'name' is no longer supported")
-        }
-        if (item.containsKey("validator")) {
-          throw new IllegalArgumentException("validator is no longer supported")
-        }
-        if (regex.contains(RemovedRegexReference)) {
-          throw new IllegalArgumentException(s"$RemovedRegexReference is no longer supported")
-        }
-        val rawMatchType = Option(item.get("match_type")).map(_.toString.trim).filter(_.nonEmpty).getOrElse(PiiRuleMatchType.Value)
-        val matchType = PiiRuleMatchType.normalize(rawMatchType).getOrElse {
-          throw new IllegalArgumentException(
-            s"Unsupported match_type: $rawMatchType. Supported values: ${PiiRuleMatchType.Supported.toSeq.sorted.mkString(", ")}"
+      suppressions.foreach { suppression =>
+        if (!definedPiiTypes.contains(suppression.piiType)) {
+          DriverLogger.warn(
+            "ruleset_suppression_unknown_pii_type",
+            "ruleset" -> rulesetPath.toAbsolutePath,
+            "column" -> suppression.columnName,
+            "pii_type" -> suppression.piiType
           )
         }
-        validateRegex(piiType, regex, matchType)
-
-        PiiRule(piiType, regex, columnHints, matchType)
-      }.toSeq
-
-      if (parsed.isEmpty) {
-        throw new IllegalArgumentException("rules must contain at least one rule")
       }
 
-      parsed
+      RulesetBundle(rules, suppressions)
     } finally {
       input.close()
     }
@@ -103,4 +88,62 @@ object RulesetLoader {
         )
     }
   }
+
+  private def parseRules(root: java.util.Map[String, Object]): Seq[PiiRule] = {
+    val rawRules = Option(root.get("rules"))
+      .getOrElse(throw new IllegalArgumentException("rules key is required"))
+      .asInstanceOf[java.util.List[java.util.Map[String, Object]]]
+
+    val parsed = rawRules.asScala.map { item =>
+      val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
+      val regex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
+      val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
+      if (piiType.isEmpty || regex.isEmpty) {
+        throw new IllegalArgumentException("Each rule must include pii_type and regex")
+      }
+      if (piiType.equalsIgnoreCase("name")) {
+        throw new IllegalArgumentException("pii_type 'name' is no longer supported")
+      }
+      if (item.containsKey("validator")) {
+        throw new IllegalArgumentException("validator is no longer supported")
+      }
+      if (regex.contains(RemovedRegexReference)) {
+        throw new IllegalArgumentException(s"$RemovedRegexReference is no longer supported")
+      }
+      val rawMatchType = Option(item.get("match_type")).map(_.toString.trim).filter(_.nonEmpty).getOrElse(PiiRuleMatchType.Value)
+      val matchType = PiiRuleMatchType.normalize(rawMatchType).getOrElse {
+        throw new IllegalArgumentException(
+          s"Unsupported match_type: $rawMatchType. Supported values: ${PiiRuleMatchType.Supported.toSeq.sorted.mkString(", ")}"
+        )
+      }
+      validateRegex(piiType, regex, matchType)
+
+      PiiRule(piiType, regex, columnHints, matchType)
+    }.toSeq
+
+    if (parsed.isEmpty) {
+      throw new IllegalArgumentException("rules must contain at least one rule")
+    }
+
+    parsed
+  }
+
+  private def parseSuppressions(root: java.util.Map[String, Object]): Seq[Suppression] = {
+    Option(root.get("suppressions"))
+      .map(_.asInstanceOf[java.util.List[java.util.Map[String, Object]]].asScala.map(parseSuppression).toSeq)
+      .getOrElse(Seq.empty)
+  }
+
+  private def parseSuppression(item: java.util.Map[String, Object]): Suppression = {
+    val columnName = Option(item.get("column")).map(_.toString.trim).getOrElse("")
+    val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
+
+    if (columnName.isEmpty || piiType.isEmpty) {
+      throw new IllegalArgumentException("Each suppression must include column and pii_type")
+    }
+
+    Suppression(columnName, piiType)
+  }
 }
+
+final case class RulesetBundle(rules: Seq[PiiRule], suppressions: Seq[Suppression])

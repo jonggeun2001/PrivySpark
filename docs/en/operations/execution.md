@@ -1,12 +1,12 @@
 # Execution and Operations
 
 ## Execution Model
-- `privyspark scan` is the single public entrypoint.
+- The public commands are `privyspark scan` and `privyspark review apply`.
 - Input and output paths must be absolute paths or URIs.
 - The default target runtime is Spark on YARN cluster mode.
 - The build artifact is a Shadow fat JAR (`*-all.jar`).
 
-## CLI Arguments
+## `scan` CLI Arguments
 - `--path <ABS_PATH_OR_URI>`: input path
 - `--output <ABS_PATH_OR_URI>`: output path
 - `--output-format <parquet|csv|excel>`: repeatable final output format option, default `parquet`
@@ -19,6 +19,16 @@
 - `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
+- `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
+- `--suppress <column:pii_type>`: repeatable false-positive suppression rule
+- `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
+
+## `review apply` CLI Arguments
+- `--scan-results <ABS_PATH_OR_URI>`: edited `scan_results` input path. `csv`, `parquet`, and `xlsx` (`scan_results` sheet) are supported.
+- `--input-root <ABS_PATH_OR_URI>`: original scan input root
+- `--allowlist <ABS_PATH_OR_URI>`: allowlist JSONL path to create or update
+- `--reviewer <STRING>`: reviewer identifier
+- `--dry-run`: calculates staged entries without writing the output file
 
 ## Ignore Patterns
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`
@@ -30,6 +40,14 @@
 - `--ignore-file` is read through Hadoop `FileSystem`. In YARN cluster mode, client-local files must be distributed first with `--files` or `PRIVYSPARK_SPARK_FILES`, then referenced through the distributed alias.
 
 The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `.crc`, log dumps, or backup directories do not inflate I/O, error rows, or report noise.
+
+Allowlists are intentionally different from ignore rules. Ignore rules skip files before scanning, while allowlists suppress only reviewed false positives at the `(file_identifier, column_name, pii_type)` level after detection.
+
+## Suppression
+- Suppression removes only a specific `(column, pii_type)` result pair. Column names are matched case-insensitively by exact equality.
+- `--suppress` only accepts the `column:pii_type` format.
+- `--suppression-file` is read through Hadoop `FileSystem`. In YARN cluster mode, distribute client-local files first with `--files` or `PRIVYSPARK_SPARK_FILES`, then reference the distributed alias.
+- CLI suppressions are union-merged with ruleset YAML `suppressions:`.
 
 ## Parallelism
 - CLI values are passed directly into application logic.
