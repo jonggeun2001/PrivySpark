@@ -76,7 +76,8 @@ private[privyspark] object GroupScanCoordinator {
               run.inFlightPath,
               "group",
               group.directoryPath,
-              Map("format" -> group.format, "schemaSignature" -> group.schemaSignature)
+              Map("format" -> group.format, "schemaSignature" -> group.schemaSignature),
+              preserveOnFailure = true
             ) {
               scanCurrentGroup()
             }

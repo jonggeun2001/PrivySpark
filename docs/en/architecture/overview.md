@@ -51,12 +51,12 @@
 - Archive and Excel logical inputs keep their own identifiers.
 - The public output contract defaults to `parquet/scan_results` and `parquet/scan_errors`, and CLI `--output-format` can additionally materialize `csv/...` and `excel/*.xlsx`.
 - Clean completions also emit `meta/completions` markers.
-- In-flight markers under `_progress/<run_id>/in-flight` are best-effort diagnostics for currently active work and are deleted on task success or failure.
+- In-flight markers under `_progress/<run_id>/in-flight` are best-effort diagnostics for currently active work. Completed work and recoverable failures delete markers; unrecovered group/file failures that make the application `FAILED` preserve them.
 - `_progress` is cleaned based on staleness when the next run starts. There is no shutdown hook cleanup.
 
 ## Why It Works This Way
 - Keeping `_progress` separate from final outputs preserves both observability and final report integrity.
-- In-flight markers expose current bottleneck work while preserving the completed-progress JSONL contract.
+- In-flight markers expose current bottleneck work and the last active group/file work at application failure while preserving the completed-progress JSONL contract.
 - Cleanup happens on the next run instead of a shutdown hook because forced YARN termination and `kill -9` make shutdown hooks unreliable.
 - `_progress-preparing.json` exists so concurrent startup cannot delete another run's freshly created progress root before the active marker is ready.
 - The owner run can self-heal an unreadable `active-run.json` from `meta/run.json` so a damaged marker does not unnecessarily kill a live run.

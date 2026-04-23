@@ -19,7 +19,8 @@ private[privyspark] object InFlightMarker {
     inFlightDir: String,
     scope: String,
     identifier: String,
-    extra: Map[String, String] = Map.empty
+    extra: Map[String, String] = Map.empty,
+    preserveOnFailure: Boolean = false
   )(body: => A): A = {
     val markerPath = s"${inFlightDir.stripSuffix("/")}/${markerFileName(identifier)}"
     val markerJson = renderJson(
@@ -32,10 +33,22 @@ private[privyspark] object InFlightMarker {
     )
 
     ProgressIO.writeJsonFile(conf, markerPath, markerJson, overwrite = false)
+    var completed = false
     try {
-      body
+      val result = body
+      completed = true
+      result
     } finally {
-      deleteMarker(conf, markerPath)
+      if (!completed && preserveOnFailure) {
+        DriverLogger.warn(
+          "in_flight_marker_preserved_after_failure",
+          "marker_path" -> markerPath,
+          "scope" -> scope,
+          "identifier" -> identifier
+        )
+      } else {
+        deleteMarker(conf, markerPath)
+      }
     }
   }
 

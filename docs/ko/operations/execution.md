@@ -89,7 +89,7 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 - 진행 중 shard는 `<output>/_progress/<run_id>/results`, `errors`, `meta/completions` 아래 JSONL로 기록됩니다.
 - 실행 중인 group, file, allowlist snapshot 작업은 `<output>/_progress/<run_id>/in-flight` 아래 임시 JSON marker를 생성합니다.
 - 각 in-flight marker에는 `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`와 가능한 경우 `format`, `schemaSignature` 같은 스캔 메타데이터가 들어갑니다.
-- in-flight marker는 감싼 작업이 성공하거나 실패할 때 `finally`에서 삭제되므로, 남아 있는 파일은 cleanup까지 도달하지 못한 중단 작업을 의미합니다.
+- 완료된 작업과 처리 가능한 실패의 in-flight marker는 삭제됩니다. Spark application을 `FAILED`로 끝내는 미복구 group/file 실패는 marker를 보존해 마지막 진행 중 작업을 확인할 수 있게 합니다.
 - setup 시작 전에는 `<output>/_progress-preparing.json` lock을 먼저 획득합니다.
 - 준비가 끝나면 `_progress/active-run.json` heartbeat marker로 전환합니다.
 - 다음 실행은 stale heartbeat, `FAILED` marker, stale preparing lock만 cleanup 대상으로 봅니다.
