@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
+import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion.supportsBatchScan
@@ -51,7 +52,7 @@ private[privyspark] object GroupScanCoordinator {
           "use_directory_identifier" -> group.useDirectoryIdentifier,
           "parallelism" -> parallelism
         )
-        val (groupResults, groupErrors) =
+        def scanCurrentGroup(): (Seq[ScanResult], Seq[ScanError]) =
           scanGroup(
             spark,
             datasetPath,
@@ -68,6 +69,20 @@ private[privyspark] object GroupScanCoordinator {
             progressRun,
             csvHeadCache
           )
+        val (groupResults, groupErrors) = progressRun match {
+          case Some(run) =>
+            InFlightMarker.run(
+              spark.sparkContext.hadoopConfiguration,
+              run.inFlightPath,
+              "group",
+              group.directoryPath,
+              Map("format" -> group.format, "schemaSignature" -> group.schemaSignature)
+            ) {
+              scanCurrentGroup()
+            }
+          case None =>
+            scanCurrentGroup()
+        }
         DriverLogger.debug(
           "group_scan_recorded",
           "directory" -> group.directoryPath,
@@ -193,7 +208,8 @@ private[privyspark] object GroupScanCoordinator {
         suppressions,
         allowlistMatcher,
         allowlistInputRoot,
-        selectedSourceKeys = Some(effectiveSelectedSourceKeys)
+        selectedSourceKeys = Some(effectiveSelectedSourceKeys),
+        progressRun = progressRun
       )
       progressRun.foreach { run =>
         persistProgressRecords(
@@ -351,7 +367,8 @@ private[privyspark] object GroupScanCoordinator {
     suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
     allowlistInputRoot: Option[String] = None,
-    selectedSourceKeys: Option[Seq[String]] = None
+    selectedSourceKeys: Option[Seq[String]] = None,
+    progressRun: Option[ProgressRun] = None
   ): Seq[ScanResult] = {
     GroupBatchScanner.scanGroupBatch(
       spark,
@@ -365,7 +382,8 @@ private[privyspark] object GroupScanCoordinator {
       suppressions,
       allowlistMatcher,
       allowlistInputRoot,
-      selectedSourceKeys
+      selectedSourceKeys,
+      progressRun
     )
   }
 }

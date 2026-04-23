@@ -86,7 +86,8 @@ private[privyspark] final case class ProgressRun(
   resultsPath: String,
   errorsPath: String,
   metaPath: String,
-  completionsPath: String
+  completionsPath: String,
+  inFlightPath: String
 )
 
 private[privyspark] final case class ActiveRunMarker(runId: String, state: String, lastHeartbeatEpochMillis: Long)

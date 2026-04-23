@@ -81,6 +81,9 @@ When ignore rules apply, events such as `scan_directory_file_ignored` and `archi
 
 ## `_progress` Handling
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
+- Running group, file, and allowlist snapshot tasks create temporary JSON markers under `<output>/_progress/<run_id>/in-flight`.
+- Each in-flight marker includes `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`, and available scan metadata such as `format` and `schemaSignature`.
+- In-flight markers are removed in `finally` blocks when the wrapped task completes or fails, so leftover files indicate interrupted work that did not reach cleanup.
 - Before setup, PrivySpark acquires `<output>/_progress-preparing.json`.
 - Once setup is ready, it switches to `_progress/active-run.json` with heartbeat updates.
 - On the next run, only stale heartbeats, `FAILED` markers, or stale preparing locks are cleaned up.

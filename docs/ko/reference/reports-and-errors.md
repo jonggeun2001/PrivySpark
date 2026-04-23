@@ -76,6 +76,8 @@
 
 ## 진행 중 progress 경로
 - 진행 중 임시 shard는 `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, `meta/completions/*.jsonl`에 기록될 수 있습니다.
+- 작업이 실행 중일 때는 `<output>/_progress/<run_id>/in-flight/*.json`에 활성 group, file, allowlist snapshot rescan별 marker가 있을 수 있습니다.
+- in-flight marker는 운영 진단용이며, 감싼 작업이 성공하거나 실패하면 삭제됩니다.
 - clean completion은 탐지나 오류 row 없이 completion marker만 남깁니다.
 - 정상 종료 시 `_progress` 내용을 merge해 선택된 최종 출력 포맷을 만들고 `_progress/<run_id>`를 삭제합니다.
 
