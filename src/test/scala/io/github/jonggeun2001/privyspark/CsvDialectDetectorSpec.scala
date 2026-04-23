@@ -10,6 +10,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.file.Files
+import java.nio.charset.StandardCharsets
 
 @RunWith(classOf[JUnitRunner])
 class CsvDialectDetectorSpec extends AnyFunSuite with BeforeAndAfterAll {
@@ -90,5 +91,44 @@ class CsvDialectDetectorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val refined = CsvDialectDetector.refineDetectedFormat(spark, missingPath, TextFormat, readOptions)
 
     assert(refined == ((TextFormat, readOptions)))
+  }
+
+  test("refineDetectedFormat keeps single-line delimiter-like text as text") {
+    val filePath = writeTextFile("name,email\n")
+    val (format, readOptions) = CsvDialectDetector.refineDetectedFormat(spark, filePath, TextFormat, ScanReadOptions())
+
+    assert(format == TextFormat)
+    assert(readOptions == ScanReadOptions())
+  }
+
+  test("refineDetectedFormat keeps log-like natural punctuation text as text") {
+    val filePath = writeTextFile(
+      "INFO: service started\n" +
+        "WARN: retry scheduled\n" +
+        "ERROR: failed after retry\n"
+    )
+    val (format, readOptions) = CsvDialectDetector.refineDetectedFormat(spark, filePath, TextFormat, ScanReadOptions())
+
+    assert(format == TextFormat)
+    assert(readOptions == ScanReadOptions())
+  }
+
+  test("refineDetectedFormat promotes structured comma-delimited text to csv") {
+    val filePath = writeTextFile(
+      "name,email\n" +
+        "alice,alice@example.com\n" +
+        "bob,bob@example.com\n"
+    )
+    val (format, readOptions) = CsvDialectDetector.refineDetectedFormat(spark, filePath, TextFormat, ScanReadOptions())
+
+    assert(format == "csv")
+    assert(readOptions.csvDialect.forall(_.delimiter == ","))
+  }
+
+  private def writeTextFile(contents: String): String = {
+    val path = Files.createTempFile("privyspark-csv-dialect-detector-", ".data")
+    path.toFile.deleteOnExit()
+    Files.write(path, contents.getBytes(StandardCharsets.UTF_8))
+    path.toUri.toString
   }
 }

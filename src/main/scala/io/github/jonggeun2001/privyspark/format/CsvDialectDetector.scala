@@ -1,7 +1,11 @@
 package io.github.jonggeun2001.privyspark.format
 
 import io.github.jonggeun2001.privyspark.format.ByteProbe.TextFormat
-import io.github.jonggeun2001.privyspark.format.CsvHeaderHeuristic.{parseCsvLine, readFirstNonBlankCsvLines}
+import io.github.jonggeun2001.privyspark.format.CsvHeaderHeuristic.{
+  detectCsvHasHeaderFromLines,
+  parseCsvLine,
+  readFirstNonBlankCsvLines
+}
 import io.github.jonggeun2001.privyspark.model.{CsvDialect, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.CsvHeadCache
 import org.apache.spark.sql.SparkSession
@@ -15,6 +19,46 @@ private[privyspark] object CsvDialectDetector {
   private val SingleCharacterCandidates = Seq(",", "\t", ";", "|", ":", "\u001c", "\u001d", "\u001e", "\u001f")
   private val CandidatePriority = SingleCharacterCandidates.zipWithIndex.toMap.withDefaultValue(SingleCharacterCandidates.size)
   private val MaxInconsistentLineRatio = 0.2
+  private val MinTextPromotionLineCount = 3
+  private val NaturalTextDelimiters = Set(",", ":")
+  private val TextPromotionHeaderTokens = Set(
+    "id",
+    "name",
+    "first",
+    "last",
+    "full",
+    "email",
+    "mail",
+    "phone",
+    "tel",
+    "mobile",
+    "city",
+    "state",
+    "country",
+    "address",
+    "addr",
+    "zip",
+    "postal",
+    "code",
+    "user",
+    "account",
+    "customer",
+    "date",
+    "time",
+    "age",
+    "gender",
+    "amount",
+    "price",
+    "number",
+    "product",
+    "item",
+    "이름",
+    "이메일",
+    "도시",
+    "국가",
+    "주소",
+    "전화번호"
+  )
 
   private case class CandidateScore(
     dialect: CsvDialect,
@@ -35,6 +79,25 @@ private[privyspark] object CsvDialectDetector {
   ): Option[CsvDialect] = {
     val lines = readFirstNonBlankCsvLines(spark, filePath, CsvHeadCache.CachedLineLimit, csvHeadCache)
     detectDialectFromLines(spark, lines)
+  }
+
+  private def detectPromotableTextDialect(
+    spark: SparkSession,
+    filePath: String,
+    csvHeadCache: CsvHeadCache
+  ): Option[CsvDialect] = {
+    val lines = readFirstNonBlankCsvLines(spark, filePath, CsvHeadCache.CachedLineLimit, csvHeadCache)
+    detectPromotableTextDialectFromLines(spark, lines)
+  }
+
+  private def detectPromotableTextDialectFromLines(spark: SparkSession, lines: Seq[String]): Option[CsvDialect] = {
+    val sampleLines = lines.map(line => Option(line).getOrElse("")).filter(_.trim.nonEmpty)
+    if (sampleLines.size < MinTextPromotionLineCount) {
+      None
+    } else {
+      detectDialectFromLines(spark, sampleLines)
+        .filter(dialect => hasTextPromotionConfidence(spark, sampleLines, dialect))
+    }
   }
 
   def detectDialectFromLines(spark: SparkSession, lines: Seq[String]): Option[CsvDialect] = {
@@ -66,7 +129,7 @@ private[privyspark] object CsvDialectDetector {
           .getOrElse(readOptions)
         (format, refinedReadOptions)
       } else if (format == TextFormat) {
-        detectDialect(spark, filePath, csvHeadCache) match {
+        detectPromotableTextDialect(spark, filePath, csvHeadCache) match {
           case Some(dialect) =>
             val refinedReadOptions =
               if (dialect == CsvDialect()) readOptions else readOptions.copy(csvDialect = Some(dialect))
@@ -147,6 +210,58 @@ private[privyspark] object CsvDialectDetector {
         priority = CandidatePriority(dialect.delimiter)
       ))
     }
+  }
+
+  private def hasTextPromotionConfidence(
+    spark: SparkSession,
+    lines: Seq[String],
+    dialect: CsvDialect
+  ): Boolean = {
+    val parsedRows = try {
+      lines.map(line => parseCsvLine(spark, line, dialect).toSeq.map(field => Option(field).getOrElse("").trim))
+    } catch {
+      case NonFatal(_) => return false
+    }
+    val expectedColumnCount = parsedRows.headOption.map(_.size).getOrElse(0)
+    val dataRows = parsedRows.drop(1)
+
+    expectedColumnCount >= 2 &&
+      dataRows.size >= 2 &&
+      parsedRows.forall(_.size == expectedColumnCount) &&
+      detectCsvHasHeaderFromLines(spark, lines, dialect) &&
+      (!NaturalTextDelimiters.contains(dialect.delimiter) || hasNaturalDelimiterPromotionSignal(parsedRows))
+  }
+
+  private def hasNaturalDelimiterPromotionSignal(parsedRows: Seq[Seq[String]]): Boolean = {
+    val headerFields = parsedRows.headOption.getOrElse(Seq.empty)
+    val dataFields = parsedRows.drop(1).flatten
+    val strongHeaderFieldCount = headerFields.count(hasStrongTextPromotionHeaderToken)
+
+    dataFields.exists(isStructuredTextPromotionValue) ||
+      strongHeaderFieldCount >= math.min(2, headerFields.size)
+  }
+
+  private def hasStrongTextPromotionHeaderToken(value: String): Boolean = {
+    tokenizeTextPromotionHeaderField(value).exists(TextPromotionHeaderTokens.contains)
+  }
+
+  private def tokenizeTextPromotionHeaderField(value: String): Seq[String] = {
+    Option(value).getOrElse("").trim.toLowerCase
+      .split("[\\s_./-]+")
+      .filter(_.nonEmpty)
+      .flatMap { token =>
+        val normalizedToken = token.replaceAll("\\d+$", "")
+        if (normalizedToken.nonEmpty && normalizedToken != token) Seq(token, normalizedToken) else Seq(token)
+      }
+      .toSeq
+  }
+
+  private def isStructuredTextPromotionValue(value: String): Boolean = {
+    val trimmed = Option(value).getOrElse("").trim
+    trimmed.matches("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}") ||
+      trimmed.matches("\\d{2,3}-\\d{3,4}-\\d{4}") ||
+      trimmed.matches("[-+]?\\d+(\\.\\d+)?") ||
+      trimmed.exists(_.isDigit)
   }
 
   private def median(values: Seq[Int]): Int = {
