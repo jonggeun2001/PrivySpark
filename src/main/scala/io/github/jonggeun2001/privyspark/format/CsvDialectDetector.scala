@@ -56,25 +56,31 @@ private[privyspark] object CsvDialectDetector {
     readOptions: ScanReadOptions,
     csvHeadCache: CsvHeadCache = new CsvHeadCache()
   ): (String, ScanReadOptions) = {
-    if (readOptions.csvDialect.isDefined || readOptions.textEncoding.isDefined) {
-      (format, readOptions)
-    } else if (format == "csv") {
-      val refinedReadOptions = detectDialect(spark, filePath, csvHeadCache)
-        .filter(requiresExplicitReadOption)
-        .map(dialect => readOptions.copy(csvDialect = Some(dialect)))
-        .getOrElse(readOptions)
-      (format, refinedReadOptions)
-    } else if (format == TextFormat) {
-      detectDialect(spark, filePath, csvHeadCache) match {
-        case Some(dialect) =>
-          val refinedReadOptions =
-            if (dialect == CsvDialect()) readOptions else readOptions.copy(csvDialect = Some(dialect))
-          ("csv", refinedReadOptions)
-        case None =>
-          (format, readOptions)
+    try {
+      if (readOptions.csvDialect.isDefined || readOptions.textEncoding.isDefined) {
+        (format, readOptions)
+      } else if (format == "csv") {
+        val refinedReadOptions = detectDialect(spark, filePath, csvHeadCache)
+          .filter(requiresExplicitReadOption)
+          .map(dialect => readOptions.copy(csvDialect = Some(dialect)))
+          .getOrElse(readOptions)
+        (format, refinedReadOptions)
+      } else if (format == TextFormat) {
+        detectDialect(spark, filePath, csvHeadCache) match {
+          case Some(dialect) =>
+            val refinedReadOptions =
+              if (dialect == CsvDialect()) readOptions else readOptions.copy(csvDialect = Some(dialect))
+            ("csv", refinedReadOptions)
+          case None =>
+            (format, readOptions)
+        }
+      } else {
+        (format, readOptions)
       }
-    } else {
-      (format, readOptions)
+    } catch {
+      case NonFatal(_) =>
+        // Dialect probing is opportunistic; file-level scan handling should own read failures.
+        (format, readOptions)
     }
   }
 

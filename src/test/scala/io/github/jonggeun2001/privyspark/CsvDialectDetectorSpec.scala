@@ -1,11 +1,15 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.format.ByteProbe.TextFormat
 import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
+import io.github.jonggeun2001.privyspark.model.ScanReadOptions
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
+
+import java.nio.file.Files
 
 @RunWith(classOf[JUnitRunner])
 class CsvDialectDetectorSpec extends AnyFunSuite with BeforeAndAfterAll {
@@ -78,5 +82,13 @@ class CsvDialectDetectorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     assert(CsvDialectDetector.detectDialectFromLines(spark, lines).map(_.delimiter).contains("|"))
+  }
+
+  test("refineDetectedFormat falls back when dialect sample read fails") {
+    val missingPath = Files.createTempDirectory("privyspark-missing-dialect").resolve("missing.data").toUri.toString
+    val readOptions = ScanReadOptions()
+    val refined = CsvDialectDetector.refineDetectedFormat(spark, missingPath, TextFormat, readOptions)
+
+    assert(refined == ((TextFormat, readOptions)))
   }
 }
