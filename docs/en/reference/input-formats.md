@@ -4,13 +4,13 @@
 - Extension-first support: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`, `tar`, `tar.gz`, `tgz`, `tar.bz2`, `tbz2`, `tar.xz`, `txz`, `tar.zst`, `tzst`, `7z`, `rar`
 - Direct text-style data files (`csv`, `json`, `jsonl`, `ndjson`) with outer `gz` or `bz2` wrappers are passed through to Spark/Hadoop readers using the original path. Examples: `customers.csv.gz`, `events.json.bz2`
 - Files without extensions and most unsupported extensions are probed for `parquet` and `orc` magic bytes first. A small set of obviously non-data binary extensions such as `pdf` or `jpg` are classified as unsupported without probing.
-- If magic bytes do not match but the content looks like UTF-8 text, the input is normalized into the internal `text` format and scanned through Spark's single-column `text` reader.
-- UTF-8 text that uses ASCII information separators (`0x1C`-`0x1F`, for example RS-delimited files) still counts as text fallback input instead of binary.
+- If magic bytes do not match but the content looks like UTF-8 or EUC-KR text, the input is normalized into the internal `text` format and scanned as a single `value` column.
+- UTF-8/EUC-KR text that uses ASCII information separators (`0x1C`-`0x1F`, for example RS-delimited files) still counts as text fallback input instead of binary.
 - Only binary-looking unsupported inputs are recorded as `Unsupported file format`.
 - Zero-byte physical files are skipped during pre-scan.
 - Physical files matching `--ignore` or `--ignore-file` patterns are excluded before pre-scan.
 
-The text fallback exists because extension-based filtering alone would reject too many real-world log and dump files. At the same time, forcing every unknown binary into text mode would create noise, so PrivySpark separates those cases with magic-byte checks plus UTF-8 probing.
+The text fallback exists because extension-based filtering alone would reject too many real-world log and dump files. At the same time, forcing every unknown binary into text mode would create noise, so PrivySpark separates those cases with magic-byte checks plus text encoding probing.
 
 ## Archive Handling
 - `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, and `rar` are pre-scanned and staged entry-by-entry before scanning.

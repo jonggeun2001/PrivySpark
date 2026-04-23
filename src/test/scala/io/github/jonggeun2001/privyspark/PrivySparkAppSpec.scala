@@ -4342,6 +4342,28 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules treats EUC-KR unsupported extension text as text") {
+    val inputDir = Files.createTempDirectory("privyspark-text-euc-kr-fallback-")
+    val timestamp = "2026-04-23T00:00:00Z"
+
+    try {
+      writeBytes(
+        inputDir.resolve("customers.dat"),
+        ("이름\n" +
+          "홍길동\n").getBytes(java.nio.charset.Charset.forName("EUC-KR"))
+      )
+
+      val rules = Seq(PiiRule("korean_name", "홍길동"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("customers.dat", "value", 1L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules keeps malformed utf-8 fallback inputs unsupported") {
     val inputDir = Files.createTempDirectory("privyspark-text-malformed-utf8-fallback-")
     val timestamp = "2026-04-10T00:00:00Z"
