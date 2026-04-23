@@ -20,7 +20,6 @@ private[privyspark] object CsvDialectDetector {
   private val CandidatePriority = SingleCharacterCandidates.zipWithIndex.toMap.withDefaultValue(SingleCharacterCandidates.size)
   private val MaxInconsistentLineRatio = 0.2
   private val MinTextPromotionLineCount = 3
-  private val NaturalTextDelimiters = Set(",", ":")
   private val TextPromotionHeaderTokens = Set(
     "id",
     "name",
@@ -229,10 +228,10 @@ private[privyspark] object CsvDialectDetector {
       dataRows.size >= 2 &&
       parsedRows.forall(_.size == expectedColumnCount) &&
       detectCsvHasHeaderFromLines(spark, lines, dialect) &&
-      (!NaturalTextDelimiters.contains(dialect.delimiter) || hasNaturalDelimiterPromotionSignal(parsedRows))
+      hasTextPromotionStructureSignal(parsedRows)
   }
 
-  private def hasNaturalDelimiterPromotionSignal(parsedRows: Seq[Seq[String]]): Boolean = {
+  private def hasTextPromotionStructureSignal(parsedRows: Seq[Seq[String]]): Boolean = {
     val headerFields = parsedRows.headOption.getOrElse(Seq.empty)
     val dataFields = parsedRows.drop(1).flatten
     val strongHeaderFieldCount = headerFields.count(hasStrongTextPromotionHeaderToken)

@@ -45,7 +45,7 @@ This separate schema sampling phase exists for two reasons. First, directory-lev
 ## CSV Header Handling
 - CSV delimiters are detected automatically. Built-in candidates include comma, tab, semicolon, pipe, colon, ASCII information separator, plus consistent 2-3 character non-alphanumeric delimiters such as `||` and `|~|`.
 - `.csv` files are still dialect-probed, so tab-, semicolon-, or pipe-delimited files with a `.csv` extension are read with the detected dialect.
-- Unsupported extensions such as `.txt`, `.log`, `.data`, and extensionless text are promoted to `csv` when a stable CSV dialect is detected with at least a header plus two data rows. Natural-language-heavy delimiters such as comma and colon require an additional header or structured-value signal.
+- Unsupported extensions such as `.txt`, `.log`, `.data`, and extensionless text are promoted to `csv` when a stable CSV dialect is detected with at least a header plus two data rows and an additional header or structured-value signal.
 - With a header, PrivySpark uses a header-name signature.
 - Without a header, it uses a column-count signature (`cols:N`).
 - Known CSV inputs can still resolve ambiguous two-line cases as header-bearing CSV, but unsupported text is not promoted to CSV from two lines alone.

@@ -113,6 +113,18 @@ class CsvDialectDetectorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(readOptions == ScanReadOptions())
   }
 
+  test("refineDetectedFormat keeps log-like semicolon punctuation text as text") {
+    val filePath = writeTextFile(
+      "INFO; service started\n" +
+        "WARN; retry scheduled\n" +
+        "ERROR; failed after retry\n"
+    )
+    val (format, readOptions) = CsvDialectDetector.refineDetectedFormat(spark, filePath, TextFormat, ScanReadOptions())
+
+    assert(format == TextFormat)
+    assert(readOptions == ScanReadOptions())
+  }
+
   test("refineDetectedFormat promotes structured comma-delimited text to csv") {
     val filePath = writeTextFile(
       "name,email\n" +
