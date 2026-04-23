@@ -60,7 +60,7 @@ private[privyspark] final class CsvHeadCache {
 }
 
 private[privyspark] object CsvHeadCache {
-  val CachedLineLimit = 2
+  val CachedLineLimit = 16
   val MaxEntries = 4096
   val MaxCharacters = 1024 * 1024
 }

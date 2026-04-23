@@ -25,7 +25,7 @@
 1. 입력 경로 검증
 2. ruleset 로드, regex 사전 검증, ruleset/CLI suppression 병합
 3. 물리 파일 수집과 ignore 패턴 필터
-4. archive 엔트리 확장, workbook 시트 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화, archive entry ignore 필터
+4. archive 엔트리 확장, workbook 시트 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, CSV dialect 감지 및 text fallback 정규화, archive entry ignore 필터
 5. `(directory, format)` 기준 1차 그룹화
 6. 대표 파일 기준 스키마 샘플링
 7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정

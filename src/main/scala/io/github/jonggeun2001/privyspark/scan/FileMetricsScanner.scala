@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark.scan
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
 import io.github.jonggeun2001.privyspark.format.ByteProbe.detectPhysicalFormatWithReadOptions
+import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference.{detectCsvHasHeader, readSource}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
 import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, PiiRule, ScanError, ScanGroup, ScanReadOptions, ScanResult}
@@ -60,14 +61,21 @@ private[privyspark] object FileMetricsScanner {
         }
         val detectedFormat = formatOverride.map(format => (format, readOptions))
           .orElse(detectPhysicalFormatWithReadOptions(spark.sparkContext.hadoopConfiguration, physicalPath))
-        val (format, effectiveReadOptions) = detectedFormat.getOrElse {
+        val (detectedFormatName, detectedReadOptions) = detectedFormat.getOrElse {
           DriverLogger.debug("scan_file_error", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "reason" -> "Unsupported file format")
           return Left(ScanError(datasetPath, timestamp, fileIdentifier, s"Unsupported file format: $fileIdentifier"))
         }
+        val (format, effectiveReadOptions) = CsvDialectDetector.refineDetectedFormat(
+          spark,
+          physicalPath,
+          detectedFormatName,
+          detectedReadOptions,
+          csvHeadCache
+        )
         val effectiveRules = ScanResultBuilder.effectiveRulesForFormat(format, rules)
 
         val csvHasHeader = if (format == "csv") {
-          csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, physicalPath, csvHeadCache))
+          csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, physicalPath, csvHeadCache, effectiveReadOptions))
         } else {
           true
         }
