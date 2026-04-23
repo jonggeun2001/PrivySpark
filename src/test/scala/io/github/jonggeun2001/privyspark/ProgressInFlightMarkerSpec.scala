@@ -90,6 +90,31 @@ class ProgressInFlightMarkerSpec extends AnyFunSuite {
     }
   }
 
+  test("InFlightMarker bounds marker filenames while preserving the original identifier in JSON") {
+    val markerRoot = withTempDir("privyspark-in-flight-long-id")
+    val inFlightDir = markerRoot.resolve("run-789/in-flight")
+    Files.createDirectories(inFlightDir)
+    val conf = new Configuration()
+    val longIdentifier = "/input/" + ("nested-segment-" * 40) + "file.parquet"
+
+    try {
+      val result = InFlightMarker.run(conf, inFlightDir.toString, "group", longIdentifier) {
+        val markers = jsonFiles(inFlightDir)
+        assert(markers.size == 1)
+        assert(markers.head.getFileName.toString.length <= 128)
+
+        val markerJson = new String(Files.readAllBytes(markers.head), StandardCharsets.UTF_8)
+        assert(markerJson.contains(s""""identifier":"$longIdentifier""""))
+        "done"
+      }
+
+      assert(result == "done")
+      assert(jsonFiles(inFlightDir).isEmpty)
+    } finally {
+      deleteRecursively(markerRoot)
+    }
+  }
+
   private def withTempDir(prefix: String): Path =
     Files.createTempDirectory(prefix)
 

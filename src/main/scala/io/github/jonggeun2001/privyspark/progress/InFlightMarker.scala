@@ -5,10 +5,15 @@ import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.UUID
 import scala.util.control.NonFatal
 
 private[privyspark] object InFlightMarker {
+  private val FilenamePrefixMaxLength = 64
+  private val FilenameHashLength = 16
+
   def run[A](
     conf: Configuration,
     inFlightDir: String,
@@ -16,7 +21,7 @@ private[privyspark] object InFlightMarker {
     identifier: String,
     extra: Map[String, String] = Map.empty
   )(body: => A): A = {
-    val markerPath = s"${inFlightDir.stripSuffix("/")}/${sanitize(identifier)}-${UUID.randomUUID().toString}.json"
+    val markerPath = s"${inFlightDir.stripSuffix("/")}/${markerFileName(identifier)}"
     val markerJson = renderJson(
       runId = resolveRunId(inFlightDir),
       scope = scope,
@@ -36,6 +41,20 @@ private[privyspark] object InFlightMarker {
 
   private def sanitize(identifier: String): String =
     Option(identifier).getOrElse("").replaceAll("[^A-Za-z0-9._-]", "_")
+
+  private def markerFileName(identifier: String): String = {
+    val safeIdentifier = sanitize(identifier)
+    val prefix = if (safeIdentifier.isEmpty) "marker" else safeIdentifier.take(FilenamePrefixMaxLength)
+    val hash = sha256Hex(Option(identifier).getOrElse("")).take(FilenameHashLength)
+    s"$prefix-$hash-${UUID.randomUUID().toString}.json"
+  }
+
+  private def sha256Hex(value: String): String =
+    MessageDigest
+      .getInstance("SHA-256")
+      .digest(value.getBytes(StandardCharsets.UTF_8))
+      .map(byte => f"${byte & 0xff}%02x")
+      .mkString
 
   private def resolveRunId(inFlightDir: String): String = {
     val inFlightPath = new Path(inFlightDir.stripSuffix("/"))
