@@ -25,7 +25,7 @@
 1. validate input path
 2. load ruleset, pre-validate regexes, and merge ruleset/CLI suppressions
 3. collect physical files and apply ignore-pattern filtering
-4. expand archive entries and workbook sheets, pass through direct compressed text-style inputs, probe magic bytes, normalize text fallback, and filter ignored archive entries
+4. expand archive entries and workbook sheets, pass through direct compressed text-style inputs, probe magic bytes, detect CSV dialects, normalize text fallback, and filter ignored archive entries
 5. build first-pass groups by `(directory, format)`
 6. sample a representative file for schema detection
 7. perform schema-aware split and determine whether directory identifiers are safe

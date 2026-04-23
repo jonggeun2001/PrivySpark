@@ -4,7 +4,7 @@ import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, SuppressionSet}
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.format.{CsvHeaderHeuristic, CsvInference}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
-import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult, Suppression}
+import io.github.jonggeun2001.privyspark.model.{CsvDialect, DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult, Suppression}
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
 import io.github.jonggeun2001.privyspark.report.ReportWriter
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
@@ -597,6 +597,30 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("readSource applies explicit multi-character CSV dialect") {
+    val inputDir = Files.createTempDirectory("privyspark-explicit-multi-char-dialect-")
+
+    try {
+      val file = inputDir.resolve("contacts.data")
+      writeText(file,
+        "name|~|email\n" +
+          "alice|~|alice@example.com\n")
+
+      val df = CsvInference.readSource(
+        spark,
+        "csv",
+        Seq(file.toString),
+        csvHasHeader = true,
+        readOptions = ScanReadOptions(csvDialect = Some(CsvDialect(delimiter = "|~|")))
+      )
+
+      assert(df.columns.toSeq == Seq("name", "email"))
+      assert(df.collect().map(row => row.getAs[String]("email")).toSeq == Seq("alice@example.com"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("inferCsvSchemaSignature returns header-based signature for CSV with header") {
     val inputDir = Files.createTempDirectory("privyspark-schema-signature-header-")
 
@@ -932,6 +956,31 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(plan.groups.head.format == "text")
       assert(!plan.groups.head.useDirectoryIdentifier)
       assert(plan.groups.head.filePaths.map(path => new java.io.File(path).getName) == Seq("notes.log"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure promotes unsupported extension delimiter-separated text to csv") {
+    val inputDir = Files.createTempDirectory("privyspark-csv-content-detected-plan-")
+
+    try {
+      writeText(inputDir.resolve("contacts.txt"),
+        "name;email\n" +
+          "alice;alice@example.com\n" +
+          "bob;bob@example.com\n")
+
+      val plan = DirectoryScanner.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-23T00:00:00Z"
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.groups.size == 1)
+      assert(plan.groups.head.format == "csv")
+      assert(plan.groups.head.schemaSignature == "name|email")
     } finally {
       deleteRecursively(inputDir)
     }
@@ -4263,6 +4312,120 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(errors.isEmpty)
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
         Set(("notes.log", "value", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules parses tab-delimited csv extension files by detected dialect") {
+    val inputDir = Files.createTempDirectory("privyspark-tab-csv-dialect-")
+    val timestamp = "2026-04-23T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("contacts.csv"),
+        "name\temail\n" +
+          "alice\talice@example.com\n" +
+          "bob\tbob@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("contacts.csv", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules parses unsupported extension csv-like text by detected delimiter") {
+    val inputDir = Files.createTempDirectory("privyspark-semicolon-csv-dialect-")
+    val timestamp = "2026-04-23T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("contacts.txt"),
+        "name;email\n" +
+          "alice;alice@example.com\n" +
+          "bob;bob@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("contacts.txt", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules parses unsupported extension csv-like text with multi-character delimiter") {
+    val inputDir = Files.createTempDirectory("privyspark-multi-char-csv-dialect-")
+    val timestamp = "2026-04-23T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("contacts.data"),
+        "name|~|email\n" +
+          "alice|~|alice@example.com\n" +
+          "bob|~|bob@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("contacts.data", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules parses unsupported extension csv-like text with double-pipe delimiter") {
+    val inputDir = Files.createTempDirectory("privyspark-double-pipe-csv-dialect-")
+    val timestamp = "2026-04-23T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("contacts.data"),
+        "name||email\n" +
+          "alice||alice@example.com\n" +
+          "bob||bob@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("contacts.data", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules parses ascii information separator delimited text as csv") {
+    val inputDir = Files.createTempDirectory("privyspark-ascii-separator-csv-dialect-")
+    val timestamp = "2026-04-23T00:00:00Z"
+    val cases = Seq(
+      "fs.data" -> '\u001c',
+      "gs.data" -> '\u001d',
+      "rs.data" -> '\u001e',
+      "us.data" -> '\u001f'
+    )
+
+    try {
+      cases.foreach {
+        case (fileName, delimiter) =>
+          writeText(inputDir.resolve(fileName),
+            s"name${delimiter}email\n" +
+              s"alice${delimiter}alice@example.com\n" +
+              s"bob${delimiter}bob@example.com\n")
+      }
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        cases.map { case (fileName, _) => (fileName, "email", 2L) }.toSet)
     } finally {
       deleteRecursively(inputDir)
     }

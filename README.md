@@ -11,7 +11,8 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - 입력 경로는 절대경로 또는 URI만 허용합니다.
 - 지원 입력은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`와 archive 계열 `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`입니다.
 - `gzip`, `bzip2`로 감싼 direct text-style data file(`*.csv.gz`, `*.json.bz2` 등)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
-- 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 판별하고, 바이너리처럼 보이지 않는 UTF-8 또는 EUC-KR 텍스트는 내부 `text` 포맷으로 정규화해 스캔합니다.
+- CSV 계열 입력은 콤마뿐 아니라 탭, 세미콜론, 파이프, 콜론, ASCII 정보 구분자, 일부 다중문자 구분자(`||`, `|~|` 등)를 자동 감지해 컬럼 단위로 스캔합니다.
+- 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 판별하고, 안정적인 구분자와 헤더/데이터 구조가 확인되는 UTF-8 텍스트만 내부 `csv` 포맷으로 승격합니다. 그 외 바이너리처럼 보이지 않는 UTF-8 또는 EUC-KR 텍스트는 내부 `text` 포맷으로 정규화해 스캔합니다.
 - 0바이트 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 건너뜁니다.
 - password-protected archive, multi-volume RAR, RAR5 archive는 `scan_errors`에 명시적으로 기록합니다.
 - row sampling(`--sample-ratio`)과 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있고, `--file-sample-min-files`로 파일 샘플링을 적용할 최소 그룹 크기(기본 `10`)를 조정할 수 있습니다.

@@ -1,6 +1,7 @@
 package io.github.jonggeun2001.privyspark.format
 
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
+import io.github.jonggeun2001.privyspark.model.CsvDialect
 import io.github.jonggeun2001.privyspark.scan.CsvHeadCache
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
@@ -97,29 +98,88 @@ private[privyspark] object CsvHeaderHeuristic {
   def inferCsvHeaderSignature(
     spark: SparkSession,
     filePath: String,
-    csvHeadCache: CsvHeadCache = new CsvHeadCache()
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    dialect: CsvDialect = CsvDialect()
   ): Either[String, String] = {
     try {
       val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = CsvHeadCache.CachedLineLimit, csvHeadCache)
-      Right(inferCsvHeaderSignatureFromLines(spark, lines))
+      Right(inferCsvHeaderSignatureFromLines(spark, lines, dialect))
     } catch {
       case NonFatal(e) =>
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
     }
   }
 
-  private def createCsvOptions(spark: SparkSession): CSVOptions = {
+  private def createCsvOptions(spark: SparkSession, dialect: CsvDialect = CsvDialect()): CSVOptions = {
     new CSVOptions(
-      scala.collection.immutable.Map("header" -> "true", "inferSchema" -> "false"),
+      scala.collection.immutable.Map(
+        "header" -> "true",
+        "inferSchema" -> "false",
+        "delimiter" -> dialect.delimiter,
+        "quote" -> dialect.quote.toString,
+        "escape" -> dialect.escape.toString
+      ),
       false,
       spark.sessionState.conf.sessionLocalTimeZone,
       spark.sessionState.conf.columnNameOfCorruptRecord
     )
   }
 
-  private[privyspark] def parseCsvLine(spark: SparkSession, line: String): Array[String] = {
-    val parser = new CsvParser(createCsvOptions(spark).asParserSettings)
-    Option(parser.parseLine(Option(line).getOrElse("").stripPrefix("\uFEFF"))).getOrElse(Array.empty[String])
+  private[privyspark] def parseCsvLine(
+    spark: SparkSession,
+    line: String,
+    dialect: CsvDialect = CsvDialect()
+  ): Array[String] = {
+    if (dialect.delimiter.length == 1) {
+      val parser = new CsvParser(createCsvOptions(spark, dialect).asParserSettings)
+      Option(parser.parseLine(Option(line).getOrElse("").stripPrefix("\uFEFF"))).getOrElse(Array.empty[String])
+    } else {
+      parseMultiCharacterDelimitedLine(line, dialect).toArray
+    }
+  }
+
+  private def parseMultiCharacterDelimitedLine(line: String, dialect: CsvDialect): Seq[String] = {
+    val sanitizedLine = Option(line).getOrElse("").stripPrefix("\uFEFF")
+    val fields = ArrayBuffer.empty[String]
+    val buffer = new java.lang.StringBuilder
+    var index = 0
+    var inQuotes = false
+
+    while (index < sanitizedLine.length) {
+      val ch = sanitizedLine.charAt(index)
+      if (inQuotes) {
+        val nextExists = index + 1 < sanitizedLine.length
+        if (ch == dialect.escape && nextExists) {
+          buffer.append(sanitizedLine.charAt(index + 1))
+          index += 2
+        } else if (ch == dialect.quote) {
+          val nextIsEscapedQuote = nextExists && sanitizedLine.charAt(index + 1) == dialect.quote
+          if (nextIsEscapedQuote) {
+            buffer.append(dialect.quote)
+            index += 2
+          } else {
+            inQuotes = false
+            index += 1
+          }
+        } else {
+          buffer.append(ch)
+          index += 1
+        }
+      } else if (sanitizedLine.startsWith(dialect.delimiter, index)) {
+        fields += buffer.toString()
+        buffer.setLength(0)
+        index += dialect.delimiter.length
+      } else if (ch == dialect.quote) {
+        inQuotes = true
+        index += 1
+      } else {
+        buffer.append(ch)
+        index += 1
+      }
+    }
+
+    fields += buffer.toString()
+    fields.toSeq
   }
 
   private def loadFirstNonBlankCsvLines(
@@ -166,12 +226,13 @@ private[privyspark] object CsvHeaderHeuristic {
 
   private[privyspark] def inferCsvHeaderSignatureFromLines(
     spark: SparkSession,
-    lines: Seq[String]
+    lines: Seq[String],
+    dialect: CsvDialect = CsvDialect()
   ): String = {
-    val csvOptions = createCsvOptions(spark)
+    val csvOptions = createCsvOptions(spark, dialect)
     val headerLine = lines.headOption.getOrElse(throw new IllegalArgumentException("Empty or missing CSV header"))
     val headerColumns = CSVUtils.makeSafeHeader(
-      parseCsvLine(spark, headerLine),
+      parseCsvLine(spark, headerLine, dialect),
       spark.sessionState.conf.caseSensitiveAnalysis,
       csvOptions
     )
@@ -284,9 +345,10 @@ private[privyspark] object CsvHeaderHeuristic {
 
   private[privyspark] def detectCsvHasHeaderFromLines(
     spark: SparkSession,
-    lines: Seq[String]
+    lines: Seq[String],
+    dialect: CsvDialect = CsvDialect()
   ): Boolean = {
-    val firstRowFields = lines.headOption.map(parseCsvLine(spark, _).toSeq).getOrElse(Seq.empty)
+    val firstRowFields = lines.headOption.map(parseCsvLine(spark, _, dialect).toSeq).getOrElse(Seq.empty)
     if (firstRowFields.isEmpty) {
       false
     } else {
@@ -305,7 +367,7 @@ private[privyspark] object CsvHeaderHeuristic {
         return firstRowFields.exists(hasStrongCsvHeaderSignal)
       }
 
-      val secondRowFields = parseCsvLine(spark, lines(1)).toSeq
+      val secondRowFields = parseCsvLine(spark, lines(1), dialect).toSeq
       if (firstRowFields.size != secondRowFields.size) {
         return true
       }
