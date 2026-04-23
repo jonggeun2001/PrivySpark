@@ -72,6 +72,7 @@ private[privyspark] object SourceExpansion {
           physicalPath,
           logicalIdentifier,
           stagingPaths,
+          readOptions,
           ignoreMatcher,
           archiveExpansionDepth + 1
         )
@@ -155,6 +156,7 @@ private[privyspark] object SourceExpansion {
     archivePath: String,
     logicalIdentifier: String,
     stagingPaths: ArrayBuffer[String],
+    readOptions: ScanReadOptions,
     ignoreMatcher: IgnoreMatcher,
     archiveExpansionDepth: Int
   ): (Seq[ScanFileEntry], Seq[ScanError], Int) = {
@@ -165,6 +167,7 @@ private[privyspark] object SourceExpansion {
       archivePath,
       logicalIdentifier,
       stagingPaths,
+      readOptions,
       ignoreMatcher,
       archiveExpansionDepth
     )
