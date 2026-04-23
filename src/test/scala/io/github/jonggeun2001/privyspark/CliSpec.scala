@@ -24,6 +24,7 @@ class CliSpec extends AnyFunSuite {
     assert(config.preScanParallelism.isEmpty)
     assert(config.groupParallelism.isEmpty)
     assert(config.fileParallelism.isEmpty)
+    assert(config.excelMaxRowsInMemory.isEmpty)
     assert(config.ignorePatterns.isEmpty)
     assert(config.ignoreFile.isEmpty)
     assert(config.allowlist.isEmpty)
@@ -53,6 +54,8 @@ class CliSpec extends AnyFunSuite {
         "8",
         "--file-parallelism",
         "6",
+        "--excel-max-rows-in-memory",
+        "2048",
         "--output-format",
         "csv",
         "--output-format",
@@ -87,6 +90,7 @@ class CliSpec extends AnyFunSuite {
     assert(config.preScanParallelism.contains(3))
     assert(config.groupParallelism.contains(8))
     assert(config.fileParallelism.contains(6))
+    assert(config.excelMaxRowsInMemory.contains(2048))
     assert(config.effectiveOutputFormats == Seq("csv", "excel"))
     assert(config.ignorePatterns == Seq("_SUCCESS", "backup/**"))
     assert(config.allowlist.contains("/etc/privyspark/allowlist.jsonl"))
@@ -113,6 +117,8 @@ class CliSpec extends AnyFunSuite {
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--group-parallelism", "0"))
     val negativeFileParallelism =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--file-parallelism", "-1"))
+    val zeroExcelMaxRowsInMemory =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--excel-max-rows-in-memory", "0"))
     val invalidOutputFormat =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--output-format", "json"))
     val missingSuppressionSeparator =
@@ -134,6 +140,7 @@ class CliSpec extends AnyFunSuite {
     assert(largePreScanParallelism.get.asInstanceOf[CliCommand.Scan].config.preScanParallelism.contains(128))
     assert(zeroGroupParallelism.isEmpty)
     assert(negativeFileParallelism.isEmpty)
+    assert(zeroExcelMaxRowsInMemory.isEmpty)
     assert(invalidOutputFormat.isEmpty)
     assert(missingSuppressionSeparator.isEmpty)
     assert(missingSuppressionColumn.isEmpty)

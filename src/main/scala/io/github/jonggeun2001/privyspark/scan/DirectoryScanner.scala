@@ -92,7 +92,8 @@ private[privyspark] object DirectoryScanner {
     ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
-    parseOkCache: ParseOkCache = new ParseOkCache()
+    parseOkCache: ParseOkCache = new ParseOkCache(),
+    readOptions: ScanReadOptions = ScanReadOptions()
   ): DirectoryScanPlan = {
     DriverLogger.debug("scan_directory_structure_start", "input_path" -> inputPath, "dataset_path" -> datasetPath)
     val conf = spark.sparkContext.hadoopConfiguration
@@ -230,6 +231,7 @@ private[privyspark] object DirectoryScanner {
                       localStagingPaths,
                       fileSize = fileStatus.getLen,
                       fileMtimeEpochMs = fileStatus.getModificationTime,
+                      readOptions = readOptions,
                       ignoreMatcher = ignoreMatcher
                     )
                   PreScanFileOutcome(

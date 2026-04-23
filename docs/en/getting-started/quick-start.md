@@ -61,6 +61,7 @@ bin/privyspark-submit \
   --pre-scan-parallelism 32 \
   --group-parallelism 16 \
   --file-parallelism 8 \
+  --excel-max-rows-in-memory 2048 \
   --suppress prdctcd:driver_license_number \
   --ignore "_SUCCESS" \
   --ignore "backup/**"
