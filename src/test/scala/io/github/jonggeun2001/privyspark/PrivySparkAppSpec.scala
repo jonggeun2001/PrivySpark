@@ -4380,6 +4380,57 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanWithRules parses unsupported extension csv-like text with double-pipe delimiter") {
+    val inputDir = Files.createTempDirectory("privyspark-double-pipe-csv-dialect-")
+    val timestamp = "2026-04-23T00:00:00Z"
+
+    try {
+      writeText(inputDir.resolve("contacts.data"),
+        "name||email\n" +
+          "alice||alice@example.com\n" +
+          "bob||bob@example.com\n")
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("contacts.data", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanWithRules parses ascii information separator delimited text as csv") {
+    val inputDir = Files.createTempDirectory("privyspark-ascii-separator-csv-dialect-")
+    val timestamp = "2026-04-23T00:00:00Z"
+    val cases = Seq(
+      "fs.data" -> '\u001c',
+      "gs.data" -> '\u001d',
+      "rs.data" -> '\u001e',
+      "us.data" -> '\u001f'
+    )
+
+    try {
+      cases.foreach {
+        case (fileName, delimiter) =>
+          writeText(inputDir.resolve(fileName),
+            s"name${delimiter}email\n" +
+              s"alice${delimiter}alice@example.com\n" +
+              s"bob${delimiter}bob@example.com\n")
+      }
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        cases.map { case (fileName, _) => (fileName, "email", 2L) }.toSet)
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanWithRules applies full_column as full-line matching for text fallback inputs") {
     val inputDir = Files.createTempDirectory("privyspark-text-full-column-fallback-")
     val timestamp = "2026-04-10T00:00:00Z"

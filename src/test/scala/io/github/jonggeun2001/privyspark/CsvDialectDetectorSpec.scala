@@ -26,7 +26,11 @@ class CsvDialectDetectorSpec extends AnyFunSuite with BeforeAndAfterAll {
       "\t" -> Seq("name\temail", "alice\talice@example.com"),
       ";" -> Seq("name;email", "alice;alice@example.com"),
       "|" -> Seq("name|email", "alice|alice@example.com"),
-      ":" -> Seq("name:email", "alice:alice@example.com")
+      ":" -> Seq("name:email", "alice:alice@example.com"),
+      "\u001c" -> Seq("name\u001cemail", "alice\u001calice@example.com"),
+      "\u001d" -> Seq("name\u001demail", "alice\u001dalice@example.com"),
+      "\u001e" -> Seq("name\u001eemail", "alice\u001ealice@example.com"),
+      "\u001f" -> Seq("name\u001femail", "alice\u001falice@example.com")
     )
 
     cases.foreach {
@@ -36,14 +40,24 @@ class CsvDialectDetectorSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   test("detectDialectFromLines prefers a consistent multi-character delimiter over partial single-character splits") {
-    val lines = Seq(
-      "name|~|email",
-      "alice|~|alice@example.com",
-      "bob|~|bob@example.com"
+    val cases = Seq(
+      "|~|" -> Seq(
+        "name|~|email",
+        "alice|~|alice@example.com",
+        "bob|~|bob@example.com"
+      ),
+      "||" -> Seq(
+        "name||email",
+        "alice||alice@example.com",
+        "bob||bob@example.com"
+      )
     )
 
-    val detected = CsvDialectDetector.detectDialectFromLines(spark, lines)
-    assert(detected.map(_.delimiter).contains("|~|"), detected.toString)
+    cases.foreach {
+      case (delimiter, lines) =>
+        val detected = CsvDialectDetector.detectDialectFromLines(spark, lines)
+        assert(detected.map(_.delimiter).contains(delimiter), detected.toString)
+    }
   }
 
   test("detectDialectFromLines rejects single-column text") {

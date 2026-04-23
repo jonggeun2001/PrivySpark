@@ -12,7 +12,7 @@ import scala.collection.mutable
 import scala.util.control.NonFatal
 
 private[privyspark] object CsvDialectDetector {
-  private val SingleCharacterCandidates = Seq(",", "\t", ";", "|", ":", "\u001f")
+  private val SingleCharacterCandidates = Seq(",", "\t", ";", "|", ":", "\u001c", "\u001d", "\u001e", "\u001f")
   private val CandidatePriority = SingleCharacterCandidates.zipWithIndex.toMap.withDefaultValue(SingleCharacterCandidates.size)
   private val MaxInconsistentLineRatio = 0.2
 
@@ -20,11 +20,12 @@ private[privyspark] object CsvDialectDetector {
     dialect: CsvDialect,
     medianColumns: Int,
     inconsistentLines: Int,
+    emptyFields: Int,
     symbolOnlyFields: Int,
     priority: Int
   ) {
     val value: Int =
-      medianColumns * 100 - inconsistentLines * 100 - symbolOnlyFields * 80 - dialect.delimiter.length
+      medianColumns * 100 - inconsistentLines * 100 - emptyFields * 80 - symbolOnlyFields * 80 - dialect.delimiter.length
   }
 
   def detectDialect(
@@ -135,6 +136,7 @@ private[privyspark] object CsvDialectDetector {
         dialect = dialect,
         medianColumns = medianColumns,
         inconsistentLines = inconsistentLines,
+        emptyFields = parsedRows.map(countEmptyFields).sum,
         symbolOnlyFields = parsedRows.map(countSymbolOnlyFields).sum,
         priority = CandidatePriority(dialect.delimiter)
       ))
@@ -151,6 +153,10 @@ private[privyspark] object CsvDialectDetector {
       val trimmed = Option(field).getOrElse("").trim
       trimmed.nonEmpty && trimmed.forall(ch => !Character.isLetterOrDigit(ch))
     }
+  }
+
+  private def countEmptyFields(fields: Seq[String]): Int = {
+    fields.count(field => Option(field).getOrElse("").trim.isEmpty)
   }
 
   private def discoverMultiCharacterCandidates(lines: Seq[String]): Seq[String] = {
