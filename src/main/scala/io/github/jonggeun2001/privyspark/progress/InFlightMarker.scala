@@ -33,15 +33,13 @@ private[privyspark] object InFlightMarker {
     )
 
     ProgressIO.writeJsonFile(conf, markerPath, markerJson, overwrite = false)
-    var failedWithNonFatal = false
+    var completed = false
     try {
-      body
-    } catch {
-      case NonFatal(e) =>
-        failedWithNonFatal = true
-        throw e
+      val result = body
+      completed = true
+      result
     } finally {
-      if (failedWithNonFatal && preserveOnFailure) {
+      if (!completed && preserveOnFailure) {
         DriverLogger.warn(
           "in_flight_marker_preserved_after_failure",
           "marker_path" -> markerPath,
