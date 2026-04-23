@@ -17,7 +17,7 @@ private[privyspark] object SourceExpansion {
   private val NonDirectoryIdentifierFormats = Set(TextFormat, XlsxFormat)
 
   def supportsBatchScan(group: ScanGroup): Boolean = {
-    group.format != XlsxFormat
+    group.format != XlsxFormat && group.readOptionsByKey.isEmpty
   }
 
   def expandPhysicalSource(
@@ -49,7 +49,7 @@ private[privyspark] object SourceExpansion {
 
     val detectedFormat =
       try {
-        detectPhysicalFormat(conf, physicalPath)
+        detectPhysicalFormatWithReadOptions(conf, physicalPath)
       } catch {
         case NonFatal(e) =>
           return (
@@ -59,7 +59,7 @@ private[privyspark] object SourceExpansion {
           )
       }
     detectedFormat match {
-      case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth < MaxArchiveExpansionDepth =>
+      case Some((format, _)) if ArchiveFormats.contains(format) && archiveExpansionDepth < MaxArchiveExpansionDepth =>
         expandArchiveSource(
           conf,
           datasetPath,
@@ -70,17 +70,17 @@ private[privyspark] object SourceExpansion {
           ignoreMatcher,
           archiveExpansionDepth + 1
         )
-      case Some(format) if ArchiveFormats.contains(format) =>
+      case Some((format, _)) if ArchiveFormats.contains(format) =>
         (
           Seq.empty,
           Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Nested archive expansion is not supported: $logicalIdentifier")),
           0
         )
-      case Some(XlsxFormat) =>
+      case Some((XlsxFormat, _)) =>
         val (entries, errors) =
           expandWorkbookSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier, fileSize, fileMtimeEpochMs)
         (entries, errors, 0)
-      case Some(format) =>
+      case Some((format, readOptions)) =>
         (
           Seq(
             ScanFileEntry(
@@ -91,6 +91,7 @@ private[privyspark] object SourceExpansion {
               logicalIdentifier = logicalIdentifier,
               fileSize = fileSize,
               fileMtimeEpochMs = fileMtimeEpochMs,
+              readOptions = readOptions,
               allowDirectoryIdentifier = !forceDisableDirectoryIdentifier && !NonDirectoryIdentifierFormats.contains(format)
             )
           ),

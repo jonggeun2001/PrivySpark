@@ -7,8 +7,12 @@ import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.hadoop.io.{LongWritable, Text}
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat
+import org.apache.spark.sql.types.{StringType, StructField, StructType}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
+import java.nio.charset.Charset
 import java.util.UUID
 import scala.util.control.NonFatal
 
@@ -166,7 +170,7 @@ private[privyspark] object CsvInference {
           None
         )
       case TextFormat =>
-        (spark.read.text(filePath), None)
+        (readTextSource(spark, Seq(filePath), readOptions), None)
       case "parquet" =>
         (spark.read.parquet(filePath), None)
       case "orc" =>
@@ -222,7 +226,7 @@ private[privyspark] object CsvInference {
           None
         )
       case TextFormat =>
-        (spark.read.text(filePaths: _*), None)
+        (readTextSource(spark, filePaths, readOptions), None)
       case "parquet" =>
         (spark.read.parquet(filePaths: _*), None)
       case "orc" =>
@@ -231,5 +235,32 @@ private[privyspark] object CsvInference {
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
     ensureReadableSourceColumns(format, filePaths, df, internalCorruptRecordColumnName)
+  }
+
+  private def readTextSource(spark: SparkSession, filePaths: Seq[String], readOptions: ScanReadOptions): DataFrame = {
+    readOptions.textEncoding match {
+      case Some(encoding) =>
+        val encodingName = encoding
+        val rowsByPath = filePaths.map { filePath =>
+          spark.sparkContext
+            .newAPIHadoopFile(
+              filePath,
+              classOf[TextInputFormat],
+              classOf[LongWritable],
+              classOf[Text]
+            )
+            .mapPartitions { rows =>
+              val charset = Charset.forName(encodingName)
+              rows.map { case (_, text) =>
+                Row(new String(text.getBytes, 0, text.getLength, charset))
+              }
+            }
+        }
+        val rows = spark.sparkContext.union(rowsByPath)
+        spark.createDataFrame(rows, StructType(Seq(StructField("value", StringType, nullable = true))))
+
+      case None =>
+        spark.read.text(filePaths: _*)
+    }
   }
 }

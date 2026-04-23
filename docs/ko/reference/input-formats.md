@@ -4,13 +4,13 @@
 - 확장자 기반 우선 지원: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`, `tar`, `tar.gz`, `tgz`, `tar.bz2`, `tbz2`, `tar.xz`, `txz`, `tar.zst`, `tzst`, `7z`, `rar`
 - direct text-style data file(`csv`, `json`, `jsonl`, `ndjson`)에 붙은 outer compression wrapper `gz`, `bz2`는 원본 경로 그대로 Spark/Hadoop reader에 전달합니다. 예: `customers.csv.gz`, `events.json.bz2`
 - 무확장자 파일과 대부분의 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 먼저 판별합니다. 다만 `pdf`, `jpg` 같은 명확한 비데이터 바이너리 확장자는 probe 없이 바로 미지원 입력으로 분류합니다.
-- 매직바이트가 일치하지 않더라도 UTF-8 텍스트처럼 보이는 입력은 내부 `text` 포맷으로 정규화해 Spark `text` reader의 단일 `value` 컬럼으로 스캔합니다.
-- UTF-8 텍스트 안에서 ASCII 정보 구분자(`0x1C`-`0x1F`, 예: RS 구분 파일)가 자주 등장해도 text fallback 입력으로 처리합니다.
+- 매직바이트가 일치하지 않더라도 UTF-8 또는 EUC-KR 텍스트처럼 보이는 입력은 내부 `text` 포맷으로 정규화해 단일 `value` 컬럼으로 스캔합니다.
+- UTF-8/EUC-KR 텍스트 안에서 ASCII 정보 구분자(`0x1C`-`0x1F`, 예: RS 구분 파일)가 자주 등장해도 text fallback 입력으로 처리합니다.
 - 바이너리처럼 보이는 입력만 `Unsupported file format`으로 오류 리포트에 기록합니다.
 - 0바이트 physical file은 pre-scan에서 즉시 건너뜁니다.
 - `--ignore`, `--ignore-file` 패턴에 매칭된 physical file은 pre-scan 전에 제외합니다.
 
-이 text fallback을 둔 이유는 확장자만으로 텍스트 로그나 덤프를 배제하면 실제 운영 입력을 지나치게 많이 놓치기 때문입니다. 반대로 아무 바이너리나 텍스트로 강제 처리하면 노이즈가 커지므로, 매직바이트와 UTF-8 probe를 함께 사용해 경계를 분리합니다.
+이 text fallback을 둔 이유는 확장자만으로 텍스트 로그나 덤프를 배제하면 실제 운영 입력을 지나치게 많이 놓치기 때문입니다. 반대로 아무 바이너리나 텍스트로 강제 처리하면 노이즈가 커지므로, 매직바이트와 텍스트 인코딩 probe를 함께 사용해 경계를 분리합니다.
 
 ## Archive 처리
 - `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`는 내부 엔트리를 선스캔한 뒤 staging 후 스캔합니다.

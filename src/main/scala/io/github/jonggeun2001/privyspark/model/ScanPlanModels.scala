@@ -2,7 +2,10 @@ package io.github.jonggeun2001.privyspark.model
 
 import io.github.jonggeun2001.privyspark.review.RecordedFileFingerprint
 
-private[privyspark] final case class ScanReadOptions(sheetName: Option[String] = None)
+private[privyspark] final case class ScanReadOptions(
+  sheetName: Option[String] = None,
+  textEncoding: Option[String] = None
+)
 
 private[privyspark] final case class ScanFileEntry(
   sourceKey: String,
