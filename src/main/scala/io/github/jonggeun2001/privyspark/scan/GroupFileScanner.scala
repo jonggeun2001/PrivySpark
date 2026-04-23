@@ -154,7 +154,8 @@ private[privyspark] object GroupFileScanner {
               run.inFlightPath,
               "file",
               logicalIdentifier,
-              Map("format" -> group.format, "schemaSignature" -> group.schemaSignature)
+              Map("format" -> group.format, "schemaSignature" -> group.schemaSignature),
+              preserveOnFailure = true
             ) {
               scanFileMetrics()
             }

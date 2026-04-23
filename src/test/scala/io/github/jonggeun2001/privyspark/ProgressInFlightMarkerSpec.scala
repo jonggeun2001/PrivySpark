@@ -90,6 +90,32 @@ class ProgressInFlightMarkerSpec extends AnyFunSuite {
     }
   }
 
+  test("InFlightMarker preserves the marker after unrecovered failure when requested") {
+    val markerRoot = withTempDir("privyspark-in-flight-preserve-failure")
+    val inFlightDir = markerRoot.resolve("run-567/in-flight")
+    Files.createDirectories(inFlightDir)
+    val conf = new Configuration()
+    val expected = new IllegalStateException("spark application failed")
+
+    try {
+      val thrown = intercept[IllegalStateException] {
+        InFlightMarker.run(conf, inFlightDir.toString, "group", "/input/group", preserveOnFailure = true) {
+          assert(jsonFiles(inFlightDir).size == 1)
+          throw expected
+        }
+      }
+
+      assert(thrown eq expected)
+      val preservedMarkers = jsonFiles(inFlightDir)
+      assert(preservedMarkers.size == 1)
+      val markerJson = new String(Files.readAllBytes(preservedMarkers.head), StandardCharsets.UTF_8)
+      assert(markerJson.contains(""""scope":"group""""))
+      assert(markerJson.contains(""""identifier":"/input/group""""))
+    } finally {
+      deleteRecursively(markerRoot)
+    }
+  }
+
   test("InFlightMarker bounds marker filenames while preserving the original identifier in JSON") {
     val markerRoot = withTempDir("privyspark-in-flight-long-id")
     val inFlightDir = markerRoot.resolve("run-789/in-flight")
