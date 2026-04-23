@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
+import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, FileIdentifierResolver, ReviewScopeFingerprintCodec}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
@@ -24,7 +25,8 @@ private[privyspark] object AllowlistApplier {
     batchFileIdentifierValuesBySourceKey: Map[String, String],
     batchFileIdentifierColumnName: String,
     selectedFileCount: Int,
-    csvHeadCache: CsvHeadCache = new CsvHeadCache()
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    progressRun: Option[ProgressRun] = None
   ): Seq[ScanResult] = {
     if (matchedSourceKeys.isEmpty) {
       ReviewSnapshotLog.logReviewSnapshotSkipped("batch", matchedFiles = 0, selectedFiles = selectedFileCount)
@@ -38,18 +40,34 @@ private[privyspark] object AllowlistApplier {
           val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
           val batchFileIdentifierValue = batchFileIdentifierValuesBySourceKey.getOrElse(sourceKey, physicalPath)
           ReviewSnapshotLog.logReviewSnapshotFile("batch", physicalPath, logicalIdentifier)
-          sourceKey -> SourceKeyMetrics.scanSourceKeyUsingSnapshot(
-            spark,
-            datasetPath,
-            group,
-            sourceKey,
-            rules,
-            sampleRatio,
-            timestamp,
-            suppressions,
-            csvHeadCache,
-            injectedFileIdentifierColumn = Some(batchFileIdentifierColumnName -> batchFileIdentifierValue)
-          )
+          def scanSnapshot() =
+            SourceKeyMetrics.scanSourceKeyUsingSnapshot(
+              spark,
+              datasetPath,
+              group,
+              sourceKey,
+              rules,
+              sampleRatio,
+              timestamp,
+              suppressions,
+              csvHeadCache,
+              injectedFileIdentifierColumn = Some(batchFileIdentifierColumnName -> batchFileIdentifierValue)
+            )
+          val scanResult = progressRun match {
+            case Some(run) =>
+              InFlightMarker.run(
+                spark.sparkContext.hadoopConfiguration,
+                run.inFlightPath,
+                "allowlist",
+                sourceKey,
+                Map("format" -> group.format, "schemaSignature" -> group.schemaSignature)
+              ) {
+                scanSnapshot()
+              }
+            case None =>
+              scanSnapshot()
+          }
+          sourceKey -> scanResult
         }
       })
 

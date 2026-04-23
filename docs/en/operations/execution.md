@@ -17,6 +17,7 @@
 - `--pre-scan-parallelism <INT>`: parallelism for directory discovery, file pre-scan expansion, and schema split, `> 0`
 - `--group-parallelism <INT>`: group scan parallelism, `> 0`
 - `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
+- `--excel-max-rows-in-memory <INT>`: spark-excel `maxRowsInMemory` reader option for `xlsx` reads, `> 0`
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
@@ -58,6 +59,11 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
 
+## Excel Reader Configuration
+- When `--excel-max-rows-in-memory` is set, PrivySpark passes it to the spark-excel reader as `maxRowsInMemory` for `xlsx` schema detection and actual scans.
+- When the CLI option is omitted, PrivySpark uses the `spark.privyspark.excel.maxRowsInMemory` Spark conf only if it is present.
+- This setting reduces memory pressure by enabling the streaming reader path for large workbooks; it does not make a single `xlsx` sheet row-splittable across executors.
+
 ## Sampling
 - `--sample-ratio` is non-deterministic row sampling.
 - When `sampleRatio >= 1.0`, no row sampling is applied.
@@ -81,6 +87,9 @@ When ignore rules apply, events such as `scan_directory_file_ignored` and `archi
 
 ## `_progress` Handling
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
+- Running group, file, and allowlist snapshot tasks create temporary JSON markers under `<output>/_progress/<run_id>/in-flight`.
+- Each in-flight marker includes `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`, and available scan metadata such as `format` and `schemaSignature`.
+- In-flight markers are removed for completed work and recoverable failures. Unrecovered group/file failures that make the Spark application end as `FAILED` preserve their markers so operators can inspect the last active work.
 - Before setup, PrivySpark acquires `<output>/_progress-preparing.json`.
 - Once setup is ready, it switches to `_progress/active-run.json` with heartbeat updates.
 - On the next run, only stale heartbeats, `FAILED` markers, or stale preparing locks are cleaned up.

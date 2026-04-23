@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.scan.archive
 
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.format.FormatDetector
-import io.github.jonggeun2001.privyspark.model.{ScanError, ScanFileEntry}
+import io.github.jonggeun2001.privyspark.model.{ScanError, ScanFileEntry, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.ArchiveStaging._
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion
 import io.github.jonggeun2001.privyspark.util.DriverLogger
@@ -23,6 +23,7 @@ private[privyspark] object ArchiveExpandLoop {
     archivePath: String,
     logicalIdentifier: String,
     stagingPaths: ArrayBuffer[String],
+    readOptions: ScanReadOptions,
     ignoreMatcher: IgnoreMatcher,
     archiveExpansionDepth: Int
   )
@@ -222,6 +223,7 @@ private[privyspark] object ArchiveExpandLoop {
                               context.stagingPaths,
                               fileSize = if (declaredSize > 0L) declaredSize else fs.getFileStatus(targetPath).getLen,
                               fileMtimeEpochMs = archiveModifiedTime,
+                              readOptions = context.readOptions,
                               ignoreMatcher = context.ignoreMatcher,
                               archiveExpansionDepth = context.archiveExpansionDepth,
                               forceDisableDirectoryIdentifier = true

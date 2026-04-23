@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.format.FormatDetector
-import io.github.jonggeun2001.privyspark.model.{ScanError, ScanFileEntry}
+import io.github.jonggeun2001.privyspark.model.{ScanError, ScanFileEntry, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.ArchiveStaging._
 import io.github.jonggeun2001.privyspark.scan.archive.{ArchiveExpandLoop, ArchiveIOUtil, RarHandler, SevenZHandler, TarHandler, ZipHandler}
 
@@ -17,6 +17,7 @@ private[privyspark] object ArchiveExpanders {
     archivePath: String,
     logicalIdentifier: String,
     stagingPaths: ArrayBuffer[String],
+    readOptions: ScanReadOptions,
     ignoreMatcher: IgnoreMatcher,
     archiveExpansionDepth: Int
   ): (Seq[ScanFileEntry], Seq[ScanError], Int) = {
@@ -27,6 +28,7 @@ private[privyspark] object ArchiveExpanders {
       archivePath,
       logicalIdentifier,
       stagingPaths,
+      readOptions,
       ignoreMatcher,
       archiveExpansionDepth
     )

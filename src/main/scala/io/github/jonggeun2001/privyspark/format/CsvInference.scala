@@ -10,7 +10,7 @@ import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.io.{LongWritable, Text}
 import org.apache.hadoop.mapreduce.lib.input.TextInputFormat
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
-import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.sql.{DataFrame, DataFrameReader, Row, SparkSession}
 
 import java.nio.charset.Charset
 import java.util.UUID
@@ -176,14 +176,7 @@ private[privyspark] object CsvInference {
         (spark.read.format("avro").load(filePath), None)
       case XlsxFormat =>
         (
-          spark.read
-            .format("com.crealytics.spark.excel")
-            .option("header", "true")
-            .option("inferSchema", "false")
-            .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
-              throw new IllegalArgumentException("Sheet name is required for xlsx sources")
-            }))
-            .load(filePath),
+          readXlsx(spark, filePath, readOptions),
           None
         )
       case TextFormat =>
@@ -228,14 +221,7 @@ private[privyspark] object CsvInference {
       case XlsxFormat =>
         require(filePaths.size == 1, "xlsx sources must be read one sheet at a time")
         (
-          spark.read
-            .format("com.crealytics.spark.excel")
-            .option("header", "true")
-            .option("inferSchema", "false")
-            .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
-              throw new IllegalArgumentException("Sheet name is required for xlsx sources")
-            }))
-            .load(filePaths.head),
+          readXlsx(spark, filePaths.head, readOptions),
           None
         )
       case TextFormat =>
@@ -274,6 +260,25 @@ private[privyspark] object CsvInference {
 
       case None =>
         spark.read.text(filePaths: _*)
+    }
+  }
+
+  private def readXlsx(spark: SparkSession, filePath: String, readOptions: ScanReadOptions): DataFrame = {
+    xlsxReader(spark, readOptions).load(filePath)
+  }
+
+  private[privyspark] def xlsxReader(spark: SparkSession, readOptions: ScanReadOptions): DataFrameReader = {
+    val sheetName = readOptions.sheetName.getOrElse {
+      throw new IllegalArgumentException("Sheet name is required for xlsx sources")
+    }
+    val baseReader = spark.read
+      .format("com.crealytics.spark.excel")
+      .option("header", "true")
+      .option("inferSchema", "false")
+      .option("dataAddress", workbookDataAddress(sheetName))
+
+    ExcelReadConfig.readerOptions(spark.sparkContext.getConf, readOptions).foldLeft(baseReader) {
+      case (reader, (key, value)) => reader.option(key, value)
     }
   }
 }

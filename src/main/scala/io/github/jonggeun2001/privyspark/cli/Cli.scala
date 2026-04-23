@@ -16,6 +16,7 @@ final case class CliConfig(
   preScanParallelism: Option[Int] = None,
   groupParallelism: Option[Int] = None,
   fileParallelism: Option[Int] = None,
+  excelMaxRowsInMemory: Option[Int] = None,
   outputFormats: Seq[String] = Seq.empty,
   ignorePatterns: Seq[String] = Seq.empty,
   ignoreFile: Option[String] = None,
@@ -130,6 +131,14 @@ object Cli {
           else failure("file-parallelism must be > 0")
         }
         .text("파일 폴백 스캔 병렬도(정수 > 0)"),
+      opt[Int]("excel-max-rows-in-memory")
+        .optional()
+        .action((value, config) => config.copy(excelMaxRowsInMemory = Some(value)))
+        .validate { value =>
+          if (value > 0) success
+          else failure("excel-max-rows-in-memory must be > 0")
+        }
+        .text("xlsx 읽기 시 spark-excel maxRowsInMemory 옵션(정수 > 0)"),
       opt[String]("output-format")
         .unbounded()
         .optional()

@@ -38,6 +38,7 @@ private[privyspark] object ProgressRunManager {
     val errorsPath = s"$runPath/errors"
     val metaPath = s"$runPath/meta"
     val completionsPath = s"$metaPath/completions"
+    val inFlightPath = s"$runPath/in-flight"
     val progressRun = ProgressRun(
       runId,
       rootPath,
@@ -49,14 +50,15 @@ private[privyspark] object ProgressRunManager {
       resultsPath,
       errorsPath,
       metaPath,
-      completionsPath
+      completionsPath,
+      inFlightPath
     )
 
     try {
       writePreparingRunMarker(conf, progressRun, preparingRunPath, overwrite = false)
       fs.mkdirs(root)
       writeActiveRunMarker(conf, progressRun, state = "RUNNING", overwrite = false)
-      Seq(runPath, resultsPath, errorsPath, metaPath, completionsPath).foreach(path => fs.mkdirs(new Path(path)))
+      Seq(runPath, resultsPath, errorsPath, metaPath, completionsPath, inFlightPath).foreach(path => fs.mkdirs(new Path(path)))
       ProgressIO.writeJsonFile(
         conf,
         s"$metaPath/run.json",
