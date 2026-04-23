@@ -11,13 +11,14 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - 입력 경로는 절대경로 또는 URI만 허용합니다.
 - 지원 입력은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`와 archive 계열 `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`입니다.
 - `gzip`, `bzip2`로 감싼 direct text-style data file(`*.csv.gz`, `*.json.bz2` 등)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
-- 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 판별하고, 바이너리처럼 보이지 않는 UTF-8 텍스트는 내부 `text` 포맷으로 정규화해 스캔합니다.
+- CSV 계열 입력은 콤마뿐 아니라 탭, 세미콜론, 파이프, 콜론, ASCII 정보 구분자, 일부 다중문자 구분자(`||`, `|~|` 등)를 자동 감지해 컬럼 단위로 스캔합니다.
+- 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 판별하고, 안정적인 구분자와 헤더/데이터 구조가 확인되는 UTF-8 텍스트만 내부 `csv` 포맷으로 승격합니다. 그 외 바이너리처럼 보이지 않는 UTF-8 또는 EUC-KR 텍스트는 내부 `text` 포맷으로 정규화해 스캔합니다.
 - 0바이트 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 건너뜁니다.
 - password-protected archive, multi-volume RAR, RAR5 archive는 `scan_errors`에 명시적으로 기록합니다.
 - row sampling(`--sample-ratio`)과 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있고, `--file-sample-min-files`로 파일 샘플링을 적용할 최소 그룹 크기(기본 `10`)를 조정할 수 있습니다.
 - `--ignore`, `--ignore-file`로 gitignore 스타일 glob 패턴을 지정해 파일/아카이브 엔트리를 pre-scan 전에 제외할 수 있습니다.
 - ruleset `suppressions:` 또는 `--suppress`, `--suppression-file`로 특정 `(column, pii_type)` 조합만 결과에서 제외할 수 있습니다.
-- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다.
+- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress와 현재 실행 중인 작업의 `in-flight` marker를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다. Spark application이 `FAILED`로 끝나는 미복구 group/file 실패에서는 당시 marker를 보존합니다.
 - `scan_results`에는 집계 지표와 함께 `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
 
 ## 빠른 시작
@@ -50,6 +51,7 @@ bin/privyspark-submit \
   --pre-scan-parallelism 6 \
   --group-parallelism 8 \
   --file-parallelism 4 \
+  --excel-max-rows-in-memory 2048 \
   --suppress prdctcd:driver_license_number \
   --ignore "_SUCCESS" \
   --ignore "backup/**"
@@ -86,7 +88,8 @@ bash scripts/verify-worktree.sh
 - 기본 최종 리포트는 `<output>/parquet/scan_results`, `<output>/parquet/scan_errors`에 저장됩니다.
 - `--output-format csv`를 지정하면 `<output>/csv/scan_results`, `<output>/csv/scan_errors`가 추가로 생성됩니다.
 - `--output-format excel`을 지정하면 `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`가 추가로 생성됩니다.
-- 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓입니다.
+- 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓이고, 실행 중인 group/file/allowlist 작업은 `in-flight/*.json` marker로 관찰할 수 있습니다.
+- Spark application이 `FAILED`로 종료된 경우 미복구 group/file 실패 marker는 삭제하지 않아 마지막 진행 중 작업을 확인할 수 있습니다.
 - `_progress`는 진행 중 임시 경로이고, 최종 출력 계약은 선택된 `parquet`, `csv`, `excel` 산출물입니다.
 - 샘플 값 정책과 리포트 컬럼 의미는 [docs/ko/reference/reports-and-errors.md](docs/ko/reference/reports-and-errors.md)에서 확인합니다.
 

@@ -17,6 +17,7 @@
 - `--pre-scan-parallelism <INT>`: 디렉터리 discovery, 파일 pre-scan 확장, schema split 병렬도, `> 0`
 - `--group-parallelism <INT>`: 그룹 스캔 병렬도, `> 0`
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
+- `--excel-max-rows-in-memory <INT>`: `xlsx` 읽기 시 spark-excel `maxRowsInMemory` reader option, `> 0`
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
 - `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
@@ -58,6 +59,11 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 
 여기서 중요한 점은 앱 레벨 병렬도가 곧 executor 수를 직접 보장하는 것은 아니라는 점입니다. 실제 executor 분산은 입력 파티션 수, Spark scheduler, dynamic allocation backlog에 함께 영향을 받습니다.
 
+## Excel reader 설정
+- `--excel-max-rows-in-memory`를 지정하면 `xlsx` schema detection과 실제 scan의 spark-excel reader에 `maxRowsInMemory` option으로 전달합니다.
+- CLI 값을 생략하면 `spark.privyspark.excel.maxRowsInMemory` Spark conf가 있을 때만 같은 reader option으로 전달합니다.
+- 이 설정은 큰 workbook을 streaming reader 경로로 처리하기 위한 메모리 완화 옵션이며, 단일 `xlsx` 시트 자체를 row 단위로 split해서 여러 executor가 나눠 읽게 만들지는 않습니다.
+
 ## 샘플링
 - `--sample-ratio`는 비결정적 row sampling입니다.
 - `sampleRatio >= 1.0`이면 row sampling 없이 전체 행을 사용합니다.
@@ -81,6 +87,9 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 
 ## `_progress` 경로 운영
 - 진행 중 shard는 `<output>/_progress/<run_id>/results`, `errors`, `meta/completions` 아래 JSONL로 기록됩니다.
+- 실행 중인 group, file, allowlist snapshot 작업은 `<output>/_progress/<run_id>/in-flight` 아래 임시 JSON marker를 생성합니다.
+- 각 in-flight marker에는 `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`와 가능한 경우 `format`, `schemaSignature` 같은 스캔 메타데이터가 들어갑니다.
+- 완료된 작업과 처리 가능한 실패의 in-flight marker는 삭제됩니다. Spark application을 `FAILED`로 끝내는 미복구 group/file 실패는 marker를 보존해 마지막 진행 중 작업을 확인할 수 있게 합니다.
 - setup 시작 전에는 `<output>/_progress-preparing.json` lock을 먼저 획득합니다.
 - 준비가 끝나면 `_progress/active-run.json` heartbeat marker로 전환합니다.
 - 다음 실행은 stale heartbeat, `FAILED` marker, stale preparing lock만 cleanup 대상으로 봅니다.

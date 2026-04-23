@@ -4,7 +4,7 @@ import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
 import io.github.jonggeun2001.privyspark.format.CsvInference.{readSource, resolveFileIdentifierColumn}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
-import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ScanGroup, ScanResult}
+import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers._
@@ -24,7 +24,8 @@ private[privyspark] object GroupBatchScanner {
     suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
     allowlistInputRoot: Option[String] = None,
-    selectedSourceKeys: Option[Seq[String]] = None
+    selectedSourceKeys: Option[Seq[String]] = None,
+    progressRun: Option[ProgressRun] = None
   ): Seq[ScanResult] = {
     require(!group.useDirectoryIdentifier, "scanGroupBatch does not support directory identifiers; use scanGroupByFile")
     DriverLogger.debug(
@@ -141,7 +142,8 @@ private[privyspark] object GroupBatchScanner {
           matchedSourceKeys,
           batchFileIdentifierValuesBySourceKey,
           columnName,
-          selectedFileCount = effectiveSelectedSourceKeys.size
+          selectedFileCount = effectiveSelectedSourceKeys.size,
+          progressRun = progressRun
         )
         if (!hasDuplicateSelectedSourceKeys && ScanResultBuilder.comparableResultPayloads(provisionalResults) != ScanResultBuilder.comparableResultPayloads(snapshotResults)) {
           throw new IllegalStateException(s"Review snapshot changed during batch rescan: ${group.directoryPath}")

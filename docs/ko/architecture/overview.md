@@ -25,7 +25,7 @@
 1. 입력 경로 검증
 2. ruleset 로드, regex 사전 검증, ruleset/CLI suppression 병합
 3. 물리 파일 수집과 ignore 패턴 필터
-4. archive 엔트리 확장, workbook 시트 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, text fallback 정규화, archive entry ignore 필터
+4. archive 엔트리 확장, workbook 시트 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, CSV dialect 감지 및 text fallback 정규화, archive entry ignore 필터
 5. `(directory, format)` 기준 1차 그룹화
 6. 대표 파일 기준 스키마 샘플링
 7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
@@ -34,7 +34,7 @@
 10. non-sampled group 중 batch-capable group이면 필요 시 file sampling 후 그룹 batch scan
 11. non-sampled `xlsx` group은 direct file scan
 12. 일반 group batch 실패 시 파일 단위 fallback
-13. group/file 완료 단위 progress JSONL 기록
+13. group/file/allowlist 작업 실행 중 in-flight marker를 만들고, group/file 완료 시 progress JSONL 기록
 14. progress JSONL을 최종 `scan_results`/`scan_errors`로 merge 후 `_progress/<run_id>` 삭제
 
 ## 운영 불변 조건
@@ -51,10 +51,12 @@
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
 - 최종 출력 계약은 기본 `parquet/scan_results`, `parquet/scan_errors`이고, CLI `--output-format`에 따라 `csv/...`, `excel/*.xlsx`가 추가됩니다.
 - clean completion도 `meta/completions` marker를 남깁니다.
+- `_progress/<run_id>/in-flight` 아래 in-flight marker는 현재 실행 중인 작업을 보여주는 best-effort 진단 정보입니다. 완료된 작업과 처리 가능한 실패는 삭제되고, application `FAILED`로 이어지는 미복구 group/file 실패는 보존됩니다.
 - `_progress`는 다음 실행 시작 시 stale 여부를 판정해 정리합니다. shutdown hook은 사용하지 않습니다.
 
 ## 왜 이렇게 설계했는가
 - progress 경로를 최종 출력과 분리한 이유는 부분 결과 관측성과 최종 리포트 일관성을 동시에 확보하기 위해서입니다.
+- in-flight marker는 완료 progress JSONL 계약은 유지하면서 현재 병목 작업과 실패 당시 마지막 group/file 작업을 외부에서 관찰할 수 있게 합니다.
 - 종료 훅 대신 다음 실행 cleanup을 택한 이유는 YARN 강제 종료나 `kill -9` 상황에서 훅 신뢰도가 낮기 때문입니다.
 - `_progress-preparing.json`을 active marker보다 먼저 두는 이유는 startup race에서 서로의 fresh root를 지우지 않게 하기 위해서입니다.
 - unreadable `active-run.json`을 owner run이 `meta/run.json`으로 self-heal하는 이유는 marker 손상이 live run을 불필요하게 실패시키지 않게 하기 위해서입니다.

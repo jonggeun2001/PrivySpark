@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.scan.ArchiveStaging.ArchiveFormats
 import io.github.jonggeun2001.privyspark.format.ByteProbe.{isZeroBytePhysicalFile, shouldProbeForFormat}
+import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference._
 import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
@@ -24,6 +25,27 @@ private[privyspark] object DirectoryScanner {
 
   private def elapsedMillis(startNanos: Long): Long = {
     (System.nanoTime() - startNanos) / 1000000L
+  }
+
+  private def refineCsvLikeEntries(
+    spark: SparkSession,
+    entries: Seq[ScanFileEntry],
+    csvHeadCache: CsvHeadCache
+  ): Seq[ScanFileEntry] = {
+    entries.map { entry =>
+      val (format, readOptions) = CsvDialectDetector.refineDetectedFormat(
+        spark,
+        entry.physicalPath,
+        entry.format,
+        entry.readOptions,
+        csvHeadCache
+      )
+      if (format == entry.format && readOptions == entry.readOptions) {
+        entry
+      } else {
+        entry.copy(format = format, readOptions = readOptions)
+      }
+    }
   }
 
   def resolvePreScanProgressInterval(fileCount: Int): Int = {
@@ -92,7 +114,8 @@ private[privyspark] object DirectoryScanner {
     ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
-    parseOkCache: ParseOkCache = new ParseOkCache()
+    parseOkCache: ParseOkCache = new ParseOkCache(),
+    readOptions: ScanReadOptions = ScanReadOptions()
   ): DirectoryScanPlan = {
     DriverLogger.debug("scan_directory_structure_start", "input_path" -> inputPath, "dataset_path" -> datasetPath)
     val conf = spark.sparkContext.hadoopConfiguration
@@ -230,13 +253,15 @@ private[privyspark] object DirectoryScanner {
                       localStagingPaths,
                       fileSize = fileStatus.getLen,
                       fileMtimeEpochMs = fileStatus.getModificationTime,
+                      readOptions = readOptions,
                       ignoreMatcher = ignoreMatcher
                     )
+                  val refinedEntries = refineCsvLikeEntries(spark, expandedEntries, csvHeadCache)
                   PreScanFileOutcome(
                     filePath = filePath,
                     groupingDirectoryPath = parentDirectory,
                     preScanErrorScope = preScanErrorScope,
-                    expandedEntries = expandedEntries,
+                    expandedEntries = refinedEntries,
                     expandedErrors = expandedErrors,
                     ignoredEntries = ignoredEntries,
                     stagingPaths = localStagingPaths.toSeq,
@@ -481,7 +506,7 @@ private[privyspark] object DirectoryScanner {
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
     parseOkCache: ParseOkCache = new ParseOkCache()
   ): (Seq[ScanGroup], Seq[ScanError]) = {
-    if (group.filePaths.size <= 1) {
+    if (group.filePaths.size <= 1 || group.readOptionsByKey.nonEmpty) {
       splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache)
     } else {
       DriverLogger.debug(
@@ -495,7 +520,7 @@ private[privyspark] object DirectoryScanner {
       val sampledPhysicalPath = resolvePhysicalPath(group, sampledSourceKey)
       val sampledReadOptions = resolveReadOptions(group, sampledSourceKey)
       val sampledSchemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, sampledPhysicalPath, csvHeadCache, schemaSigCache)
+        inferCsvSchemaSignature(spark, sampledPhysicalPath, csvHeadCache, schemaSigCache, sampledReadOptions)
       } else {
         inferSchemaSignature(spark, group.format, sampledPhysicalPath, sampledReadOptions, schemaSigCache)
           .map(signature => (signature, true))
@@ -610,7 +635,7 @@ private[privyspark] object DirectoryScanner {
       val physicalPath = resolvePhysicalPath(group, sourceKey)
       val readOptions = resolveReadOptions(group, sourceKey)
       val schemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, physicalPath, csvHeadCache, schemaSigCache)
+        inferCsvSchemaSignature(spark, physicalPath, csvHeadCache, schemaSigCache, readOptions)
       } else {
         inferSchemaSignature(spark, group.format, physicalPath, readOptions, schemaSigCache)
           .map(signature => (signature, true))

@@ -16,8 +16,12 @@ import scala.util.control.NonFatal
 private[privyspark] object SourceExpansion {
   private val NonDirectoryIdentifierFormats = Set(TextFormat, XlsxFormat)
 
+  def workbookSheetReadOptions(readOptions: ScanReadOptions, sheetName: String): ScanReadOptions = {
+    readOptions.copy(sheetName = Some(sheetName))
+  }
+
   def supportsBatchScan(group: ScanGroup): Boolean = {
-    group.format != XlsxFormat
+    group.format != XlsxFormat && group.readOptionsByKey.isEmpty
   }
 
   def expandPhysicalSource(
@@ -30,6 +34,7 @@ private[privyspark] object SourceExpansion {
     stagingPaths: ArrayBuffer[String],
     fileSize: Long = 0L,
     fileMtimeEpochMs: Long = 0L,
+    readOptions: ScanReadOptions = ScanReadOptions(),
     ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty,
     archiveExpansionDepth: Int = 0,
     forceDisableDirectoryIdentifier: Boolean = false
@@ -49,7 +54,7 @@ private[privyspark] object SourceExpansion {
 
     val detectedFormat =
       try {
-        detectPhysicalFormat(conf, physicalPath)
+        detectPhysicalFormatWithReadOptions(conf, physicalPath)
       } catch {
         case NonFatal(e) =>
           return (
@@ -59,7 +64,7 @@ private[privyspark] object SourceExpansion {
           )
       }
     detectedFormat match {
-      case Some(format) if ArchiveFormats.contains(format) && archiveExpansionDepth < MaxArchiveExpansionDepth =>
+      case Some((format, _)) if ArchiveFormats.contains(format) && archiveExpansionDepth < MaxArchiveExpansionDepth =>
         expandArchiveSource(
           conf,
           datasetPath,
@@ -67,20 +72,21 @@ private[privyspark] object SourceExpansion {
           physicalPath,
           logicalIdentifier,
           stagingPaths,
+          readOptions,
           ignoreMatcher,
           archiveExpansionDepth + 1
         )
-      case Some(format) if ArchiveFormats.contains(format) =>
+      case Some((format, _)) if ArchiveFormats.contains(format) =>
         (
           Seq.empty,
           Seq(ScanError(datasetPath, timestamp, logicalIdentifier, s"Nested archive expansion is not supported: $logicalIdentifier")),
           0
         )
-      case Some(XlsxFormat) =>
+      case Some((XlsxFormat, _)) =>
         val (entries, errors) =
-          expandWorkbookSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier, fileSize, fileMtimeEpochMs)
+          expandWorkbookSource(conf, datasetPath, timestamp, physicalPath, logicalIdentifier, fileSize, fileMtimeEpochMs, readOptions)
         (entries, errors, 0)
-      case Some(format) =>
+      case Some((format, readOptions)) =>
         (
           Seq(
             ScanFileEntry(
@@ -91,6 +97,7 @@ private[privyspark] object SourceExpansion {
               logicalIdentifier = logicalIdentifier,
               fileSize = fileSize,
               fileMtimeEpochMs = fileMtimeEpochMs,
+              readOptions = readOptions,
               allowDirectoryIdentifier = !forceDisableDirectoryIdentifier && !NonDirectoryIdentifierFormats.contains(format)
             )
           ),
@@ -113,7 +120,8 @@ private[privyspark] object SourceExpansion {
     physicalPath: String,
     logicalIdentifier: String,
     fileSize: Long = 0L,
-    fileMtimeEpochMs: Long = 0L
+    fileMtimeEpochMs: Long = 0L,
+    readOptions: ScanReadOptions = ScanReadOptions()
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
     listVisibleWorkbookSheets(conf, physicalPath) match {
       case Right(sheetNames) =>
@@ -127,7 +135,7 @@ private[privyspark] object SourceExpansion {
               logicalIdentifier = s"$logicalIdentifier#$sheetName",
               fileSize = fileSize,
               fileMtimeEpochMs = fileMtimeEpochMs,
-              readOptions = ScanReadOptions(sheetName = Some(sheetName)),
+              readOptions = workbookSheetReadOptions(readOptions, sheetName),
               allowDirectoryIdentifier = false
             )
           },
@@ -148,6 +156,7 @@ private[privyspark] object SourceExpansion {
     archivePath: String,
     logicalIdentifier: String,
     stagingPaths: ArrayBuffer[String],
+    readOptions: ScanReadOptions,
     ignoreMatcher: IgnoreMatcher,
     archiveExpansionDepth: Int
   ): (Seq[ScanFileEntry], Seq[ScanError], Int) = {
@@ -158,6 +167,7 @@ private[privyspark] object SourceExpansion {
       archivePath,
       logicalIdentifier,
       stagingPaths,
+      readOptions,
       ignoreMatcher,
       archiveExpansionDepth
     )

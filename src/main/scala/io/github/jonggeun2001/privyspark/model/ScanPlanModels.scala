@@ -2,7 +2,19 @@ package io.github.jonggeun2001.privyspark.model
 
 import io.github.jonggeun2001.privyspark.review.RecordedFileFingerprint
 
-private[privyspark] final case class ScanReadOptions(sheetName: Option[String] = None)
+private[privyspark] final case class CsvDialect(
+  delimiter: String = ",",
+  quote: Char = '"',
+  escape: Char = '\\',
+  hasHeader: Boolean = true
+)
+
+private[privyspark] final case class ScanReadOptions(
+  sheetName: Option[String] = None,
+  textEncoding: Option[String] = None,
+  csvDialect: Option[CsvDialect] = None,
+  excelMaxRowsInMemory: Option[Int] = None
+)
 
 private[privyspark] final case class ScanFileEntry(
   sourceKey: String,
@@ -83,7 +95,8 @@ private[privyspark] final case class ProgressRun(
   resultsPath: String,
   errorsPath: String,
   metaPath: String,
-  completionsPath: String
+  completionsPath: String,
+  inFlightPath: String
 )
 
 private[privyspark] final case class ActiveRunMarker(runId: String, state: String, lastHeartbeatEpochMillis: Long)

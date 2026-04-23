@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
+import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewScopeFingerprintCodec}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
@@ -66,84 +67,100 @@ private[privyspark] object GroupFileScanner {
         val physicalPath = resolvePhysicalPath(group, sourceKey)
         val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
         DriverLogger.debug("group_scan_fallback_file_start", "file" -> physicalPath, "directory" -> group.directoryPath)
-        val fileMetrics = if (group.useDirectoryIdentifier) {
-          SourceKeyMetrics.scanSourceKeyUsingSnapshot(
-            spark,
-            datasetPath,
-            group,
-            sourceKey,
-            rules,
-            effectiveSampleRatio,
-            timestamp,
-            suppressions,
-            csvHeadCache
-          )
-        } else {
-          SourceKeyMetrics.scanSourceKeyMetrics(
-            spark,
-            datasetPath,
-            group,
-            sourceKey,
-            rules,
-            effectiveSampleRatio,
-            timestamp,
-            suppressions = suppressions,
-            csvHeadCache = csvHeadCache,
-            captureRecordedFingerprintWhenMissing = false
-          ).flatMap { provisionalMetrics =>
-            if (provisionalMetrics.matchCounts.isEmpty) {
-              ReviewSnapshotLog.logReviewSnapshotSkipped(
-                "file",
-                matchedFiles = 0,
-                selectedFiles = 1,
-                physicalPath = Some(physicalPath),
-                fileIdentifier = Some(logicalIdentifier)
-              )
-              Right(provisionalMetrics)
-            } else {
-              ReviewSnapshotLog.logReviewSnapshotStart("file", matchedFiles = 1, selectedFiles = 1)
-              ReviewSnapshotLog.logReviewSnapshotFile("file", physicalPath, logicalIdentifier)
-              val provisionalResults = ScanResultBuilder.buildScanResults(
-                datasetPath,
-                provisionalMetrics.scanTimestamp,
-                provisionalMetrics.fileIdentifier,
-                provisionalMetrics.sampledRowCount,
-                provisionalMetrics.nonEmptyValueCounts,
-                provisionalMetrics.matchCounts,
-                provisionalMetrics.sampleValues,
-                provisionalMetrics.fileSize,
-                provisionalMetrics.fileMtimeEpochMs
-              )
-              SourceKeyMetrics.scanSourceKeyUsingSnapshot(
-                spark,
-                datasetPath,
-                group,
-                sourceKey,
-                rules,
-                effectiveSampleRatio,
-                timestamp,
-                suppressions,
-                csvHeadCache
-              ).flatMap { snapshotMetrics =>
-                val snapshotResults = ScanResultBuilder.buildScanResults(
-                  datasetPath,
-                  snapshotMetrics.scanTimestamp,
-                  snapshotMetrics.fileIdentifier,
-                  snapshotMetrics.sampledRowCount,
-                  snapshotMetrics.nonEmptyValueCounts,
-                  snapshotMetrics.matchCounts,
-                  snapshotMetrics.sampleValues,
-                  snapshotMetrics.fileSize,
-                  snapshotMetrics.fileMtimeEpochMs
+        def scanFileMetrics(): Either[ScanError, FileScanMetrics] =
+          if (group.useDirectoryIdentifier) {
+            SourceKeyMetrics.scanSourceKeyUsingSnapshot(
+              spark,
+              datasetPath,
+              group,
+              sourceKey,
+              rules,
+              effectiveSampleRatio,
+              timestamp,
+              suppressions,
+              csvHeadCache
+            )
+          } else {
+            SourceKeyMetrics.scanSourceKeyMetrics(
+              spark,
+              datasetPath,
+              group,
+              sourceKey,
+              rules,
+              effectiveSampleRatio,
+              timestamp,
+              suppressions = suppressions,
+              csvHeadCache = csvHeadCache,
+              captureRecordedFingerprintWhenMissing = false
+            ).flatMap { provisionalMetrics =>
+              if (provisionalMetrics.matchCounts.isEmpty) {
+                ReviewSnapshotLog.logReviewSnapshotSkipped(
+                  "file",
+                  matchedFiles = 0,
+                  selectedFiles = 1,
+                  physicalPath = Some(physicalPath),
+                  fileIdentifier = Some(logicalIdentifier)
                 )
-                if (ScanResultBuilder.comparableResultPayloads(provisionalResults) == ScanResultBuilder.comparableResultPayloads(snapshotResults)) {
-                  Right(snapshotMetrics)
-                } else {
-                  Left(ScanError(datasetPath, timestamp, logicalIdentifier, "Review snapshot changed during rescan"))
+                Right(provisionalMetrics)
+              } else {
+                ReviewSnapshotLog.logReviewSnapshotStart("file", matchedFiles = 1, selectedFiles = 1)
+                ReviewSnapshotLog.logReviewSnapshotFile("file", physicalPath, logicalIdentifier)
+                val provisionalResults = ScanResultBuilder.buildScanResults(
+                  datasetPath,
+                  provisionalMetrics.scanTimestamp,
+                  provisionalMetrics.fileIdentifier,
+                  provisionalMetrics.sampledRowCount,
+                  provisionalMetrics.nonEmptyValueCounts,
+                  provisionalMetrics.matchCounts,
+                  provisionalMetrics.sampleValues,
+                  provisionalMetrics.fileSize,
+                  provisionalMetrics.fileMtimeEpochMs
+                )
+                SourceKeyMetrics.scanSourceKeyUsingSnapshot(
+                  spark,
+                  datasetPath,
+                  group,
+                  sourceKey,
+                  rules,
+                  effectiveSampleRatio,
+                  timestamp,
+                  suppressions,
+                  csvHeadCache
+                ).flatMap { snapshotMetrics =>
+                  val snapshotResults = ScanResultBuilder.buildScanResults(
+                    datasetPath,
+                    snapshotMetrics.scanTimestamp,
+                    snapshotMetrics.fileIdentifier,
+                    snapshotMetrics.sampledRowCount,
+                    snapshotMetrics.nonEmptyValueCounts,
+                    snapshotMetrics.matchCounts,
+                    snapshotMetrics.sampleValues,
+                    snapshotMetrics.fileSize,
+                    snapshotMetrics.fileMtimeEpochMs
+                  )
+                  if (ScanResultBuilder.comparableResultPayloads(provisionalResults) == ScanResultBuilder.comparableResultPayloads(snapshotResults)) {
+                    Right(snapshotMetrics)
+                  } else {
+                    Left(ScanError(datasetPath, timestamp, logicalIdentifier, "Review snapshot changed during rescan"))
+                  }
                 }
               }
             }
           }
+        val fileMetrics = progressRun match {
+          case Some(run) =>
+            InFlightMarker.run(
+              spark.sparkContext.hadoopConfiguration,
+              run.inFlightPath,
+              "file",
+              logicalIdentifier,
+              Map("format" -> group.format, "schemaSignature" -> group.schemaSignature),
+              preserveOnFailure = true
+            ) {
+              scanFileMetrics()
+            }
+          case None =>
+            scanFileMetrics()
         }
         sourceKey -> fileMetrics
           .fold(

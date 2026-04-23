@@ -13,6 +13,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 ## 현재 구현이 이미 적용하는 최적화
 - pre-scan 병렬도는 BFS 디렉터리 discovery, 파일 확장, 포맷 판별, 그룹별 schema split에 재사용됩니다.
 - CSV 본문 읽기는 `inferSchema=false`로 동작합니다.
+- CSV dialect 감지는 파일 앞부분의 non-blank 라인 일부만 사용하며, 비기본 dialect가 있는 그룹은 파일별 read option 보존을 위해 exact split/file scan 경로로 처리합니다.
 - `DetectionAggregator`는 메트릭별 개별 job 대신 batched aggregation을 기본 경로로 사용합니다.
 - `driver_license_number`도 다른 규칙과 동일한 regex 기반 predicate 경로를 사용하므로, 타입별 Scala UDF나 추가 validator 없이 Catalyst/codegen 경로를 유지합니다.
 - legacy fallback threshold는 `50,000` 표현식으로 올려져 있고, 초과 시에도 메트릭당 개별 count 대신 소배치 집계를 사용합니다.
@@ -41,6 +42,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 
 - 파일별 `getFileStatus`
 - 미지원 확장자/무확장자 probe
+- CSV dialect probe
 - 대량 `Future` 제출과 결과 수집
 - `(directory, format)` 그룹화와 정렬
 

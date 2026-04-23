@@ -1,18 +1,22 @@
 package io.github.jonggeun2001.privyspark.format
 
-import io.github.jonggeun2001.privyspark.model.ProbeSample
+import io.github.jonggeun2001.privyspark.model.{ProbeSample, ScanReadOptions}
 import org.apache.hadoop.fs.Path
 
 import java.nio.ByteBuffer
+import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.nio.charset.{CharacterCodingException, CodingErrorAction}
 
 private[privyspark] object ByteProbe {
   val TextFormat = "text"
+  val Utf8Encoding = "UTF-8"
+  val EucKrEncoding = "EUC-KR"
   val MagicProbeByteLimit = 4
   val TextProbeByteLimit = 512
   val ParquetMagicBytes = Array[Byte]('P'.toByte, 'A'.toByte, 'R'.toByte, '1'.toByte)
   val OrcMagicBytes = Array[Byte]('O'.toByte, 'R'.toByte, 'C'.toByte)
+  private val EucKrCharset = Charset.forName(EucKrEncoding)
 
   def probe(conf: org.apache.hadoop.conf.Configuration, path: String, maxBytes: Int): ProbeSample = {
     val sourcePath = new Path(path)
@@ -67,12 +71,26 @@ private[privyspark] object ByteProbe {
     if (looksLikeText(bytes, allowIncompleteTrailingSequence)) Some(TextFormat) else None
   }
 
+  def inferTextReadOptions(
+    bytes: Array[Byte],
+    allowIncompleteTrailingSequence: Boolean = false
+  ): Option[ScanReadOptions] = {
+    if (looksLikeText(bytes, allowIncompleteTrailingSequence)) {
+      detectTextEncoding(bytes, allowIncompleteTrailingSequence).map {
+        case EucKrEncoding => ScanReadOptions(textEncoding = Some(EucKrEncoding))
+        case _ => ScanReadOptions()
+      }
+    } else {
+      None
+    }
+  }
+
   def looksLikeText(bytes: Array[Byte], allowIncompleteTrailingSequence: Boolean): Boolean = {
     if (bytes.isEmpty) {
       true
     } else if (bytes.contains(0.toByte)) {
       false
-    } else if (!isValidUtf8(bytes, allowIncompleteTrailingSequence)) {
+    } else if (detectTextEncoding(bytes, allowIncompleteTrailingSequence).isEmpty) {
       false
     } else {
       val suspiciousControlBytes = bytes.count { rawByte =>
@@ -87,6 +105,16 @@ private[privyspark] object ByteProbe {
           byte != 0x1F
       }
       suspiciousControlBytes * 10 <= bytes.length
+    }
+  }
+
+  private def detectTextEncoding(bytes: Array[Byte], allowIncompleteTrailingSequence: Boolean): Option[String] = {
+    if (isValidUtf8(bytes, allowIncompleteTrailingSequence)) {
+      Some(Utf8Encoding)
+    } else if (isValidEucKr(bytes, allowIncompleteTrailingSequence)) {
+      Some(EucKrEncoding)
+    } else {
+      None
     }
   }
 
@@ -107,6 +135,34 @@ private[privyspark] object ByteProbe {
     } catch {
       case _: CharacterCodingException => false
     }
+  }
+
+  private def isValidEucKr(bytes: Array[Byte], allowIncompleteTrailingSequence: Boolean): Boolean = {
+    isValidCharset(bytes, EucKrCharset) || {
+      allowIncompleteTrailingSequence &&
+        bytes.nonEmpty &&
+        isPotentialEucKrLeadByte(bytes.last) &&
+        isValidCharset(java.util.Arrays.copyOf(bytes, bytes.length - 1), EucKrCharset)
+    }
+  }
+
+  private def isValidCharset(bytes: Array[Byte], charset: Charset): Boolean = {
+    val decoder = charset
+      .newDecoder()
+      .onMalformedInput(CodingErrorAction.REPORT)
+      .onUnmappableCharacter(CodingErrorAction.REPORT)
+
+    try {
+      decoder.decode(ByteBuffer.wrap(bytes))
+      true
+    } catch {
+      case _: CharacterCodingException => false
+    }
+  }
+
+  private def isPotentialEucKrLeadByte(rawByte: Byte): Boolean = {
+    val byte = rawByte & 0xff
+    byte >= 0x81 && byte <= 0xFE
   }
 
   private def incompleteTrailingUtf8Bytes(bytes: Array[Byte]): Int = {
@@ -208,16 +264,29 @@ private[privyspark] object ByteProbe {
     conf: org.apache.hadoop.conf.Configuration,
     filePath: String
   ): Option[String] = {
+    detectPhysicalFormatWithReadOptions(conf, filePath).map(_._1)
+  }
+
+  def detectPhysicalFormatWithReadOptions(
+    conf: org.apache.hadoop.conf.Configuration,
+    filePath: String
+  ): Option[(String, ScanReadOptions)] = {
     val extensionFormat = FormatDetector.infer(filePath)
     if (extensionFormat.isDefined) {
-      extensionFormat
+      extensionFormat.map(format => (format, ScanReadOptions()))
     } else if (FormatDetector.shouldSkipProbe(filePath)) {
       None
     } else {
       val probeSample = probe(conf, filePath, TextProbeByteLimit)
       val magicProbeBytes = java.util.Arrays.copyOf(probeSample.bytes, math.min(probeSample.bytes.length, MagicProbeByteLimit))
       inferMagicByteFormat(magicProbeBytes)
-        .orElse(inferTextFormat(probeSample.bytes, allowIncompleteTrailingSequence = probeSample.truncated))
+        .map(format => (format, ScanReadOptions()))
+        .orElse {
+          inferTextReadOptions(
+            probeSample.bytes,
+            allowIncompleteTrailingSequence = probeSample.truncated
+          ).map(readOptions => (TextFormat, readOptions))
+        }
     }
   }
 

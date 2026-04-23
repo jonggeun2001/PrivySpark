@@ -4,11 +4,15 @@ import io.github.jonggeun2001.privyspark.format.ByteProbe.TextFormat
 import io.github.jonggeun2001.privyspark.format.CsvHeaderHeuristic.{detectCsvHasHeaderFromLines, inferCsvHeaderSignatureFromLines, parseCsvLine, readFirstNonBlankCsvLines}
 import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.workbookDataAddress
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
-import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, ScanReadOptions}
+import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, CsvDialect, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.hadoop.io.{LongWritable, Text}
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat
+import org.apache.spark.sql.types.{StringType, StructField, StructType}
+import org.apache.spark.sql.{DataFrame, DataFrameReader, Row, SparkSession}
 
+import java.nio.charset.Charset
 import java.util.UUID
 import scala.util.control.NonFatal
 
@@ -20,28 +24,31 @@ private[privyspark] object CsvInference {
   def detectCsvHasHeader(
     spark: SparkSession,
     filePath: String,
-    csvHeadCache: CsvHeadCache = new CsvHeadCache()
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    readOptions: ScanReadOptions = ScanReadOptions()
   ): Boolean = {
     val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = CsvHeadCache.CachedLineLimit, csvHeadCache)
-    detectCsvHasHeaderFromLines(spark, lines)
+    detectCsvHasHeaderFromLines(spark, lines, csvDialect(readOptions))
   }
 
   def inferCsvSchemaSignature(
     spark: SparkSession,
     filePath: String,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
-    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
+    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
+    readOptions: ScanReadOptions = ScanReadOptions()
   ): Either[String, (String, Boolean)] = {
     try {
-      val cached = schemaSigCache.getOrCompute(filePath, "csv") {
+      val dialect = csvDialect(readOptions)
+      val cached = schemaSigCache.getOrCompute(filePath, "csv", readOptions) {
         val lines = readFirstNonBlankCsvLines(spark, filePath, maxLines = CsvHeadCache.CachedLineLimit, csvHeadCache)
-        val csvHasHeader = detectCsvHasHeaderFromLines(spark, lines)
+        val csvHasHeader = detectCsvHasHeaderFromLines(spark, lines, dialect)
         if (csvHasHeader) {
-          CachedSchemaSignature(inferCsvHeaderSignatureFromLines(spark, lines), csvHasHeader = true)
+          CachedSchemaSignature(inferCsvHeaderSignatureFromLines(spark, lines, dialect), csvHasHeader = true)
         } else {
           val firstDataLine = lines.headOption
             .getOrElse(throw new IllegalArgumentException("Empty CSV file"))
-          val columnCount = parseCsvLine(spark, firstDataLine).length
+          val columnCount = parseCsvLine(spark, firstDataLine, dialect).length
           CachedSchemaSignature(s"cols:$columnCount", csvHasHeader = false)
         }
       }
@@ -124,6 +131,24 @@ private[privyspark] object CsvInference {
     }
   }
 
+  private def csvDialect(readOptions: ScanReadOptions): CsvDialect =
+    readOptions.csvDialect.getOrElse(CsvDialect())
+
+  private def csvReader(
+    spark: SparkSession,
+    csvHasHeader: Boolean,
+    readOptions: ScanReadOptions
+  ): org.apache.spark.sql.DataFrameReader = {
+    val dialect = csvDialect(readOptions)
+    spark.read
+      .option("header", csvHasHeader.toString)
+      .option("sep", dialect.delimiter)
+      .option("quote", dialect.quote.toString)
+      .option("escape", dialect.escape.toString)
+      .option("inferSchema", "false")
+      .option("mode", "PERMISSIVE")
+  }
+
   def readSchemaSource(
     spark: SparkSession,
     format: String,
@@ -135,11 +160,7 @@ private[privyspark] object CsvInference {
     val (df, internalCorruptRecordColumnName) = format match {
       case "csv" =>
         (
-          spark.read
-            .option("header", csvHasHeader.toString)
-            .option("inferSchema", "false")
-            .option("mode", "PERMISSIVE")
-            .csv(filePath),
+          csvReader(spark, csvHasHeader, readOptions).csv(filePath),
           None
         )
       case "json" =>
@@ -155,18 +176,11 @@ private[privyspark] object CsvInference {
         (spark.read.format("avro").load(filePath), None)
       case XlsxFormat =>
         (
-          spark.read
-            .format("com.crealytics.spark.excel")
-            .option("header", "true")
-            .option("inferSchema", "false")
-            .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
-              throw new IllegalArgumentException("Sheet name is required for xlsx sources")
-            }))
-            .load(filePath),
+          readXlsx(spark, filePath, readOptions),
           None
         )
       case TextFormat =>
-        (spark.read.text(filePath), None)
+        (readTextSource(spark, Seq(filePath), readOptions), None)
       case "parquet" =>
         (spark.read.parquet(filePath), None)
       case "orc" =>
@@ -190,11 +204,7 @@ private[privyspark] object CsvInference {
     val (df, internalCorruptRecordColumnName) = format match {
       case "csv" =>
         (
-          spark.read
-            .option("header", csvHasHeader.toString)
-            .option("inferSchema", "false")
-            .option("mode", "PERMISSIVE")
-            .csv(filePaths: _*),
+          csvReader(spark, csvHasHeader, readOptions).csv(filePaths: _*),
           None
         )
       case "json" =>
@@ -211,18 +221,11 @@ private[privyspark] object CsvInference {
       case XlsxFormat =>
         require(filePaths.size == 1, "xlsx sources must be read one sheet at a time")
         (
-          spark.read
-            .format("com.crealytics.spark.excel")
-            .option("header", "true")
-            .option("inferSchema", "false")
-            .option("dataAddress", workbookDataAddress(readOptions.sheetName.getOrElse {
-              throw new IllegalArgumentException("Sheet name is required for xlsx sources")
-            }))
-            .load(filePaths.head),
+          readXlsx(spark, filePaths.head, readOptions),
           None
         )
       case TextFormat =>
-        (spark.read.text(filePaths: _*), None)
+        (readTextSource(spark, filePaths, readOptions), None)
       case "parquet" =>
         (spark.read.parquet(filePaths: _*), None)
       case "orc" =>
@@ -231,5 +234,51 @@ private[privyspark] object CsvInference {
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
     ensureReadableSourceColumns(format, filePaths, df, internalCorruptRecordColumnName)
+  }
+
+  private def readTextSource(spark: SparkSession, filePaths: Seq[String], readOptions: ScanReadOptions): DataFrame = {
+    readOptions.textEncoding match {
+      case Some(encoding) =>
+        val encodingName = encoding
+        val rowsByPath = filePaths.map { filePath =>
+          spark.sparkContext
+            .newAPIHadoopFile(
+              filePath,
+              classOf[TextInputFormat],
+              classOf[LongWritable],
+              classOf[Text]
+            )
+            .mapPartitions { rows =>
+              val charset = Charset.forName(encodingName)
+              rows.map { case (_, text) =>
+                Row(new String(text.getBytes, 0, text.getLength, charset))
+              }
+            }
+        }
+        val rows = spark.sparkContext.union(rowsByPath)
+        spark.createDataFrame(rows, StructType(Seq(StructField("value", StringType, nullable = true))))
+
+      case None =>
+        spark.read.text(filePaths: _*)
+    }
+  }
+
+  private def readXlsx(spark: SparkSession, filePath: String, readOptions: ScanReadOptions): DataFrame = {
+    xlsxReader(spark, readOptions).load(filePath)
+  }
+
+  private[privyspark] def xlsxReader(spark: SparkSession, readOptions: ScanReadOptions): DataFrameReader = {
+    val sheetName = readOptions.sheetName.getOrElse {
+      throw new IllegalArgumentException("Sheet name is required for xlsx sources")
+    }
+    val baseReader = spark.read
+      .format("com.crealytics.spark.excel")
+      .option("header", "true")
+      .option("inferSchema", "false")
+      .option("dataAddress", workbookDataAddress(sheetName))
+
+    ExcelReadConfig.readerOptions(spark.sparkContext.getConf, readOptions).foldLeft(baseReader) {
+      case (reader, (key, value)) => reader.option(key, value)
+    }
   }
 }
