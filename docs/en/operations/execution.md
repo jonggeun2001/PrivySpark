@@ -17,6 +17,7 @@
 - `--pre-scan-parallelism <INT>`: parallelism for directory discovery, file pre-scan expansion, and schema split, `> 0`
 - `--group-parallelism <INT>`: group scan parallelism, `> 0`
 - `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
+- `--excel-max-rows-in-memory <INT>`: spark-excel `maxRowsInMemory` reader option for `xlsx` reads, `> 0`
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
@@ -57,6 +58,11 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 - Group and file parallelism control how many scan tasks the driver submits concurrently.
 
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
+
+## Excel Reader Configuration
+- When `--excel-max-rows-in-memory` is set, PrivySpark passes it to the spark-excel reader as `maxRowsInMemory` for `xlsx` schema detection and actual scans.
+- When the CLI option is omitted, PrivySpark uses the `spark.privyspark.excel.maxRowsInMemory` Spark conf only if it is present.
+- This setting reduces memory pressure by enabling the streaming reader path for large workbooks; it does not make a single `xlsx` sheet row-splittable across executors.
 
 ## Sampling
 - `--sample-ratio` is non-deterministic row sampling.

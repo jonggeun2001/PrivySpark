@@ -2,8 +2,9 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.cli.{Cli, CliCommand, CliConfig, PathValidator, ReviewApplyCliConfig}
 import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, RulesetLoader, SuppressionSet}
+import io.github.jonggeun2001.privyspark.format.ExcelReadConfig
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
-import io.github.jonggeun2001.privyspark.model.{ProgressRun, Suppression}
+import io.github.jonggeun2001.privyspark.model.{ProgressRun, ScanReadOptions, Suppression}
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager._
 import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewApplyCommand}
@@ -154,6 +155,7 @@ object PrivySparkApp {
       "configured_pre_scan_parallelism" -> renderConfiguredParallelism(config.preScanParallelism),
       "configured_group_parallelism" -> renderConfiguredParallelism(config.groupParallelism),
       "configured_file_parallelism" -> renderConfiguredParallelism(config.fileParallelism),
+      "configured_excel_max_rows_in_memory" -> ExcelReadConfig.renderConfiguredMaxRowsInMemory(config.excelMaxRowsInMemory),
       "output_formats" -> outputFormats.mkString(","),
       "ignore_patterns" -> config.ignorePatterns.size,
       "ignore_file" -> config.ignoreFile.getOrElse("none"),
@@ -193,7 +195,8 @@ object PrivySparkApp {
       ignoreMatcher = ignoreMatcher,
       csvHeadCache = csvHeadCache,
       schemaSigCache = schemaSigCache,
-      parseOkCache = parseOkCache
+      parseOkCache = parseOkCache,
+      readOptions = ScanReadOptions(excelMaxRowsInMemory = config.excelMaxRowsInMemory)
     )
 
     var progressRun: Option[ProgressRun] = None

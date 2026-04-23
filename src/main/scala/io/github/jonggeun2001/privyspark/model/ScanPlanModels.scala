@@ -4,7 +4,8 @@ import io.github.jonggeun2001.privyspark.review.RecordedFileFingerprint
 
 private[privyspark] final case class ScanReadOptions(
   sheetName: Option[String] = None,
-  textEncoding: Option[String] = None
+  textEncoding: Option[String] = None,
+  excelMaxRowsInMemory: Option[Int] = None
 )
 
 private[privyspark] final case class ScanFileEntry(
