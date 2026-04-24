@@ -20,6 +20,7 @@ private[privyspark] object CsvInference {
   val FileIdentifierColumn = "__privyspark_file_identifier"
   val XlsxFormat = "xlsx"
   val AvroFormat = "avro"
+  private val SparkGlobSpecialCharacters = Set('\\', '*', '?', '[', ']', '{', '}')
 
   def detectCsvHasHeader(
     spark: SparkSession,
@@ -144,6 +145,21 @@ private[privyspark] object CsvInference {
   private def csvDialect(readOptions: ScanReadOptions): CsvDialect =
     readOptions.csvDialect.getOrElse(CsvDialect())
 
+  private[privyspark] def literalSparkPath(path: String): String = {
+    val raw = Option(path).getOrElse("")
+    val builder = new StringBuilder(raw.length)
+    raw.foreach { char =>
+      if (SparkGlobSpecialCharacters.contains(char)) {
+        builder.append('\\')
+      }
+      builder.append(char)
+    }
+    builder.toString()
+  }
+
+  private def literalSparkPaths(paths: Seq[String]): Seq[String] =
+    paths.map(literalSparkPath)
+
   private def csvReader(
     spark: SparkSession,
     csvHasHeader: Boolean,
@@ -167,10 +183,11 @@ private[privyspark] object CsvInference {
     readOptions: ScanReadOptions = ScanReadOptions()
   ): DataFrame = {
     DriverLogger.debug("read_schema_source_start", "format" -> format, "file" -> filePath)
+    val literalFilePath = literalSparkPath(filePath)
     val (df, internalCorruptRecordColumnName) = format match {
       case "csv" =>
         (
-          csvReader(spark, csvHasHeader, readOptions).csv(filePath),
+          csvReader(spark, csvHasHeader, readOptions).csv(literalFilePath),
           None
         )
       case "json" =>
@@ -179,22 +196,22 @@ private[privyspark] object CsvInference {
           spark.read
             .option("mode", "PERMISSIVE")
             .option("columnNameOfCorruptRecord", corruptRecordColumnName)
-            .json(filePath),
+            .json(literalFilePath),
           Some(corruptRecordColumnName)
         )
       case AvroFormat =>
-        (spark.read.format("avro").load(filePath), None)
+        (spark.read.format("avro").load(literalFilePath), None)
       case XlsxFormat =>
         (
-          readXlsx(spark, filePath, readOptions),
+          readXlsx(spark, literalFilePath, readOptions),
           None
         )
       case TextFormat =>
         (readTextSource(spark, Seq(filePath), readOptions), None)
       case "parquet" =>
-        (spark.read.parquet(filePath), None)
+        (spark.read.parquet(literalFilePath), None)
       case "orc" =>
-        (spark.read.orc(filePath), None)
+        (spark.read.orc(literalFilePath), None)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
@@ -210,11 +227,12 @@ private[privyspark] object CsvInference {
   ): DataFrame = {
     require(filePaths.nonEmpty, "filePaths must not be empty")
     DriverLogger.debug("read_source_start", "format" -> format, "files" -> filePaths.size, "first_file" -> filePaths.head)
+    val literalFilePaths = literalSparkPaths(filePaths)
 
     val (df, internalCorruptRecordColumnName) = format match {
       case "csv" =>
         (
-          csvReader(spark, csvHasHeader, readOptions).csv(filePaths: _*),
+          csvReader(spark, csvHasHeader, readOptions).csv(literalFilePaths: _*),
           None
         )
       case "json" =>
@@ -223,23 +241,23 @@ private[privyspark] object CsvInference {
           spark.read
             .option("mode", "PERMISSIVE")
             .option("columnNameOfCorruptRecord", corruptRecordColumnName)
-            .json(filePaths: _*),
+            .json(literalFilePaths: _*),
           Some(corruptRecordColumnName)
         )
       case AvroFormat =>
-        (spark.read.format("avro").load(filePaths: _*), None)
+        (spark.read.format("avro").load(literalFilePaths: _*), None)
       case XlsxFormat =>
         require(filePaths.size == 1, "xlsx sources must be read one sheet at a time")
         (
-          readXlsx(spark, filePaths.head, readOptions),
+          readXlsx(spark, literalFilePaths.head, readOptions),
           None
         )
       case TextFormat =>
         (readTextSource(spark, filePaths, readOptions), None)
       case "parquet" =>
-        (spark.read.parquet(filePaths: _*), None)
+        (spark.read.parquet(literalFilePaths: _*), None)
       case "orc" =>
-        (spark.read.orc(filePaths: _*), None)
+        (spark.read.orc(literalFilePaths: _*), None)
       case _ =>
         throw new IllegalArgumentException(s"Unsupported format: $format")
     }
@@ -253,7 +271,7 @@ private[privyspark] object CsvInference {
         val rowsByPath = filePaths.map { filePath =>
           spark.sparkContext
             .newAPIHadoopFile(
-              filePath,
+              literalSparkPath(filePath),
               classOf[TextInputFormat],
               classOf[LongWritable],
               classOf[Text]
@@ -269,7 +287,7 @@ private[privyspark] object CsvInference {
         spark.createDataFrame(rows, StructType(Seq(StructField("value", StringType, nullable = true))))
 
       case None =>
-        spark.read.text(filePaths: _*)
+        spark.read.text(literalSparkPaths(filePaths): _*)
     }
   }
 

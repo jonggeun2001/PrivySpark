@@ -2,6 +2,7 @@
 
 ## Supported Inputs
 - Extension-first support: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`, `tar`, `tar.gz`, `tgz`, `tar.bz2`, `tbz2`, `tar.xz`, `txz`, `tar.zst`, `tzst`, `7z`, `rar`
+- Spaces in physical file paths are accepted, and Spark glob-special characters (`*`, `?`, `[`, `]`, `{`, `}`) are passed to schema detection and scan readers as literal path characters. This handling is separate from ignore pattern syntax and applies only to actual filenames.
 - Direct text-style data files (`csv`, `json`, `jsonl`, `ndjson`) with outer `gz` or `bz2` wrappers are passed through to Spark/Hadoop readers using the original path. Examples: `customers.csv.gz`, `events.json.bz2`
 - Files without extensions and most unsupported extensions are probed for `parquet` and `orc` magic bytes first. A small set of obviously non-data binary extensions such as `pdf` or `jpg` are classified as unsupported without probing.
 - If magic bytes do not match but UTF-8 text has a stable delimiter plus header/data structure, the input is promoted to the internal `csv` format and scanned by column. If CSV dialect detection fails or the text is too ambiguous, UTF-8 or EUC-KR text-like input is normalized into the internal `text` format and scanned as a single `value` column.

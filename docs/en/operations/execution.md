@@ -3,6 +3,7 @@
 ## Execution Model
 - The public commands are `privyspark scan` and `privyspark review apply`.
 - Input and output paths must be absolute paths or URIs.
+- Input filenames may contain spaces and Spark glob-special characters (`*`, `?`, `[`, `]`, `{`, `}`); PrivySpark treats them as literal filenames. Glob syntax applies only to `--ignore` and `--ignore-file` patterns.
 - The default target runtime is Spark on YARN cluster mode.
 - The build artifact is a Shadow fat JAR (`*-all.jar`).
 
