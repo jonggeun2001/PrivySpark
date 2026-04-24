@@ -21,11 +21,16 @@ private[privyspark] object WorkbookSheetStreamer {
       case Right(value) => value
       case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
     }
+    val use1904Windowing = WorkbookHelpers.readWorkbookDate1904(conf, filePath) match {
+      case Right(value) => value
+      case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
+    }
     val schema = StructType(headers.map(name => StructField(name, StringType, nullable = true)))
     val task = SheetReadTask(
       filePath = filePath,
       sheetEntry = sheetEntry,
       headerColumnCount = headers.length,
+      use1904Windowing = use1904Windowing,
       serializableConf = new SerializableConfiguration(conf)
     )
     val rows = spark.sparkContext.parallelize(Seq(task), numSlices = 1).mapPartitions(_.flatMap(_.rows()))
@@ -37,13 +42,14 @@ private[privyspark] object WorkbookSheetStreamer {
     filePath: String,
     sheetEntry: String,
     headerColumnCount: Int,
+    use1904Windowing: Boolean,
     serializableConf: SerializableConfiguration
   ) extends Serializable {
     def rows(): Iterator[Row] = {
       val conf = serializableConf.value
       val sharedStrings = readSharedStrings(conf, filePath)
       val styles = readStyles(conf, filePath)
-      val iterator = SheetRowIterator.open(conf, filePath, sheetEntry, headerColumnCount, sharedStrings, styles)
+      val iterator = SheetRowIterator.open(conf, filePath, sheetEntry, headerColumnCount, use1904Windowing, sharedStrings, styles)
       Option(TaskContext.get()).foreach { context =>
         context.addTaskCompletionListener[Unit](_ => iterator.close())
       }
@@ -102,6 +108,7 @@ private[privyspark] object WorkbookSheetStreamer {
     input: OpenZipEntry,
     reader: XMLStreamReader,
     headerColumnCount: Int,
+    use1904Windowing: Boolean,
     sharedStrings: Map[Int, String],
     styles: Option[StylesTable]
   ) extends Iterator[Row] with AutoCloseable {
@@ -274,7 +281,12 @@ private[privyspark] object WorkbookSheetStreamer {
           case Some(value) =>
             currentCellStyle.flatMap { style =>
               Option(style.getDataFormatString).map { dataFormatString =>
-                dataFormatter.formatRawCellContents(value, style.getDataFormat.toInt, dataFormatString)
+                dataFormatter.formatRawCellContents(
+                  value,
+                  style.getDataFormat.toInt,
+                  dataFormatString,
+                  use1904Windowing
+                )
               }
             }.getOrElse(currentValue)
           case None =>
@@ -312,6 +324,7 @@ private[privyspark] object WorkbookSheetStreamer {
       filePath: String,
       sheetEntry: String,
       headerColumnCount: Int,
+      use1904Windowing: Boolean,
       sharedStrings: Map[Int, String],
       styles: Option[StylesTable]
     ): SheetRowIterator = {
@@ -324,7 +337,7 @@ private[privyspark] object WorkbookSheetStreamer {
             input.close()
             throw e
         }
-      new SheetRowIterator(input, reader, headerColumnCount, sharedStrings, styles)
+      new SheetRowIterator(input, reader, headerColumnCount, use1904Windowing, sharedStrings, styles)
     }
 
     private def createXmlReader(inputStream: InputStream): XMLStreamReader = {

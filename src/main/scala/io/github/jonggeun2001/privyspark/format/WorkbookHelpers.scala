@@ -133,6 +133,13 @@ private[privyspark] object WorkbookHelpers {
     }
   }
 
+  private[format] def readWorkbookDate1904(
+    conf: org.apache.hadoop.conf.Configuration,
+    filePath: String
+  ): Either[String, Boolean] = {
+    withZipEntry(conf, filePath, WorkbookXmlEntry)(readWorkbookDate1904)
+  }
+
   private def readWorkbookSheets(
     conf: org.apache.hadoop.conf.Configuration,
     filePath: String
@@ -165,6 +172,23 @@ private[privyspark] object WorkbookHelpers {
       reader.close()
     }
     sheets.toSeq
+  }
+
+  private def readWorkbookDate1904(inputStream: InputStream): Boolean = {
+    val factory = XMLInputFactory.newFactory()
+    disableXmlExternalEntities(factory)
+    val reader = factory.createXMLStreamReader(inputStream)
+    try {
+      while (reader.hasNext) {
+        if (reader.next() == XMLStreamConstants.START_ELEMENT && reader.getLocalName == "workbookPr") {
+          return attributeValue(reader, "date1904")
+            .exists(value => value == "1" || value.equalsIgnoreCase("true"))
+        }
+      }
+      false
+    } finally {
+      reader.close()
+    }
   }
 
   private def readWorkbookRelationships(

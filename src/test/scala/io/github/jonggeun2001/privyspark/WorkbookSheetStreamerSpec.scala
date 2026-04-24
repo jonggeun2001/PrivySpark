@@ -127,6 +127,41 @@ class WorkbookSheetStreamerSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("formats date cells with workbook 1904 date windowing") {
+    val tempDir = Files.createTempDirectory("privyspark-workbook-streamer-date1904-")
+    val workbookPath = tempDir.resolve("date1904.xlsx")
+
+    try {
+      writeWorkbook(workbookPath) { workbook =>
+        val workbookPr =
+          if (workbook.getCTWorkbook.isSetWorkbookPr) workbook.getCTWorkbook.getWorkbookPr
+          else workbook.getCTWorkbook.addNewWorkbookPr()
+        workbookPr.setDate1904(true)
+
+        val dataFormat = workbook.createDataFormat()
+        val dateStyle = workbook.createCellStyle()
+        dateStyle.setDataFormat(dataFormat.getFormat("yyyy-mm-dd"))
+
+        val sheet = workbook.createSheet("Dates")
+        val header = sheet.createRow(0)
+        header.createCell(0).setCellValue("birth_date")
+
+        val row = sheet.createRow(1)
+        val date = row.createCell(0)
+        date.setCellValue(java.sql.Date.valueOf("2026-04-24"))
+        date.setCellStyle(dateStyle)
+      }
+
+      val expected = collectRows(sparkExcelRead(workbookPath, "Dates"))
+      val actual = collectRows(WorkbookSheetStreamer.readSheetDataFrame(spark, workbookPath.toString, "Dates"))
+
+      assert(actual == expected)
+      assert(actual == Seq(Seq("2026-04-24")))
+    } finally {
+      deleteRecursively(tempDir)
+    }
+  }
+
   test("returns schema-only dataframe when a sheet has no data rows") {
     val tempDir = Files.createTempDirectory("privyspark-workbook-streamer-empty-")
     val workbookPath = tempDir.resolve("empty.xlsx")
