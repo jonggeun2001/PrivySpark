@@ -23,10 +23,10 @@
 
 ## Excel 처리
 - `xlsx`는 workbook을 시트 단위 논리 입력으로 확장합니다.
-- pre-scan은 드라이버에서 workbook metadata만 읽어 visible sheet 목록을 만들고, sheet row/cell 내용은 읽지 않습니다.
-- 빈 visible sheet는 Spark reader 기반 schema detection 이후 결과/오류 없이 건너뜁니다. hidden/veryHidden sheet는 제외합니다.
+- pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 읽지 않습니다.
+- 빈 visible sheet는 header 기반 schema detection 이후 결과/오류 없이 건너뜁니다. hidden/veryHidden sheet는 제외합니다.
 - 시트 식별자는 `<workbook>#<sheet>` 형식을 사용합니다.
-- `--excel-max-rows-in-memory` 또는 `spark.privyspark.excel.maxRowsInMemory`를 설정하면 spark-excel `maxRowsInMemory` reader option으로 전달합니다. 둘 다 생략하면 기본값 `2048`을 전달합니다. 이 설정은 단일 시트를 분산 split하지 않고, 큰 workbook을 단일 reader task에서 streaming 처리하도록 완화합니다.
+- `--excel-max-rows-in-memory` 또는 `spark.privyspark.excel.maxRowsInMemory`를 설정하면 실제 scan의 spark-excel `maxRowsInMemory` reader option으로 전달합니다. 둘 다 생략하면 기본값 `2048`을 전달합니다. 이 설정은 단일 시트를 분산 split하지 않고, 큰 workbook을 단일 reader task에서 streaming 처리하도록 완화합니다.
 - `--excel-byte-array-max-override` 또는 `spark.privyspark.excel.byteArrayMaxOverride`를 설정하면 Apache POI byte array allocation 상한을 조정합니다. 둘 다 생략하면 기본값 `300000000`을 적용합니다.
 
 ## 그룹화와 스캔 단위
