@@ -59,6 +59,8 @@ bin/privyspark-submit \
 
 `--file-sample-ratio`는 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용됩니다. 실제 파일 샘플링이 적용된 그룹에서는 `--sample-ratio < 1.0` row sampling을 무시하고 warning 로그를 남깁니다.
 
+`--excel-max-rows-in-memory`를 생략하면 `spark.privyspark.excel.maxRowsInMemory` Spark conf를 사용하고, 이 conf도 없으면 기본값 `2048`을 spark-excel `maxRowsInMemory` reader option으로 전달합니다.
+
 오탐 제외를 파일로 관리하려면 `--suppression-file`에 UTF-8 텍스트 파일을 넘길 수 있습니다. 파일 형식은 줄 단위 `column:pii_type`이며 빈 줄과 `#` 주석을 무시합니다. YARN cluster에서 client 로컬 suppression 파일을 쓰려면 `PRIVYSPARK_SPARK_FILES` 또는 `--files`로 먼저 배포해야 합니다.
 
 자세한 실행 절차와 옵션은 [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/ko/operations/execution.md](docs/ko/operations/execution.md)에 정리돼 있습니다.

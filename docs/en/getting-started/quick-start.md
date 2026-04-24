@@ -69,6 +69,8 @@ bin/privyspark-submit \
 
 `--file-sample-ratio` only applies when a group has more files than `--file-sample-min-files`. Once file sampling actually applies to a group, `--sample-ratio < 1.0` is ignored for that group and a warning is logged. This avoids changing the sampling basis twice.
 
+When `--excel-max-rows-in-memory` is omitted, PrivySpark uses `spark.privyspark.excel.maxRowsInMemory`; if that Spark conf is also absent, the default value `2048` is applied.
+
 ## Ignore Pattern Example
 
 ```bash

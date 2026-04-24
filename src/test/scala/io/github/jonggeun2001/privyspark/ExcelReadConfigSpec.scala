@@ -18,13 +18,21 @@ import scala.collection.mutable.ArrayBuffer
 
 @RunWith(classOf[JUnitRunner])
 class ExcelReadConfigSpec extends AnyFunSuite {
-  test("reader options include maxRowsInMemory from Spark conf") {
+  test("reader options include default maxRowsInMemory when unset") {
     val conf = new SparkConf(false)
-      .set(ExcelReadConfig.MaxRowsInMemoryConfKey, "2048")
 
     val options = ExcelReadConfig.readerOptions(conf, ScanReadOptions()).toMap
 
     assert(options.get("maxRowsInMemory").contains("2048"))
+  }
+
+  test("reader options include maxRowsInMemory from Spark conf") {
+    val conf = new SparkConf(false)
+      .set(ExcelReadConfig.MaxRowsInMemoryConfKey, "8192")
+
+    val options = ExcelReadConfig.readerOptions(conf, ScanReadOptions()).toMap
+
+    assert(options.get("maxRowsInMemory").contains("8192"))
   }
 
   test("reader options prefer explicit read options over Spark conf") {
