@@ -57,7 +57,7 @@ private[privyspark] object WorkbookHelpers {
     try {
       while (reader.hasNext) {
         if (reader.next() == XMLStreamConstants.START_ELEMENT && reader.getLocalName == "sheet") {
-          val name = Option(reader.getAttributeValue(null, "name")).map(_.trim).getOrElse("")
+          val name = Option(reader.getAttributeValue(null, "name")).getOrElse("")
           val state = Option(reader.getAttributeValue(null, "state")).map(_.trim.toLowerCase).getOrElse("")
           if (name.nonEmpty && state != "hidden" && state != "veryhidden") {
             sheetNames += name

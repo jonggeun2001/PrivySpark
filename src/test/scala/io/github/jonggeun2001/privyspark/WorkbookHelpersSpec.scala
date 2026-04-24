@@ -21,6 +21,7 @@ class WorkbookHelpersSpec extends AnyFunSuite {
         workbook.createSheet("Empty")
         val contacts = workbook.createSheet("Contacts")
         contacts.createRow(0).createCell(0).setCellValue("email")
+        workbook.createSheet("  Spaced  ")
         workbook.createSheet("Hidden")
         workbook.setSheetHidden(workbook.getSheetIndex("Hidden"), true)
 
@@ -36,7 +37,7 @@ class WorkbookHelpersSpec extends AnyFunSuite {
 
       val sheets = WorkbookHelpers.listVisibleWorkbookSheets(new Configuration(), workbookPath.toString)
 
-      assert(sheets == Right(Seq("Empty", "Contacts")))
+      assert(sheets == Right(Seq("Empty", "Contacts", "  Spaced  ")))
     } finally {
       Files.deleteIfExists(workbookPath)
       Files.deleteIfExists(tempDir)
