@@ -92,6 +92,7 @@ When ignore rules apply, events such as `scan_directory_file_ignored` and `archi
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
 - Running group, file, and allowlist snapshot tasks create temporary JSON markers under `<output>/_progress/<run_id>/in-flight`.
 - Each in-flight marker includes `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`, and available scan metadata such as `format` and `schemaSignature`.
+- In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`. The original `identifier` remains in the JSON body.
 - In-flight markers are removed for completed work and recoverable failures. Unrecovered group/file failures that make the Spark application end as `FAILED` preserve their markers so operators can inspect the last active work.
 - Before setup, PrivySpark acquires `<output>/_progress-preparing.json`.
 - Once setup is ready, it switches to `_progress/active-run.json` with heartbeat updates.

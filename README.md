@@ -94,6 +94,7 @@ bash scripts/verify-worktree.sh
 - `--output-format csv`를 지정하면 `<output>/csv/scan_results`, `<output>/csv/scan_errors`가 추가로 생성됩니다.
 - `--output-format excel`을 지정하면 `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`가 추가로 생성됩니다.
 - 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓이고, 실행 중인 group/file/allowlist 작업은 `in-flight/*.json` marker로 관찰할 수 있습니다.
+- `in-flight` marker 파일명은 파일명에 안전한 UTF-8 문자/숫자를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다.
 - Spark application이 `FAILED`로 종료된 경우 미복구 group/file 실패 marker는 삭제하지 않아 마지막 진행 중 작업을 확인할 수 있습니다.
 - `_progress`는 진행 중 임시 경로이고, 최종 출력 계약은 선택된 `parquet`, `csv`, `excel` 산출물입니다.
 - 샘플 값 정책과 리포트 컬럼 의미는 [docs/ko/reference/reports-and-errors.md](docs/ko/reference/reports-and-errors.md)에서 확인합니다.

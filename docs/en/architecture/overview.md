@@ -52,6 +52,7 @@
 - The public output contract defaults to `parquet/scan_results` and `parquet/scan_errors`, and CLI `--output-format` can additionally materialize `csv/...` and `excel/*.xlsx`.
 - Clean completions also emit `meta/completions` markers.
 - In-flight markers under `_progress/<run_id>/in-flight` are best-effort diagnostics for currently active work. Completed work and recoverable failures delete markers; unrecovered group/file failures that make the application `FAILED` preserve them.
+- In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`.
 - `_progress` is cleaned based on staleness when the next run starts. There is no shutdown hook cleanup.
 
 ## Why It Works This Way

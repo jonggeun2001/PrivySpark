@@ -68,6 +68,36 @@ class ProgressInFlightMarkerSpec extends AnyFunSuite {
     }
   }
 
+  test("InFlightMarker preserves UTF-8 characters in marker filenames") {
+    val markerRoot = withTempDir("privyspark-in-flight-utf8")
+    val inFlightDir = markerRoot.resolve("run-utf8/in-flight")
+    Files.createDirectories(inFlightDir)
+    val conf = new Configuration()
+    val identifier = "/input/고객/계약서.xlsx#주소록"
+
+    try {
+      val result = InFlightMarker.run(conf, inFlightDir.toString, "file", identifier) {
+        val markers = jsonFiles(inFlightDir)
+        assert(markers.size == 1)
+
+        val fileName = markers.head.getFileName.toString
+        assert(fileName.startsWith("_input_고객_계약서.xlsx_주소록-"))
+        assert(fileName.contains("고객"))
+        assert(fileName.contains("계약서.xlsx"))
+        assert(fileName.contains("주소록"))
+
+        val markerJson = new String(Files.readAllBytes(markers.head), StandardCharsets.UTF_8)
+        assert(markerJson.contains(s""""identifier":"$identifier""""))
+        "done"
+      }
+
+      assert(result == "done")
+      assert(jsonFiles(inFlightDir).isEmpty)
+    } finally {
+      deleteRecursively(markerRoot)
+    }
+  }
+
   test("InFlightMarker removes the marker after failure without hiding the original exception") {
     val markerRoot = withTempDir("privyspark-in-flight-failure")
     val inFlightDir = markerRoot.resolve("run-456/in-flight")
