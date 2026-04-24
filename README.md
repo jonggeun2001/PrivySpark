@@ -52,12 +52,19 @@ bin/privyspark-submit \
   --group-parallelism 8 \
   --file-parallelism 4 \
   --excel-max-rows-in-memory 2048 \
+  --excel-byte-array-max-override 300000000 \
   --suppress prdctcd:driver_license_number \
   --ignore "_SUCCESS" \
   --ignore "backup/**"
 ```
 
 `--file-sample-ratio`는 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용됩니다. 실제 파일 샘플링이 적용된 그룹에서는 `--sample-ratio < 1.0` row sampling을 무시하고 warning 로그를 남깁니다.
+
+`--excel-max-rows-in-memory`를 생략하면 `spark.privyspark.excel.maxRowsInMemory` Spark conf를 사용하고, 이 conf도 없으면 기본값 `2048`을 spark-excel `maxRowsInMemory` reader option으로 전달합니다.
+
+`--excel-byte-array-max-override`는 Apache POI `IOUtils.setByteArrayMaxOverride` 값입니다. 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`을 적용합니다.
+
+`xlsx` pre-scan은 드라이버에서 workbook metadata만 읽어 visible sheet 목록을 만들고, sheet row/cell 내용은 Spark reader 경로에서 처리합니다. 빈 visible sheet는 Spark reader 기반 schema detection 이후 결과/오류 없이 건너뜁니다.
 
 오탐 제외를 파일로 관리하려면 `--suppression-file`에 UTF-8 텍스트 파일을 넘길 수 있습니다. 파일 형식은 줄 단위 `column:pii_type`이며 빈 줄과 `#` 주석을 무시합니다. YARN cluster에서 client 로컬 suppression 파일을 쓰려면 `PRIVYSPARK_SPARK_FILES` 또는 `--files`로 먼저 배포해야 합니다.
 
@@ -89,6 +96,7 @@ bash scripts/verify-worktree.sh
 - `--output-format csv`를 지정하면 `<output>/csv/scan_results`, `<output>/csv/scan_errors`가 추가로 생성됩니다.
 - `--output-format excel`을 지정하면 `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`가 추가로 생성됩니다.
 - 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓이고, 실행 중인 group/file/allowlist 작업은 `in-flight/*.json` marker로 관찰할 수 있습니다.
+- `in-flight` marker 파일명은 파일명에 안전한 UTF-8 문자/숫자를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다.
 - Spark application이 `FAILED`로 종료된 경우 미복구 group/file 실패 marker는 삭제하지 않아 마지막 진행 중 작업을 확인할 수 있습니다.
 - `_progress`는 진행 중 임시 경로이고, 최종 출력 계약은 선택된 `parquet`, `csv`, `excel` 산출물입니다.
 - 샘플 값 정책과 리포트 컬럼 의미는 [docs/ko/reference/reports-and-errors.md](docs/ko/reference/reports-and-errors.md)에서 확인합니다.

@@ -18,24 +18,40 @@ import scala.collection.mutable.ArrayBuffer
 
 @RunWith(classOf[JUnitRunner])
 class ExcelReadConfigSpec extends AnyFunSuite {
-  test("reader options include maxRowsInMemory from Spark conf") {
+  test("reader options include default maxRowsInMemory when unset") {
     val conf = new SparkConf(false)
-      .set(ExcelReadConfig.MaxRowsInMemoryConfKey, "2048")
 
     val options = ExcelReadConfig.readerOptions(conf, ScanReadOptions()).toMap
 
     assert(options.get("maxRowsInMemory").contains("2048"))
+    assert(options.get("maxByteArraySize").contains("300000000"))
+  }
+
+  test("reader options include maxRowsInMemory from Spark conf") {
+    val conf = new SparkConf(false)
+      .set(ExcelReadConfig.MaxRowsInMemoryConfKey, "8192")
+
+    val options = ExcelReadConfig.readerOptions(conf, ScanReadOptions()).toMap
+
+    assert(options.get("maxRowsInMemory").contains("8192"))
+    assert(options.get("maxByteArraySize").contains("300000000"))
   }
 
   test("reader options prefer explicit read options over Spark conf") {
     val conf = new SparkConf(false)
       .set(ExcelReadConfig.MaxRowsInMemoryConfKey, "1024")
 
-    val options = ExcelReadConfig
-      .readerOptions(conf, ScanReadOptions(excelMaxRowsInMemory = Some(4096)))
+    val options = ExcelReadConfig.readerOptions(
+      conf,
+      ScanReadOptions(
+        excelMaxRowsInMemory = Some(4096),
+        excelByteArrayMaxOverride = Some(234567890)
+      )
+    )
       .toMap
 
     assert(options.get("maxRowsInMemory").contains("4096"))
+    assert(options.get("maxByteArraySize").contains("234567890"))
   }
 
   test("reader options reject invalid Spark conf values") {
@@ -50,14 +66,56 @@ class ExcelReadConfigSpec extends AnyFunSuite {
     assert(error.getMessage.contains("> 0"))
   }
 
-  test("workbook sheet read options preserve excel maxRowsInMemory") {
+  test("byte array max override defaults to 300MB when unset") {
+    val conf = new SparkConf(false)
+
+    val value = ExcelReadConfig.resolveByteArrayMaxOverride(conf, None)
+
+    assert(value == ExcelReadConfig.DefaultByteArrayMaxOverride)
+  }
+
+  test("byte array max override prefers Spark conf when CLI value is unset") {
+    val conf = new SparkConf(false)
+      .set(ExcelReadConfig.ByteArrayMaxOverrideConfKey, "123456789")
+
+    val value = ExcelReadConfig.resolveByteArrayMaxOverride(conf, None)
+
+    assert(value == 123456789)
+  }
+
+  test("byte array max override prefers CLI value over Spark conf") {
+    val conf = new SparkConf(false)
+      .set(ExcelReadConfig.ByteArrayMaxOverrideConfKey, "123456789")
+
+    val value = ExcelReadConfig.resolveByteArrayMaxOverride(conf, Some(234567890))
+
+    assert(value == 234567890)
+  }
+
+  test("byte array max override rejects invalid Spark conf values") {
+    val conf = new SparkConf(false)
+      .set(ExcelReadConfig.ByteArrayMaxOverrideConfKey, "0")
+
+    val error = intercept[IllegalArgumentException] {
+      ExcelReadConfig.resolveByteArrayMaxOverride(conf, None)
+    }
+
+    assert(error.getMessage.contains(ExcelReadConfig.ByteArrayMaxOverrideConfKey))
+    assert(error.getMessage.contains("> 0"))
+  }
+
+  test("workbook sheet read options preserve excel read options") {
     val readOptions = SourceExpansion.workbookSheetReadOptions(
-      ScanReadOptions(excelMaxRowsInMemory = Some(4096)),
+      ScanReadOptions(
+        excelMaxRowsInMemory = Some(4096),
+        excelByteArrayMaxOverride = Some(123456789)
+      ),
       "Contacts"
     )
 
     assert(readOptions.sheetName.contains("Contacts"))
     assert(readOptions.excelMaxRowsInMemory.contains(4096))
+    assert(readOptions.excelByteArrayMaxOverride.contains(123456789))
   }
 
   test("archive expansion preserves excel maxRowsInMemory for nested xlsx sheets") {
@@ -77,7 +135,10 @@ class ExcelReadConfigSpec extends AnyFunSuite {
         logicalIdentifier = "bundle.zip",
         groupingDirectoryPath = tempDir.toString,
         stagingPaths = stagingPaths,
-        readOptions = ScanReadOptions(excelMaxRowsInMemory = Some(4096))
+        readOptions = ScanReadOptions(
+          excelMaxRowsInMemory = Some(4096),
+          excelByteArrayMaxOverride = Some(123456789)
+        )
       )
 
       assert(errors.isEmpty)
@@ -86,6 +147,7 @@ class ExcelReadConfigSpec extends AnyFunSuite {
         .getOrElse(fail(s"Expected nested workbook sheet entry, got: ${entries.map(_.logicalIdentifier).mkString(",")}"))
       assert(workbookEntry.readOptions.sheetName.contains("Contacts"))
       assert(workbookEntry.readOptions.excelMaxRowsInMemory.contains(4096))
+      assert(workbookEntry.readOptions.excelByteArrayMaxOverride.contains(123456789))
     } finally {
       cleanupStagingPaths(conf, stagingPaths.toSeq)
       Files.deleteIfExists(archivePath)

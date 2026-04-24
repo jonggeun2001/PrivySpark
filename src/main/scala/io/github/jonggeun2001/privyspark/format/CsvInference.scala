@@ -271,6 +271,7 @@ private[privyspark] object CsvInference {
     val sheetName = readOptions.sheetName.getOrElse {
       throw new IllegalArgumentException("Sheet name is required for xlsx sources")
     }
+    readOptions.excelByteArrayMaxOverride.foreach(ExcelReadConfig.applyByteArrayMaxOverride)
     val baseReader = spark.read
       .format("com.crealytics.spark.excel")
       .option("header", "true")

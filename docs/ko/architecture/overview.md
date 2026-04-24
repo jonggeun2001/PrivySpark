@@ -25,7 +25,7 @@
 1. 입력 경로 검증
 2. ruleset 로드, regex 사전 검증, ruleset/CLI suppression 병합
 3. 물리 파일 수집과 ignore 패턴 필터
-4. archive 엔트리 확장, workbook 시트 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, CSV dialect 감지 및 text fallback 정규화, archive entry ignore 필터
+4. archive 엔트리 확장, workbook metadata 기반 시트 목록 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, CSV dialect 감지 및 text fallback 정규화, archive entry ignore 필터
 5. `(directory, format)` 기준 1차 그룹화
 6. 대표 파일 기준 스키마 샘플링
 7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
@@ -44,6 +44,7 @@
 - suppression은 `DetectionAggregator.buildMetrics`에서 metric plan 생성 전에 적용해 제외된 `(column, pii_type)` 조합이 결과 row 자체를 만들지 않게 합니다.
 - 디렉터리 discovery는 BFS 순회로 진행하고, 각 레벨의 `listStatus`는 safety ceiling `64` 안에서 병렬 실행합니다.
 - discovery 이후 pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
+- `xlsx` pre-scan은 드라이버에서 workbook metadata만 읽고 visible sheet 목록만 계획합니다. sheet row/cell 읽기와 빈 sheet 처리는 Spark reader 기반 schema/scan 단계로 넘깁니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.
 - `--file-sample-ratio`는 batch scan과 file fallback scan에서 적용하고, 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.
 - 실제 file sampling이 적용된 그룹에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.
@@ -52,6 +53,7 @@
 - 최종 출력 계약은 기본 `parquet/scan_results`, `parquet/scan_errors`이고, CLI `--output-format`에 따라 `csv/...`, `excel/*.xlsx`가 추가됩니다.
 - clean completion도 `meta/completions` marker를 남깁니다.
 - `_progress/<run_id>/in-flight` 아래 in-flight marker는 현재 실행 중인 작업을 보여주는 best-effort 진단 정보입니다. 완료된 작업과 처리 가능한 실패는 삭제되고, application `FAILED`로 이어지는 미복구 group/file 실패는 보존됩니다.
+- in-flight marker 파일명은 파일명에 안전한 UTF-8 문자/숫자와 `.`, `_`, `-`를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다.
 - `_progress`는 다음 실행 시작 시 stale 여부를 판정해 정리합니다. shutdown hook은 사용하지 않습니다.
 
 ## 왜 이렇게 설계했는가

@@ -23,9 +23,11 @@ The text/CSV fallback exists because extension-based filtering alone would rejec
 
 ## Excel Handling
 - `xlsx` workbooks are expanded into sheet-level logical inputs.
-- Empty sheets are skipped.
+- During pre-scan, the driver reads only workbook metadata to list visible sheets; it does not read sheet row/cell contents.
+- Empty visible sheets are skipped without results or errors after Spark reader-based schema detection. Hidden and very hidden sheets are excluded.
 - Sheet identifiers use the `<workbook>#<sheet>` format.
-- `--excel-max-rows-in-memory` or `spark.privyspark.excel.maxRowsInMemory` is passed to spark-excel as the `maxRowsInMemory` reader option. This does not split a single sheet across executors; it enables a streaming reader path for large workbooks inside one reader task.
+- `--excel-max-rows-in-memory` or `spark.privyspark.excel.maxRowsInMemory` is passed to spark-excel as the `maxRowsInMemory` reader option. When both are omitted, PrivySpark passes the default value `2048`. This does not split a single sheet across executors; it enables a streaming reader path for large workbooks inside one reader task.
+- `--excel-byte-array-max-override` or `spark.privyspark.excel.byteArrayMaxOverride` adjusts the Apache POI byte array allocation limit. When both are omitted, PrivySpark applies the default value `300000000`.
 
 ## Grouping and Scan Units
 - The base scan unit is a file.
