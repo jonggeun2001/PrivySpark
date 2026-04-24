@@ -43,7 +43,7 @@ When `scan_directory_files_discovered` to `scan_directory_initial_groups_ready` 
 - per-file `getFileStatus`
 - probing unknown or extensionless inputs
 - CSV dialect probing
-- `xlsx` visible-sheet expansion from workbook metadata
+- `xlsx` visible-sheet/schema expansion from workbook metadata and header row XML
 - large `Future` submission and collection
 - grouping and sorting by `(directory, format)`
 
