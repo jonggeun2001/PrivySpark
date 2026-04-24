@@ -1,26 +1,12 @@
 package io.github.jonggeun2001.privyspark.format
 
-import io.github.jonggeun2001.privyspark.model.ScanReadOptions
 import org.apache.poi.util.IOUtils
 import org.apache.spark.SparkConf
 
 private[privyspark] object ExcelReadConfig {
   val MaxRowsInMemoryConfKey = "spark.privyspark.excel.maxRowsInMemory"
   val ByteArrayMaxOverrideConfKey = "spark.privyspark.excel.byteArrayMaxOverride"
-  val MaxRowsInMemoryReaderOption = "maxRowsInMemory"
-  val ByteArrayMaxOverrideReaderOption = "maxByteArraySize"
-  val DefaultMaxRowsInMemory = 2048
   val DefaultByteArrayMaxOverride = 300000000
-
-  def readerOptions(conf: SparkConf, readOptions: ScanReadOptions): Seq[(String, String)] = {
-    val maxRowsInMemory = resolveMaxRowsInMemory(conf, readOptions)
-      .map(value => MaxRowsInMemoryReaderOption -> value.toString)
-    val byteArrayMaxOverride = Some(
-      ByteArrayMaxOverrideReaderOption -> resolveByteArrayMaxOverride(conf, readOptions.excelByteArrayMaxOverride).toString
-    )
-
-    maxRowsInMemory.toSeq ++ byteArrayMaxOverride.toSeq
-  }
 
   def renderConfiguredMaxRowsInMemory(configured: Option[Int]): String = {
     configured.map(_.toString).getOrElse(s"${MaxRowsInMemoryConfKey}_or_unset")
@@ -38,12 +24,6 @@ private[privyspark] object ExcelReadConfig {
 
   def applyByteArrayMaxOverride(value: Int): Unit = {
     IOUtils.setByteArrayMaxOverride(value)
-  }
-
-  private def resolveMaxRowsInMemory(conf: SparkConf, readOptions: ScanReadOptions): Option[Int] = {
-    readOptions.excelMaxRowsInMemory.orElse {
-      conf.getOption(MaxRowsInMemoryConfKey).map(value => parsePositiveInt(value, MaxRowsInMemoryConfKey))
-    }.orElse(Some(DefaultMaxRowsInMemory))
   }
 
   private def parsePositiveInt(rawValue: String, source: String): Int = {

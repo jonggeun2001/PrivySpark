@@ -12,6 +12,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 
 ## 현재 구현이 이미 적용하는 최적화
 - pre-scan 병렬도는 BFS 디렉터리 discovery, 파일 확장, 포맷 판별, 그룹별 schema split에 재사용됩니다.
+- `xlsx` 실제 scan은 spark-excel/POI DataFrame reader 대신 executor-side StAX 스트리머를 사용해 driver가 workbook body와 POI workbook 객체를 들고 있지 않도록 합니다.
 - CSV 본문 읽기는 `inferSchema=false`로 동작합니다.
 - CSV dialect 감지는 파일 앞부분의 non-blank 라인 일부만 사용하며, 비기본 dialect가 있는 그룹은 파일별 read option 보존을 위해 exact split/file scan 경로로 처리합니다.
 - `DetectionAggregator`는 메트릭별 개별 job 대신 batched aggregation을 기본 경로로 사용합니다.

@@ -12,6 +12,7 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 
 ## Optimizations Already Implemented
 - Pre-scan parallelism is reused for breadth-first directory discovery, format probing, and group schema split.
+- Actual `xlsx` scans use an executor-side StAX streamer instead of the spark-excel/POI DataFrame reader, so the driver no longer retains workbook bodies or POI workbook objects.
 - CSV body reads run with `inferSchema=false`.
 - CSV dialect detection samples only the first non-blank lines. Groups with non-default per-file dialects use exact split/file-scan paths so read options stay attached to the right file.
 - `DetectionAggregator` uses batched aggregation instead of one Spark job per metric.

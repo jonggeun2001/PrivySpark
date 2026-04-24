@@ -61,7 +61,6 @@ bin/privyspark-submit \
   --pre-scan-parallelism 32 \
   --group-parallelism 16 \
   --file-parallelism 8 \
-  --excel-max-rows-in-memory 2048 \
   --excel-byte-array-max-override 300000000 \
   --suppress prdctcd:driver_license_number \
   --ignore "_SUCCESS" \
@@ -70,7 +69,7 @@ bin/privyspark-submit \
 
 `--file-sample-ratio`는 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용됩니다. 실제 파일 샘플링이 적용된 그룹에서는 `--sample-ratio < 1.0`이 무시되고 warning 로그가 남습니다. 이유는 파일 샘플링 후 다시 row sampling을 적용하면 샘플 기준이 이중으로 바뀌어 결과 해석이 불명확해지기 때문입니다.
 
-`--excel-max-rows-in-memory`를 생략하면 `spark.privyspark.excel.maxRowsInMemory` Spark conf를 사용하고, 이 conf도 없으면 기본값 `2048`이 적용됩니다.
+`--excel-max-rows-in-memory`는 과거 spark-excel scan reader 호환용으로만 받습니다. 실제 `xlsx` scan은 executor task의 StAX 스트리머를 사용하므로, 이 값을 명시하면 warning 로그를 남기고 scan에는 사용하지 않습니다.
 
 `--excel-byte-array-max-override`를 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`이 적용됩니다.
 

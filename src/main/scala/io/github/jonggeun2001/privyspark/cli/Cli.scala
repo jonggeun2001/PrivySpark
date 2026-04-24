@@ -139,7 +139,7 @@ object Cli {
           if (value > 0) success
           else failure("excel-max-rows-in-memory must be > 0")
         }
-        .text("xlsx 읽기 시 spark-excel maxRowsInMemory 옵션(정수 > 0)"),
+        .text("호환용 xlsx 옵션(정수 > 0, 현재 scan 경로에서는 사용하지 않음)"),
       opt[Int]("excel-byte-array-max-override")
         .optional()
         .action((value, config) => config.copy(excelByteArrayMaxOverride = Some(value)))

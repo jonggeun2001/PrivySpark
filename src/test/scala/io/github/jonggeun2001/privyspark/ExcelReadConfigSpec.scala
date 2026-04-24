@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
 import io.github.jonggeun2001.privyspark.format.ExcelReadConfig
 import io.github.jonggeun2001.privyspark.model.ScanReadOptions
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion
+import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.conf.Configuration
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.apache.spark.SparkConf
@@ -11,61 +12,14 @@ import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
-import java.io.ByteArrayOutputStream
+import java.io.{ByteArrayOutputStream, PrintStream}
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.mutable.ArrayBuffer
 
 @RunWith(classOf[JUnitRunner])
 class ExcelReadConfigSpec extends AnyFunSuite {
-  test("reader options include default maxRowsInMemory when unset") {
-    val conf = new SparkConf(false)
-
-    val options = ExcelReadConfig.readerOptions(conf, ScanReadOptions()).toMap
-
-    assert(options.get("maxRowsInMemory").contains("2048"))
-    assert(options.get("maxByteArraySize").contains("300000000"))
-  }
-
-  test("reader options include maxRowsInMemory from Spark conf") {
-    val conf = new SparkConf(false)
-      .set(ExcelReadConfig.MaxRowsInMemoryConfKey, "8192")
-
-    val options = ExcelReadConfig.readerOptions(conf, ScanReadOptions()).toMap
-
-    assert(options.get("maxRowsInMemory").contains("8192"))
-    assert(options.get("maxByteArraySize").contains("300000000"))
-  }
-
-  test("reader options prefer explicit read options over Spark conf") {
-    val conf = new SparkConf(false)
-      .set(ExcelReadConfig.MaxRowsInMemoryConfKey, "1024")
-
-    val options = ExcelReadConfig.readerOptions(
-      conf,
-      ScanReadOptions(
-        excelMaxRowsInMemory = Some(4096),
-        excelByteArrayMaxOverride = Some(234567890)
-      )
-    )
-      .toMap
-
-    assert(options.get("maxRowsInMemory").contains("4096"))
-    assert(options.get("maxByteArraySize").contains("234567890"))
-  }
-
-  test("reader options reject invalid Spark conf values") {
-    val conf = new SparkConf(false)
-      .set(ExcelReadConfig.MaxRowsInMemoryConfKey, "0")
-
-    val error = intercept[IllegalArgumentException] {
-      ExcelReadConfig.readerOptions(conf, ScanReadOptions())
-    }
-
-    assert(error.getMessage.contains(ExcelReadConfig.MaxRowsInMemoryConfKey))
-    assert(error.getMessage.contains("> 0"))
-  }
-
   test("byte array max override defaults to 300MB when unset") {
     val conf = new SparkConf(false)
 
@@ -118,7 +72,25 @@ class ExcelReadConfigSpec extends AnyFunSuite {
     assert(readOptions.excelByteArrayMaxOverride.contains(123456789))
   }
 
-  test("archive expansion preserves excel maxRowsInMemory for nested xlsx sheets") {
+  test("excel max rows in memory emits a deprecation warning only when explicitly configured") {
+    val configuredLogs = withWarnLogging {
+      captureStderr {
+        PrivySparkApp.warnUnusedExcelMaxRowsInMemory(Some(4096))
+      }
+    }
+    val defaultLogs = withWarnLogging {
+      captureStderr {
+        PrivySparkApp.warnUnusedExcelMaxRowsInMemory(None)
+      }
+    }
+
+    assert(configuredLogs.contains("excel_max_rows_in_memory_unused"))
+    assert(configuredLogs.contains("argument=--excel-max-rows-in-memory"))
+    assert(configuredLogs.contains("value=4096"))
+    assert(defaultLogs.isEmpty)
+  }
+
+  test("archive expansion preserves compatibility excel read options for nested xlsx sheets") {
     val tempDir = Files.createTempDirectory("privyspark-excel-archive-read-options-")
     val archivePath = tempDir.resolve("bundle.zip")
     val conf = new Configuration()
@@ -180,6 +152,35 @@ class ExcelReadConfigSpec extends AnyFunSuite {
       }
     } finally {
       workbook.close()
+    }
+  }
+
+  private def captureStderr(block: => Unit): String = {
+    val output = new ByteArrayOutputStream()
+    val originalErr = System.err
+    val captureErr = new PrintStream(output, true, StandardCharsets.UTF_8.name())
+    try {
+      System.setErr(captureErr)
+      block
+    } finally {
+      captureErr.flush()
+      System.setErr(originalErr)
+    }
+    output.toString(StandardCharsets.UTF_8.name())
+  }
+
+  private def withWarnLogging[A](block: => A): A = {
+    val previous = sys.props.get(DriverLogger.PropertyName)
+    DriverLogger.resetCache()
+    System.setProperty(DriverLogger.PropertyName, "warn")
+    try {
+      block
+    } finally {
+      previous match {
+        case Some(value) => System.setProperty(DriverLogger.PropertyName, value)
+        case None => System.clearProperty(DriverLogger.PropertyName)
+      }
+      DriverLogger.resetCache()
     }
   }
 }

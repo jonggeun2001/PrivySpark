@@ -1,10 +1,10 @@
 package io.github.jonggeun2001.privyspark.format
 
 import org.apache.hadoop.fs.Path
+import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 
 import java.io.InputStream
 import java.net.URI
-import java.util.zip.ZipInputStream
 import javax.xml.stream.{XMLInputFactory, XMLStreamConstants}
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
@@ -12,7 +12,7 @@ import scala.util.control.NonFatal
 private[privyspark] object WorkbookHelpers {
   private val WorkbookXmlEntry = "xl/workbook.xml"
   private val WorkbookRelationshipsEntry = "xl/_rels/workbook.xml.rels"
-  private val SharedStringsEntry = "xl/sharedStrings.xml"
+  private[format] val SharedStringsEntry = "xl/sharedStrings.xml"
   private val RelationshipsNamespace = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
   private case class WorkbookSheet(name: String, state: String, relationshipId: Option[String]) {
@@ -52,40 +52,8 @@ private[privyspark] object WorkbookHelpers {
     sheetName: String
   ): Either[String, String] = {
     try {
-      val sheetTarget = for {
-        sheets <- readWorkbookSheets(conf, filePath).right
-        sheet <- sheets.find(_.name == sheetName).toRight(s"Sheet not found: $sheetName").right
-        relationshipId <- sheet.relationshipId.toRight(s"Sheet relationship not found: $sheetName").right
-        relationships <- readWorkbookRelationships(conf, filePath).right
-        rawTarget <- relationships.get(relationshipId).toRight(s"Worksheet target not found: $sheetName").right
-      } yield resolveWorkbookPartTarget(rawTarget)
-
-      sheetTarget.right.flatMap { targetEntry =>
-        readSheetHeaderCells(conf, filePath, targetEntry).right.flatMap { headerCells =>
-          if (headerCells.isEmpty) {
-            Left("head of empty list")
-          } else {
-            val sharedStringIndexes = headerCells.collect {
-              case HeaderCell(_, SharedStringHeaderValue(index)) => index
-            }.toSet
-            val sharedStrings =
-              if (sharedStringIndexes.isEmpty) Right(Map.empty[Int, String])
-              else readSharedStrings(conf, filePath, sharedStringIndexes)
-
-            sharedStrings.right.flatMap { resolvedSharedStrings =>
-              val headerNames = headerCells
-                .sortBy(_.columnIndex)
-                .map(cell => resolveHeaderCellValue(cell.value, resolvedSharedStrings))
-              val normalizedHeaderNames = normalizeHeaderNames(headerNames)
-
-              if (normalizedHeaderNames.isEmpty) {
-                Left("head of empty list")
-              } else {
-                Right(normalizedHeaderNames.map(_.toLowerCase).sorted.mkString("|"))
-              }
-            }
-          }
-        }
+      resolveWorkbookSheetHeaders(conf, filePath, sheetName).right.map {
+        case (_, normalizedHeaderNames) => normalizedHeaderNames.map(_.toLowerCase).sorted.mkString("|")
       }
     } catch {
       case NonFatal(e) =>
@@ -96,7 +64,7 @@ private[privyspark] object WorkbookHelpers {
   private def normalizeEntryName(name: String): String =
     Option(name).getOrElse("").stripPrefix("/")
 
-  private def withZipEntry[A](
+  private[format] def withZipEntry[A](
     conf: org.apache.hadoop.conf.Configuration,
     filePath: String,
     entryName: String
@@ -104,14 +72,13 @@ private[privyspark] object WorkbookHelpers {
     val sourcePath = new Path(filePath)
     val fs = sourcePath.getFileSystem(conf)
     val inputStream = fs.open(sourcePath)
-    val zipInputStream = new ZipInputStream(inputStream)
+    val zipInputStream = new ZipArchiveInputStream(inputStream)
     try {
       var entry = zipInputStream.getNextEntry
       while (entry != null) {
         if (!entry.isDirectory && normalizeEntryName(entry.getName) == entryName) {
           return Right(reader(zipInputStream))
         }
-        zipInputStream.closeEntry()
         entry = zipInputStream.getNextEntry
       }
       Left(s"Workbook part not found: $entryName")
@@ -120,6 +87,48 @@ private[privyspark] object WorkbookHelpers {
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
     } finally {
       zipInputStream.close()
+    }
+  }
+
+  private[format] def resolveWorkbookSheetHeaders(
+    conf: org.apache.hadoop.conf.Configuration,
+    filePath: String,
+    sheetName: String
+  ): Either[String, (String, Seq[String])] = {
+    val sheetTarget = for {
+      sheets <- readWorkbookSheets(conf, filePath).right
+      sheet <- sheets.find(_.name == sheetName).toRight(s"Sheet not found: $sheetName").right
+      relationshipId <- sheet.relationshipId.toRight(s"Sheet relationship not found: $sheetName").right
+      relationships <- readWorkbookRelationships(conf, filePath).right
+      rawTarget <- relationships.get(relationshipId).toRight(s"Worksheet target not found: $sheetName").right
+    } yield resolveWorkbookPartTarget(rawTarget)
+
+    sheetTarget.right.flatMap { targetEntry =>
+      readSheetHeaderCells(conf, filePath, targetEntry).right.flatMap { headerCells =>
+        if (headerCells.isEmpty) {
+          Left("head of empty list")
+        } else {
+          val sharedStringIndexes = headerCells.collect {
+            case HeaderCell(_, SharedStringHeaderValue(index)) => index
+          }.toSet
+          val sharedStrings =
+            if (sharedStringIndexes.isEmpty) Right(Map.empty[Int, String])
+            else readSharedStrings(conf, filePath, sharedStringIndexes)
+
+          sharedStrings.right.flatMap { resolvedSharedStrings =>
+            val headerNames = headerCells
+              .sortBy(_.columnIndex)
+              .map(cell => resolveHeaderCellValue(cell.value, resolvedSharedStrings))
+            val normalizedHeaderNames = normalizeHeaderNames(headerNames)
+
+            if (normalizedHeaderNames.isEmpty) {
+              Left("head of empty list")
+            } else {
+              Right(targetEntry -> normalizedHeaderNames)
+            }
+          }
+        }
+      }
     }
   }
 
@@ -290,7 +299,13 @@ private[privyspark] object WorkbookHelpers {
     withZipEntry(conf, filePath, SharedStringsEntry)(inputStream => readSharedStrings(inputStream, requiredIndexes))
   }
 
-  private def readSharedStrings(inputStream: InputStream, requiredIndexes: Set[Int]): Map[Int, String] = {
+  private[format] def readAllSharedStrings(inputStream: InputStream): Map[Int, String] =
+    readSharedStrings(inputStream, None)
+
+  private def readSharedStrings(inputStream: InputStream, requiredIndexes: Set[Int]): Map[Int, String] =
+    readSharedStrings(inputStream, Some(requiredIndexes))
+
+  private def readSharedStrings(inputStream: InputStream, requiredIndexes: Option[Set[Int]]): Map[Int, String] = {
     val factory = XMLInputFactory.newFactory()
     disableXmlExternalEntities(factory)
     val reader = factory.createXMLStreamReader(inputStream)
@@ -300,7 +315,7 @@ private[privyspark] object WorkbookHelpers {
     var inText = false
     var currentText = new StringBuilder
     try {
-      while (reader.hasNext && sharedStrings.size < requiredIndexes.size) {
+      while (reader.hasNext && requiredIndexes.forall(indexes => sharedStrings.size < indexes.size)) {
         reader.next() match {
           case XMLStreamConstants.START_ELEMENT =>
             reader.getLocalName match {
@@ -321,7 +336,7 @@ private[privyspark] object WorkbookHelpers {
               case "t" =>
                 inText = false
               case "si" =>
-                if (requiredIndexes.contains(currentIndex)) {
+                if (requiredIndexes.forall(_.contains(currentIndex))) {
                   sharedStrings += currentIndex -> currentText.toString
                 }
                 inSharedString = false
@@ -392,7 +407,7 @@ private[privyspark] object WorkbookHelpers {
     }
   }
 
-  private def cellReferenceColumnIndex(reference: String): Option[Int] = {
+  private[format] def cellReferenceColumnIndex(reference: String): Option[Int] = {
     val letters = Option(reference).getOrElse("").takeWhile(_.isLetter)
     if (letters.isEmpty) {
       None
@@ -403,7 +418,7 @@ private[privyspark] object WorkbookHelpers {
     }
   }
 
-  private def disableXmlExternalEntities(factory: XMLInputFactory): Unit = {
+  private[format] def disableXmlExternalEntities(factory: XMLInputFactory): Unit = {
     try {
       factory.setProperty(XMLInputFactory.SUPPORT_DTD, false)
     } catch {
