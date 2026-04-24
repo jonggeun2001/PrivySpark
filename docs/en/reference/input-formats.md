@@ -25,7 +25,7 @@ The text/CSV fallback exists because extension-based filtering alone would rejec
 - `xlsx` workbooks are expanded into sheet-level logical inputs.
 - Empty sheets are skipped.
 - Sheet identifiers use the `<workbook>#<sheet>` format.
-- `--excel-max-rows-in-memory` or `spark.privyspark.excel.maxRowsInMemory` is passed to spark-excel as the `maxRowsInMemory` reader option. This does not split a single sheet across executors; it enables a streaming reader path for large workbooks inside one reader task.
+- `--excel-max-rows-in-memory` or `spark.privyspark.excel.maxRowsInMemory` is passed to spark-excel as the `maxRowsInMemory` reader option. When both are omitted, PrivySpark passes the default value `2048`. This does not split a single sheet across executors; it enables a streaming reader path for large workbooks inside one reader task.
 
 ## Grouping and Scan Units
 - The base scan unit is a file.

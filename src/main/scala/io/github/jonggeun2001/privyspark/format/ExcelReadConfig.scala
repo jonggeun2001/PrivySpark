@@ -6,6 +6,7 @@ import org.apache.spark.SparkConf
 private[privyspark] object ExcelReadConfig {
   val MaxRowsInMemoryConfKey = "spark.privyspark.excel.maxRowsInMemory"
   val MaxRowsInMemoryReaderOption = "maxRowsInMemory"
+  val DefaultMaxRowsInMemory = 2048
 
   def readerOptions(conf: SparkConf, readOptions: ScanReadOptions): Seq[(String, String)] = {
     resolveMaxRowsInMemory(conf, readOptions)
@@ -20,7 +21,7 @@ private[privyspark] object ExcelReadConfig {
   private def resolveMaxRowsInMemory(conf: SparkConf, readOptions: ScanReadOptions): Option[Int] = {
     readOptions.excelMaxRowsInMemory.orElse {
       conf.getOption(MaxRowsInMemoryConfKey).map(value => parsePositiveInt(value, MaxRowsInMemoryConfKey))
-    }
+    }.orElse(Some(DefaultMaxRowsInMemory))
   }
 
   private def parsePositiveInt(rawValue: String, source: String): Int = {
