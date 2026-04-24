@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.format
 
 import io.github.jonggeun2001.privyspark.format.ByteProbe.TextFormat
 import io.github.jonggeun2001.privyspark.format.CsvHeaderHeuristic.{detectCsvHasHeaderFromLines, inferCsvHeaderSignatureFromLines, parseCsvLine, readFirstNonBlankCsvLines}
-import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.{inferWorkbookSheetSchemaSignature, workbookDataAddress}
+import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.inferWorkbookSheetSchemaSignature
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, CsvDialect, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, SchemaSignatureCache}
@@ -10,7 +10,7 @@ import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.io.{LongWritable, Text}
 import org.apache.hadoop.mapreduce.lib.input.TextInputFormat
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
-import org.apache.spark.sql.{DataFrame, DataFrameReader, Row, SparkSession}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
 import java.nio.charset.Charset
 import java.util.UUID
@@ -203,7 +203,7 @@ private[privyspark] object CsvInference {
         (spark.read.format("avro").load(literalFilePath), None)
       case XlsxFormat =>
         (
-          readXlsx(spark, literalFilePath, readOptions),
+          readXlsx(spark, filePath, readOptions),
           None
         )
       case TextFormat =>
@@ -249,7 +249,7 @@ private[privyspark] object CsvInference {
       case XlsxFormat =>
         require(filePaths.size == 1, "xlsx sources must be read one sheet at a time")
         (
-          readXlsx(spark, literalFilePaths.head, readOptions),
+          readXlsx(spark, filePaths.head, readOptions),
           None
         )
       case TextFormat =>
@@ -292,22 +292,9 @@ private[privyspark] object CsvInference {
   }
 
   private def readXlsx(spark: SparkSession, filePath: String, readOptions: ScanReadOptions): DataFrame = {
-    xlsxReader(spark, readOptions).load(filePath)
-  }
-
-  private[privyspark] def xlsxReader(spark: SparkSession, readOptions: ScanReadOptions): DataFrameReader = {
     val sheetName = readOptions.sheetName.getOrElse {
       throw new IllegalArgumentException("Sheet name is required for xlsx sources")
     }
-    readOptions.excelByteArrayMaxOverride.foreach(ExcelReadConfig.applyByteArrayMaxOverride)
-    val baseReader = spark.read
-      .format("com.crealytics.spark.excel")
-      .option("header", "true")
-      .option("inferSchema", "false")
-      .option("dataAddress", workbookDataAddress(sheetName))
-
-    ExcelReadConfig.readerOptions(spark.sparkContext.getConf, readOptions).foldLeft(baseReader) {
-      case (reader, (key, value)) => reader.option(key, value)
-    }
+    WorkbookSheetStreamer.readSheetDataFrame(spark, filePath, sheetName)
   }
 }

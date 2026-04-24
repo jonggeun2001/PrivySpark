@@ -52,7 +52,6 @@ bin/privyspark-submit \
   --pre-scan-parallelism 6 \
   --group-parallelism 8 \
   --file-parallelism 4 \
-  --excel-max-rows-in-memory 2048 \
   --excel-byte-array-max-override 300000000 \
   --suppress prdctcd:driver_license_number \
   --ignore "_SUCCESS" \
@@ -61,11 +60,11 @@ bin/privyspark-submit \
 
 `--file-sample-ratio`는 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용됩니다. 실제 파일 샘플링이 적용된 그룹에서는 `--sample-ratio < 1.0` row sampling을 무시하고 warning 로그를 남깁니다.
 
-`--excel-max-rows-in-memory`를 생략하면 `spark.privyspark.excel.maxRowsInMemory` Spark conf를 사용하고, 이 conf도 없으면 기본값 `2048`을 spark-excel 실제 scan reader option으로 전달합니다.
+`xlsx` 실제 scan은 Spark executor task 안에서 StAX 기반 sheet row 스트리머로 처리합니다. `--excel-max-rows-in-memory`는 과거 spark-excel scan reader 호환용으로만 받으며, 명시하면 warning 로그를 남기고 실제 scan에는 사용하지 않습니다.
 
 `--excel-byte-array-max-override`는 Apache POI `IOUtils.setByteArrayMaxOverride` 값입니다. 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`을 적용합니다.
 
-`xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 Spark reader 경로에서 처리합니다. 빈 visible sheet는 header 기반 schema detection 이후 결과/오류 없이 건너뜁니다.
+`xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 executor task의 StAX 스트리머에서 처리합니다. 빈 visible sheet는 header 기반 schema detection 이후 결과/오류 없이 건너뜁니다.
 
 오탐 제외를 파일로 관리하려면 `--suppression-file`에 UTF-8 텍스트 파일을 넘길 수 있습니다. 파일 형식은 줄 단위 `column:pii_type`이며 빈 줄과 `#` 주석을 무시합니다. YARN cluster에서 client 로컬 suppression 파일을 쓰려면 `PRIVYSPARK_SPARK_FILES` 또는 `--files`로 먼저 배포해야 합니다.
 

@@ -27,8 +27,9 @@ The text/CSV fallback exists because extension-based filtering alone would rejec
 - During pre-scan, the driver lightly parses workbook metadata and header row XML to build visible sheet lists and schema signatures; it does not read sheet body row/cell contents.
 - Empty visible sheets are skipped without results or errors after header-based schema detection. Hidden and very hidden sheets are excluded.
 - Sheet identifiers use the `<workbook>#<sheet>` format.
-- `--excel-max-rows-in-memory` or `spark.privyspark.excel.maxRowsInMemory` is passed to spark-excel as the `maxRowsInMemory` reader option for actual scans. When both are omitted, PrivySpark passes the default value `2048`. This does not split a single sheet across executors; it enables a streaming reader path for large workbooks inside one reader task.
-- `--excel-byte-array-max-override` or `spark.privyspark.excel.byteArrayMaxOverride` adjusts the Apache POI byte array allocation limit. When both are omitted, PrivySpark applies the default value `300000000`.
+- Actual scans run through an executor-side StAX sheet row streamer. Shared strings are loaded for the lifetime of the task on the executor, while sheet XML rows are streamed.
+- `--excel-max-rows-in-memory` is accepted only for compatibility with the previous spark-excel scan reader. Explicitly setting it logs `excel_max_rows_in_memory_unused` and does not affect scan reads.
+- `--excel-byte-array-max-override` or `spark.privyspark.excel.byteArrayMaxOverride` adjusts the Apache POI byte array allocation limit for POI-backed paths such as Excel report writing. When both are omitted, PrivySpark applies the default value `300000000`.
 
 ## Grouping and Scan Units
 - The base scan unit is a file.

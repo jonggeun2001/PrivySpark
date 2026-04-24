@@ -18,7 +18,7 @@
 - `--pre-scan-parallelism <INT>`: 디렉터리 discovery, 파일 pre-scan 확장, schema split 병렬도, `> 0`
 - `--group-parallelism <INT>`: 그룹 스캔 병렬도, `> 0`
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
-- `--excel-max-rows-in-memory <INT>`: `xlsx` 읽기 시 spark-excel `maxRowsInMemory` reader option, 기본 `2048`, `> 0`
+- `--excel-max-rows-in-memory <INT>`: 과거 spark-excel scan reader 호환용 옵션, `> 0`; 명시하면 warning을 남기며 현재 `xlsx` scan에는 사용하지 않음
 - `--excel-byte-array-max-override <INT>`: Apache POI byte array allocation 상한 override, 기본 `300000000`, `> 0`
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
@@ -62,12 +62,12 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 여기서 중요한 점은 앱 레벨 병렬도가 곧 executor 수를 직접 보장하는 것은 아니라는 점입니다. 실제 executor 분산은 입력 파티션 수, Spark scheduler, dynamic allocation backlog에 함께 영향을 받습니다.
 
 ## Excel reader 설정
-- `--excel-max-rows-in-memory`를 지정하면 `xlsx` 실제 scan의 spark-excel reader에 `maxRowsInMemory` option으로 전달합니다.
-- CLI 값을 생략하면 `spark.privyspark.excel.maxRowsInMemory` Spark conf를 사용하고, 이 conf도 없으면 기본값 `2048`을 같은 reader option으로 전달합니다.
-- `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 Spark reader 경로에서 처리합니다.
-- `--excel-byte-array-max-override`를 지정하면 spark-excel 실제 읽기 경로에서 Apache POI `IOUtils.setByteArrayMaxOverride` 값을 적용합니다.
+- `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 Spark executor task의 StAX 스트리머에서 처리합니다.
+- `--excel-max-rows-in-memory`는 이전 spark-excel scan reader와의 CLI 호환을 위해 유지합니다. 값을 지정하면 `excel_max_rows_in_memory_unused` warning 로그를 남기고 scan 동작에는 사용하지 않습니다.
+- `spark.privyspark.excel.maxRowsInMemory` Spark conf도 현재 executor-side `xlsx` scan에는 영향을 주지 않습니다.
+- `--excel-byte-array-max-override`를 지정하면 Apache POI `IOUtils.setByteArrayMaxOverride` 값을 적용합니다. 이 설정은 POI 기반 Excel report writing 등 POI 사용 경로를 위한 호환 설정입니다.
 - CLI 값을 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`을 적용합니다.
-- 이 설정은 큰 workbook을 streaming reader 경로로 처리하기 위한 메모리 완화 옵션이며, 단일 `xlsx` 시트 자체를 row 단위로 split해서 여러 executor가 나눠 읽게 만들지는 않습니다.
+- executor-side `xlsx` 스트리머는 한 workbook sheet를 하나의 Spark task에서 읽습니다. 단일 시트 자체를 row 단위로 split해서 여러 executor가 나눠 읽게 만들지는 않으며, cache/persist도 추가하지 않아 여러 action에서는 workbook zip을 다시 읽습니다.
 
 ## 샘플링
 - `--sample-ratio`는 비결정적 row sampling입니다.

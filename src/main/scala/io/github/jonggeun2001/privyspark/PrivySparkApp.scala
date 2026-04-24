@@ -138,6 +138,7 @@ object PrivySparkApp {
     ExcelReadConfig.applyByteArrayMaxOverride(byteArrayMaxOverride)
     spark.conf.set(ExcelReadConfig.ByteArrayMaxOverrideConfKey, byteArrayMaxOverride.toString)
     spark.sparkContext.hadoopConfiguration.set(ExcelReadConfig.ByteArrayMaxOverrideConfKey, byteArrayMaxOverride.toString)
+    warnUnusedExcelMaxRowsInMemory(config.excelMaxRowsInMemory)
     val outputFormats = config.effectiveOutputFormats
     val csvHeadCache = new CsvHeadCache()
     val schemaSigCache = new SchemaSignatureCache()
@@ -313,6 +314,17 @@ object PrivySparkApp {
       schemaSigCache.clear()
       parseOkCache.clear()
       cleanupStagingPaths(spark.sparkContext.hadoopConfiguration, scanPlan.stagingPaths)
+    }
+  }
+
+  private[privyspark] def warnUnusedExcelMaxRowsInMemory(configured: Option[Int]): Unit = {
+    configured.foreach { value =>
+      DriverLogger.warn(
+        "excel_max_rows_in_memory_unused",
+        "argument" -> "--excel-max-rows-in-memory",
+        "value" -> value,
+        "reason" -> "executor_side_xlsx_scan"
+      )
     }
   }
 
