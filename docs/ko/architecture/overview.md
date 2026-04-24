@@ -52,6 +52,7 @@
 - 최종 출력 계약은 기본 `parquet/scan_results`, `parquet/scan_errors`이고, CLI `--output-format`에 따라 `csv/...`, `excel/*.xlsx`가 추가됩니다.
 - clean completion도 `meta/completions` marker를 남깁니다.
 - `_progress/<run_id>/in-flight` 아래 in-flight marker는 현재 실행 중인 작업을 보여주는 best-effort 진단 정보입니다. 완료된 작업과 처리 가능한 실패는 삭제되고, application `FAILED`로 이어지는 미복구 group/file 실패는 보존됩니다.
+- in-flight marker 파일명은 파일명에 안전한 UTF-8 문자/숫자와 `.`, `_`, `-`를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다.
 - `_progress`는 다음 실행 시작 시 stale 여부를 판정해 정리합니다. shutdown hook은 사용하지 않습니다.
 
 ## 왜 이렇게 설계했는가

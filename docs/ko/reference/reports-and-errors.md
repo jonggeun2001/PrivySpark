@@ -78,6 +78,7 @@
 - 진행 중 임시 shard는 `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, `meta/completions/*.jsonl`에 기록될 수 있습니다.
 - 작업이 실행 중일 때는 `<output>/_progress/<run_id>/in-flight/*.json`에 활성 group, file, allowlist snapshot rescan별 marker가 있을 수 있습니다.
 - in-flight marker는 운영 진단용입니다. 완료된 작업과 처리 가능한 실패는 marker를 삭제하지만, Spark application을 `FAILED`로 끝내는 미복구 group/file 실패는 marker를 보존합니다.
+- in-flight marker 파일명은 파일명에 안전한 UTF-8 문자/숫자와 `.`, `_`, `-`를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다. 원본 `identifier`는 marker JSON 본문에 유지됩니다.
 - clean completion은 탐지나 오류 row 없이 completion marker만 남깁니다.
 - 정상 종료 시 `_progress` 내용을 merge해 선택된 최종 출력 포맷을 만들고 `_progress/<run_id>`를 삭제합니다.
 

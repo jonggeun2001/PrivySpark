@@ -7,6 +7,7 @@ import org.apache.hadoop.fs.Path
 
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.function.IntConsumer
 import java.util.UUID
 import scala.util.control.NonFatal
 
@@ -52,12 +53,38 @@ private[privyspark] object InFlightMarker {
     }
   }
 
-  private def sanitize(identifier: String): String =
-    Option(identifier).getOrElse("").replaceAll("[^A-Za-z0-9._-]", "_")
+  private def sanitize(identifier: String): String = {
+    val raw = Option(identifier).getOrElse("")
+    val builder = new java.lang.StringBuilder(raw.length)
+
+    raw.codePoints().forEach(new IntConsumer {
+      override def accept(codePoint: Int): Unit = {
+        val isSafe =
+          Character.isLetterOrDigit(codePoint) ||
+            codePoint == '.' ||
+            codePoint == '_' ||
+            codePoint == '-'
+
+        if (isSafe) {
+          builder.appendCodePoint(codePoint)
+        } else {
+          builder.append('_')
+        }
+      }
+    })
+
+    builder.toString
+  }
+
+  private def takePrefix(value: String): String = {
+    val codePointCount = value.codePointCount(0, value.length)
+    val endIndex = value.offsetByCodePoints(0, Math.min(codePointCount, FilenamePrefixMaxLength))
+    value.substring(0, endIndex)
+  }
 
   private def markerFileName(identifier: String): String = {
     val safeIdentifier = sanitize(identifier)
-    val prefix = if (safeIdentifier.isEmpty) "marker" else safeIdentifier.take(FilenamePrefixMaxLength)
+    val prefix = if (safeIdentifier.isEmpty) "marker" else takePrefix(safeIdentifier)
     val hash = sha256Hex(Option(identifier).getOrElse("")).take(FilenameHashLength)
     s"$prefix-$hash-${UUID.randomUUID().toString}.json"
   }
