@@ -44,7 +44,7 @@
 - suppression은 `DetectionAggregator.buildMetrics`에서 metric plan 생성 전에 적용해 제외된 `(column, pii_type)` 조합이 결과 row 자체를 만들지 않게 합니다.
 - 디렉터리 discovery는 BFS 순회로 진행하고, 각 레벨의 `listStatus`는 safety ceiling `64` 안에서 병렬 실행합니다.
 - discovery 이후 pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
-- `xlsx` pre-scan은 드라이버에서 workbook metadata만 읽고 visible sheet 목록만 계획합니다. sheet row/cell 읽기와 빈 sheet 처리는 Spark reader 기반 schema/scan 단계로 넘깁니다.
+- `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 계획합니다. sheet body row/cell 읽기는 Spark reader 기반 scan 단계로 넘깁니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.
 - `--file-sample-ratio`는 batch scan과 file fallback scan에서 적용하고, 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.
 - 실제 file sampling이 적용된 그룹에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.

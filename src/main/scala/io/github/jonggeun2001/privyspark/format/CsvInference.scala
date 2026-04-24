@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.format
 
 import io.github.jonggeun2001.privyspark.format.ByteProbe.TextFormat
 import io.github.jonggeun2001.privyspark.format.CsvHeaderHeuristic.{detectCsvHasHeaderFromLines, inferCsvHeaderSignatureFromLines, parseCsvLine, readFirstNonBlankCsvLines}
-import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.workbookDataAddress
+import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.{inferWorkbookSheetSchemaSignature, workbookDataAddress}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, CsvDialect, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, SchemaSignatureCache}
@@ -69,12 +69,22 @@ private[privyspark] object CsvInference {
     try {
       val cached = schemaSigCache.getOrCompute(filePath, format, readOptions) {
         val schemaSignature = RetryIO.withFileReadRetry(spark, Seq(filePath), "schema_detection") {
-          val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
-          val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
-          if (format == "csv") {
-            normalizedFieldNames.mkString("|")
+          if (format == XlsxFormat) {
+            val sheetName = readOptions.sheetName.getOrElse {
+              throw new IllegalArgumentException("Sheet name is required for xlsx sources")
+            }
+            inferWorkbookSheetSchemaSignature(spark.sparkContext.hadoopConfiguration, filePath, sheetName) match {
+              case Right(signature) => signature
+              case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
+            }
           } else {
-            normalizedFieldNames.sorted.mkString("|")
+            val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
+            val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
+            if (format == "csv") {
+              normalizedFieldNames.mkString("|")
+            } else {
+              normalizedFieldNames.sorted.mkString("|")
+            }
           }
         }
         CachedSchemaSignature(schemaSignature, csvHasHeader = true)
