@@ -3,6 +3,7 @@
 ## 실행 모델
 - 공개 명령은 `privyspark scan`, `privyspark review apply`입니다.
 - 입력/출력 경로는 절대경로 또는 URI만 허용합니다.
+- 입력 파일명에 공백과 Spark glob 특수문자(`*`, `?`, `[`, `]`, `{`, `}`)가 포함되어도 실제 파일명으로 처리합니다. glob 문법은 `--ignore`, `--ignore-file` 패턴에만 적용됩니다.
 - Spark on YARN cluster 실행을 기본 전제로 합니다.
 - 빌드 산출물은 Shadow fat JAR(`*-all.jar`)입니다.
 

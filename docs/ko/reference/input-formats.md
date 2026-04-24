@@ -2,6 +2,7 @@
 
 ## 지원 입력
 - 확장자 기반 우선 지원: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`, `tar`, `tar.gz`, `tgz`, `tar.bz2`, `tbz2`, `tar.xz`, `txz`, `tar.zst`, `tzst`, `7z`, `rar`
+- physical file 경로의 공백은 그대로 허용하고, Spark glob 특수문자(`*`, `?`, `[`, `]`, `{`, `}`)는 schema detection과 scan reader에 literal path로 전달합니다. 이 처리는 ignore 패턴 문법과 별개로 실제 파일명에만 적용됩니다.
 - direct text-style data file(`csv`, `json`, `jsonl`, `ndjson`)에 붙은 outer compression wrapper `gz`, `bz2`는 원본 경로 그대로 Spark/Hadoop reader에 전달합니다. 예: `customers.csv.gz`, `events.json.bz2`
 - 무확장자 파일과 대부분의 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 먼저 판별합니다. 다만 `pdf`, `jpg` 같은 명확한 비데이터 바이너리 확장자는 probe 없이 바로 미지원 입력으로 분류합니다.
 - 매직바이트가 일치하지 않더라도 UTF-8 텍스트에서 안정적인 구분자와 헤더/데이터 구조가 확인되면 내부 `csv` 포맷으로 승격해 컬럼 단위로 스캔합니다. CSV dialect 감지에 실패하거나 텍스트 구조가 모호하면 UTF-8 또는 EUC-KR 텍스트처럼 보이는 입력은 내부 `text` 포맷으로 정규화해 단일 `value` 컬럼으로 스캔합니다.
