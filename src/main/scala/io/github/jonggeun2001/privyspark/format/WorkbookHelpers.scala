@@ -54,7 +54,7 @@ private[privyspark] object WorkbookHelpers {
   ): Either[String, String] = {
     try {
       resolveWorkbookSheetHeaders(conf, filePath, sheetName).right.map {
-        case (_, normalizedHeaderNames) => normalizedHeaderNames.map(_.toLowerCase).sorted.mkString("|")
+        case (_, normalizedHeaderNames, _) => normalizedHeaderNames.map(_.toLowerCase).sorted.mkString("|")
       }
     } catch {
       case NonFatal(e) =>
@@ -95,7 +95,7 @@ private[privyspark] object WorkbookHelpers {
     conf: org.apache.hadoop.conf.Configuration,
     filePath: String,
     sheetName: String
-  ): Either[String, (String, Seq[String])] = {
+  ): Either[String, (String, Seq[String], Int)] = {
     val sheetTarget = for {
       sheets <- readWorkbookSheets(conf, filePath).right
       sheet <- sheets.find(_.name == sheetName).toRight(s"Sheet not found: $sheetName").right
@@ -117,15 +117,20 @@ private[privyspark] object WorkbookHelpers {
             else readSharedStrings(conf, filePath, sharedStringIndexes)
 
           sharedStrings.right.flatMap { resolvedSharedStrings =>
-            val headerNames = headerCells
-              .sortBy(_.columnIndex)
-              .map(cell => resolveHeaderCellValue(cell.value, resolvedSharedStrings))
+            val headerNamesByIndex = headerCells.map { cell =>
+              cell.columnIndex -> resolveHeaderCellValue(cell.value, resolvedSharedStrings)
+            }.toMap
+            val minColumnIndex = 0
+            val maxColumnIndex = headerCells.map(_.columnIndex).max
+            val headerNames = (minColumnIndex to maxColumnIndex).map { index =>
+              headerNamesByIndex.getOrElse(index, "")
+            }
             val normalizedHeaderNames = normalizeHeaderNames(headerNames)
 
             if (normalizedHeaderNames.isEmpty) {
               Left("head of empty list")
             } else {
-              Right(targetEntry -> normalizedHeaderNames)
+              Right((targetEntry, normalizedHeaderNames, minColumnIndex))
             }
           }
         }

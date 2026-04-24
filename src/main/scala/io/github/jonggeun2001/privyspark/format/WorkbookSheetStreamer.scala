@@ -17,7 +17,7 @@ import scala.util.control.NonFatal
 private[privyspark] object WorkbookSheetStreamer {
   def readSheetDataFrame(spark: SparkSession, filePath: String, sheetName: String): DataFrame = {
     val conf = spark.sparkContext.hadoopConfiguration
-    val (sheetEntry, headers) = WorkbookHelpers.resolveWorkbookSheetHeaders(conf, filePath, sheetName) match {
+    val (sheetEntry, headers, startColumnIndex) = WorkbookHelpers.resolveWorkbookSheetHeaders(conf, filePath, sheetName) match {
       case Right(value) => value
       case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
     }
@@ -30,6 +30,7 @@ private[privyspark] object WorkbookSheetStreamer {
       filePath = filePath,
       sheetEntry = sheetEntry,
       headerColumnCount = headers.length,
+      startColumnIndex = startColumnIndex,
       use1904Windowing = use1904Windowing,
       serializableConf = new SerializableConfiguration(conf)
     )
@@ -42,6 +43,7 @@ private[privyspark] object WorkbookSheetStreamer {
     filePath: String,
     sheetEntry: String,
     headerColumnCount: Int,
+    startColumnIndex: Int,
     use1904Windowing: Boolean,
     serializableConf: SerializableConfiguration
   ) extends Serializable {
@@ -49,7 +51,16 @@ private[privyspark] object WorkbookSheetStreamer {
       val conf = serializableConf.value
       val sharedStrings = readSharedStrings(conf, filePath)
       val styles = readStyles(conf, filePath)
-      val iterator = SheetRowIterator.open(conf, filePath, sheetEntry, headerColumnCount, use1904Windowing, sharedStrings, styles)
+      val iterator = SheetRowIterator.open(
+        conf,
+        filePath,
+        sheetEntry,
+        headerColumnCount,
+        startColumnIndex,
+        use1904Windowing,
+        sharedStrings,
+        styles
+      )
       Option(TaskContext.get()).foreach { context =>
         context.addTaskCompletionListener[Unit](_ => iterator.close())
       }
@@ -108,6 +119,7 @@ private[privyspark] object WorkbookSheetStreamer {
     input: OpenZipEntry,
     reader: XMLStreamReader,
     headerColumnCount: Int,
+    startColumnIndex: Int,
     use1904Windowing: Boolean,
     sharedStrings: Map[Int, String],
     styles: Option[StylesTable]
@@ -230,8 +242,9 @@ private[privyspark] object WorkbookSheetStreamer {
           currentInlineText.append(currentText.toString)
           currentTextElement = None
         case "c" if inCell =>
-          if (!skipCurrentRow && currentCellColumnIndex >= 0 && currentCellColumnIndex < headerColumnCount) {
-            currentRowValues(currentCellColumnIndex) = cellValue()
+          val outputColumnIndex = currentCellColumnIndex - startColumnIndex
+          if (!skipCurrentRow && outputColumnIndex >= 0 && outputColumnIndex < headerColumnCount) {
+            currentRowValues(outputColumnIndex) = cellValue()
           }
           inCell = false
         case "row" if inSheetData =>
@@ -324,6 +337,7 @@ private[privyspark] object WorkbookSheetStreamer {
       filePath: String,
       sheetEntry: String,
       headerColumnCount: Int,
+      startColumnIndex: Int,
       use1904Windowing: Boolean,
       sharedStrings: Map[Int, String],
       styles: Option[StylesTable]
@@ -337,7 +351,7 @@ private[privyspark] object WorkbookSheetStreamer {
             input.close()
             throw e
         }
-      new SheetRowIterator(input, reader, headerColumnCount, use1904Windowing, sharedStrings, styles)
+      new SheetRowIterator(input, reader, headerColumnCount, startColumnIndex, use1904Windowing, sharedStrings, styles)
     }
 
     private def createXmlReader(inputStream: InputStream): XMLStreamReader = {

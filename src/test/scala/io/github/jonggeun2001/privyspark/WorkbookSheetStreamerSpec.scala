@@ -91,6 +91,25 @@ class WorkbookSheetStreamerSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("preserves header column gaps instead of compressing xlsx columns") {
+    val tempDir = Files.createTempDirectory("privyspark-workbook-streamer-header-gaps-")
+    val workbookPath = tempDir.resolve("header-gaps.xlsx")
+
+    try {
+      writeHeaderGapWorkbook(workbookPath)
+
+      val missingA = WorkbookSheetStreamer.readSheetDataFrame(spark, workbookPath.toString, "MissingA")
+      val missingB = WorkbookSheetStreamer.readSheetDataFrame(spark, workbookPath.toString, "MissingB")
+
+      assert(missingA.schema.fieldNames.toSeq == Seq("_c0", "email", "phone"))
+      assert(collectRows(missingA) == Seq(Seq(null, "alice@example.com", "010-1234-5678")))
+      assert(missingB.schema.fieldNames.toSeq == Seq("email", "_c1", "phone"))
+      assert(collectRows(missingB) == Seq(Seq("alice@example.com", null, "010-1234-5678")))
+    } finally {
+      deleteRecursively(tempDir)
+    }
+  }
+
   test("formats numeric cells with workbook display styles") {
     val tempDir = Files.createTempDirectory("privyspark-workbook-streamer-formats-")
     val workbookPath = tempDir.resolve("formats.xlsx")
@@ -346,6 +365,7 @@ class WorkbookSheetStreamerSpec extends AnyFunSuite with BeforeAndAfterAll {
         |</Relationships>""".stripMargin)
       addZipEntry(outputStream, "xl/worksheets/sheet1.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <dimension ref="A1:C2"/>
         |  <sheetData>
         |    <row r="1">
         |      <c r="A1" t="inlineStr"><is><t>name</t></is></c>
@@ -356,6 +376,66 @@ class WorkbookSheetStreamerSpec extends AnyFunSuite with BeforeAndAfterAll {
         |      <c r="A2" t="inlineStr"><is><t>Alice</t></is></c>
         |      <c r="B2" t="str"><f>CONCAT("computed")</f><v>computed</v></c>
         |      <c r="C2" t="b"><v>1</v></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>""".stripMargin)
+    } finally {
+      outputStream.close()
+    }
+  }
+
+  private def writeHeaderGapWorkbook(path: Path): Unit = {
+    val outputStream = new ZipOutputStream(Files.newOutputStream(path))
+    try {
+      addZipEntry(outputStream, "[Content_Types].xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+        |  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+        |  <Default Extension="xml" ContentType="application/xml"/>
+        |  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+        |  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+        |  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+        |</Types>""".stripMargin)
+      addZipEntry(outputStream, "_rels/.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        |  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+        |</Relationships>""".stripMargin)
+      addZipEntry(outputStream, "xl/workbook.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        |          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        |  <sheets>
+        |    <sheet name="MissingA" sheetId="1" r:id="rId1"/>
+        |    <sheet name="MissingB" sheetId="2" r:id="rId2"/>
+        |  </sheets>
+        |</workbook>""".stripMargin)
+      addZipEntry(outputStream, "xl/_rels/workbook.xml.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        |  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+        |  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+        |</Relationships>""".stripMargin)
+      addZipEntry(outputStream, "xl/worksheets/sheet1.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="B1" t="inlineStr"><is><t>email</t></is></c>
+        |      <c r="C1" t="inlineStr"><is><t>phone</t></is></c>
+        |    </row>
+        |    <row r="2">
+        |      <c r="B2" t="inlineStr"><is><t>alice@example.com</t></is></c>
+        |      <c r="C2" t="inlineStr"><is><t>010-1234-5678</t></is></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>""".stripMargin)
+      addZipEntry(outputStream, "xl/worksheets/sheet2.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <dimension ref="A1:C2"/>
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="A1" t="inlineStr"><is><t>email</t></is></c>
+        |      <c r="C1" t="inlineStr"><is><t>phone</t></is></c>
+        |    </row>
+        |    <row r="2">
+        |      <c r="A2" t="inlineStr"><is><t>alice@example.com</t></is></c>
+        |      <c r="C2" t="inlineStr"><is><t>010-1234-5678</t></is></c>
         |    </row>
         |  </sheetData>
         |</worksheet>""".stripMargin)
