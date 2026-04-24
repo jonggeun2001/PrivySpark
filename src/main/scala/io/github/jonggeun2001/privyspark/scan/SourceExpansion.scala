@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.scan.ArchiveStaging._
 import io.github.jonggeun2001.privyspark.format.ByteProbe._
 import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
+import io.github.jonggeun2001.privyspark.format.ExcelReadConfig
 import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.listVisibleWorkbookSheets
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanFileEntry, ScanGroup, ScanReadOptions}
@@ -123,6 +124,7 @@ private[privyspark] object SourceExpansion {
     fileMtimeEpochMs: Long = 0L,
     readOptions: ScanReadOptions = ScanReadOptions()
   ): (Seq[ScanFileEntry], Seq[ScanError]) = {
+    readOptions.excelByteArrayMaxOverride.foreach(ExcelReadConfig.applyByteArrayMaxOverride)
     listVisibleWorkbookSheets(conf, physicalPath) match {
       case Right(sheetNames) =>
         (

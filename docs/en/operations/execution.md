@@ -18,6 +18,7 @@
 - `--group-parallelism <INT>`: group scan parallelism, `> 0`
 - `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
 - `--excel-max-rows-in-memory <INT>`: spark-excel `maxRowsInMemory` reader option for `xlsx` reads, default `2048`, `> 0`
+- `--excel-byte-array-max-override <INT>`: Apache POI byte array allocation max override, default `300000000`, `> 0`
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
@@ -62,6 +63,8 @@ These settings do not directly guarantee executor fan-out. Actual executor distr
 ## Excel Reader Configuration
 - When `--excel-max-rows-in-memory` is set, PrivySpark passes it to the spark-excel reader as `maxRowsInMemory` for `xlsx` schema detection and actual scans.
 - When the CLI option is omitted, PrivySpark uses the `spark.privyspark.excel.maxRowsInMemory` Spark conf, and if that conf is also absent it passes the default value `2048`.
+- When `--excel-byte-array-max-override` is set, PrivySpark applies Apache POI `IOUtils.setByteArrayMaxOverride` on the driver prescan path and the spark-excel read path.
+- When the CLI option is omitted, PrivySpark uses the `spark.privyspark.excel.byteArrayMaxOverride` Spark conf, and if that conf is also absent it applies the default value `300000000`.
 - This setting reduces memory pressure by enabling the streaming reader path for large workbooks; it does not make a single `xlsx` sheet row-splittable across executors.
 
 ## Sampling

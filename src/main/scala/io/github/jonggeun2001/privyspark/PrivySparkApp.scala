@@ -131,6 +131,13 @@ object PrivySparkApp {
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
     val (preScanParallelism, groupParallelism, fileParallelism) =
       resolveCliParallelism(config.preScanParallelism, config.groupParallelism, config.fileParallelism)
+    val byteArrayMaxOverride = ExcelReadConfig.resolveByteArrayMaxOverride(
+      spark.sparkContext.getConf,
+      config.excelByteArrayMaxOverride
+    )
+    ExcelReadConfig.applyByteArrayMaxOverride(byteArrayMaxOverride)
+    spark.conf.set(ExcelReadConfig.ByteArrayMaxOverrideConfKey, byteArrayMaxOverride.toString)
+    spark.sparkContext.hadoopConfiguration.set(ExcelReadConfig.ByteArrayMaxOverrideConfKey, byteArrayMaxOverride.toString)
     val outputFormats = config.effectiveOutputFormats
     val csvHeadCache = new CsvHeadCache()
     val schemaSigCache = new SchemaSignatureCache()
@@ -156,6 +163,7 @@ object PrivySparkApp {
       "configured_group_parallelism" -> renderConfiguredParallelism(config.groupParallelism),
       "configured_file_parallelism" -> renderConfiguredParallelism(config.fileParallelism),
       "configured_excel_max_rows_in_memory" -> ExcelReadConfig.renderConfiguredMaxRowsInMemory(config.excelMaxRowsInMemory),
+      "configured_excel_byte_array_max_override" -> ExcelReadConfig.renderConfiguredByteArrayMaxOverride(config.excelByteArrayMaxOverride),
       "output_formats" -> outputFormats.mkString(","),
       "ignore_patterns" -> config.ignorePatterns.size,
       "ignore_file" -> config.ignoreFile.getOrElse("none"),
@@ -196,7 +204,10 @@ object PrivySparkApp {
       csvHeadCache = csvHeadCache,
       schemaSigCache = schemaSigCache,
       parseOkCache = parseOkCache,
-      readOptions = ScanReadOptions(excelMaxRowsInMemory = config.excelMaxRowsInMemory)
+      readOptions = ScanReadOptions(
+        excelMaxRowsInMemory = config.excelMaxRowsInMemory,
+        excelByteArrayMaxOverride = Some(byteArrayMaxOverride)
+      )
     )
 
     var progressRun: Option[ProgressRun] = None
