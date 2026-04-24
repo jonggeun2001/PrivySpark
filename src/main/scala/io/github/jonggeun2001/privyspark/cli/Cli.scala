@@ -17,6 +17,7 @@ final case class CliConfig(
   groupParallelism: Option[Int] = None,
   fileParallelism: Option[Int] = None,
   excelMaxRowsInMemory: Option[Int] = None,
+  excelByteArrayMaxOverride: Option[Int] = None,
   outputFormats: Seq[String] = Seq.empty,
   ignorePatterns: Seq[String] = Seq.empty,
   ignoreFile: Option[String] = None,
@@ -139,6 +140,14 @@ object Cli {
           else failure("excel-max-rows-in-memory must be > 0")
         }
         .text("xlsx 읽기 시 spark-excel maxRowsInMemory 옵션(정수 > 0)"),
+      opt[Int]("excel-byte-array-max-override")
+        .optional()
+        .action((value, config) => config.copy(excelByteArrayMaxOverride = Some(value)))
+        .validate { value =>
+          if (value > 0) success
+          else failure("excel-byte-array-max-override must be > 0")
+        }
+        .text("POI IOUtils.setByteArrayMaxOverride 값(정수 > 0, 미지정 시 300000000)"),
       opt[String]("output-format")
         .unbounded()
         .optional()

@@ -13,7 +13,8 @@ private[privyspark] final case class ScanReadOptions(
   sheetName: Option[String] = None,
   textEncoding: Option[String] = None,
   csvDialect: Option[CsvDialect] = None,
-  excelMaxRowsInMemory: Option[Int] = None
+  excelMaxRowsInMemory: Option[Int] = None,
+  excelByteArrayMaxOverride: Option[Int] = None
 )
 
 private[privyspark] final case class ScanFileEntry(
