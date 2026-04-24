@@ -43,6 +43,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - 파일별 `getFileStatus`
 - 미지원 확장자/무확장자 probe
 - CSV dialect probe
+- `xlsx` workbook metadata 기반 visible sheet 목록 확장
 - 대량 `Future` 제출과 결과 수집
 - `(directory, format)` 그룹화와 정렬
 

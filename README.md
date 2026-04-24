@@ -64,6 +64,8 @@ bin/privyspark-submit \
 
 `--excel-byte-array-max-override`는 Apache POI `IOUtils.setByteArrayMaxOverride` 값입니다. 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`을 적용합니다.
 
+`xlsx` pre-scan은 드라이버에서 workbook metadata만 읽어 visible sheet 목록을 만들고, sheet row/cell 내용은 Spark reader 경로에서 처리합니다. 빈 visible sheet는 Spark reader 기반 schema detection 이후 결과/오류 없이 건너뜁니다.
+
 오탐 제외를 파일로 관리하려면 `--suppression-file`에 UTF-8 텍스트 파일을 넘길 수 있습니다. 파일 형식은 줄 단위 `column:pii_type`이며 빈 줄과 `#` 주석을 무시합니다. YARN cluster에서 client 로컬 suppression 파일을 쓰려면 `PRIVYSPARK_SPARK_FILES` 또는 `--files`로 먼저 배포해야 합니다.
 
 자세한 실행 절차와 옵션은 [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/ko/operations/execution.md](docs/ko/operations/execution.md)에 정리돼 있습니다.

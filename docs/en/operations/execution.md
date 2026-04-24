@@ -63,7 +63,8 @@ These settings do not directly guarantee executor fan-out. Actual executor distr
 ## Excel Reader Configuration
 - When `--excel-max-rows-in-memory` is set, PrivySpark passes it to the spark-excel reader as `maxRowsInMemory` for `xlsx` schema detection and actual scans.
 - When the CLI option is omitted, PrivySpark uses the `spark.privyspark.excel.maxRowsInMemory` Spark conf, and if that conf is also absent it passes the default value `2048`.
-- When `--excel-byte-array-max-override` is set, PrivySpark applies Apache POI `IOUtils.setByteArrayMaxOverride` on the driver prescan path and the spark-excel read path.
+- During `xlsx` pre-scan, the driver reads only workbook metadata to list visible sheets; sheet row/cell contents are handled by the Spark reader path.
+- When `--excel-byte-array-max-override` is set, PrivySpark applies Apache POI `IOUtils.setByteArrayMaxOverride` on the spark-excel read path.
 - When the CLI option is omitted, PrivySpark uses the `spark.privyspark.excel.byteArrayMaxOverride` Spark conf, and if that conf is also absent it applies the default value `300000000`.
 - This setting reduces memory pressure by enabling the streaming reader path for large workbooks; it does not make a single `xlsx` sheet row-splittable across executors.
 

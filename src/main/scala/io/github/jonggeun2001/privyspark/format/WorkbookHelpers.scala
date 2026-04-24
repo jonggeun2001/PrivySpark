@@ -1,28 +1,18 @@
 package io.github.jonggeun2001.privyspark.format
 
 import org.apache.hadoop.fs.Path
-import org.apache.poi.ss.usermodel.WorkbookFactory
 
+import java.io.InputStream
+import java.util.zip.ZipInputStream
+import javax.xml.stream.{XMLInputFactory, XMLStreamConstants}
+import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
 private[privyspark] object WorkbookHelpers {
+  private val WorkbookXmlEntry = "xl/workbook.xml"
+
   def workbookDataAddress(sheetName: String): String = {
     s"'${sheetName.replace("'", "''")}'!A1"
-  }
-
-  private def sheetHasContent(sheet: org.apache.poi.ss.usermodel.Sheet): Boolean = {
-    val rowIterator = sheet.rowIterator()
-    while (rowIterator.hasNext) {
-      val row = rowIterator.next()
-      val cellIterator = row.cellIterator()
-      while (cellIterator.hasNext) {
-        val cell = cellIterator.next()
-        if (cell != null && cell.toString.trim.nonEmpty) {
-          return true
-        }
-      }
-    }
-    false
   }
 
   def listVisibleWorkbookSheets(
@@ -32,27 +22,64 @@ private[privyspark] object WorkbookHelpers {
     val sourcePath = new Path(filePath)
     val fs = sourcePath.getFileSystem(conf)
     val inputStream = fs.open(sourcePath)
+    val zipInputStream = new ZipInputStream(inputStream)
     try {
-      val workbook = WorkbookFactory.create(inputStream)
-      try {
-        val sheetNames = (0 until workbook.getNumberOfSheets).flatMap { index =>
-          val hidden = workbook.isSheetHidden(index) || workbook.isSheetVeryHidden(index)
-          val sheet = workbook.getSheetAt(index)
-          if (!hidden && sheetHasContent(sheet)) Some(sheet.getSheetName) else None
+      var entry = zipInputStream.getNextEntry
+      while (entry != null) {
+        if (!entry.isDirectory && normalizeEntryName(entry.getName) == WorkbookXmlEntry) {
+          val sheetNames = readVisibleSheetNames(zipInputStream)
+          if (sheetNames.nonEmpty) {
+            return Right(sheetNames)
+          } else {
+            return Left("No visible sheets found")
+          }
         }
-        if (sheetNames.nonEmpty) {
-          Right(sheetNames)
-        } else {
-          Left("No non-empty visible sheets found")
-        }
-      } finally {
-        workbook.close()
+        zipInputStream.closeEntry()
+        entry = zipInputStream.getNextEntry
       }
+      Left("Workbook metadata not found")
     } catch {
       case NonFatal(e) =>
         Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
     } finally {
-      inputStream.close()
+      zipInputStream.close()
+    }
+  }
+
+  private def normalizeEntryName(name: String): String =
+    Option(name).getOrElse("").stripPrefix("/")
+
+  private def readVisibleSheetNames(inputStream: InputStream): Seq[String] = {
+    val factory = XMLInputFactory.newFactory()
+    disableXmlExternalEntities(factory)
+    val reader = factory.createXMLStreamReader(inputStream)
+    val sheetNames = ArrayBuffer.empty[String]
+    try {
+      while (reader.hasNext) {
+        if (reader.next() == XMLStreamConstants.START_ELEMENT && reader.getLocalName == "sheet") {
+          val name = Option(reader.getAttributeValue(null, "name")).map(_.trim).getOrElse("")
+          val state = Option(reader.getAttributeValue(null, "state")).map(_.trim.toLowerCase).getOrElse("")
+          if (name.nonEmpty && state != "hidden" && state != "veryhidden") {
+            sheetNames += name
+          }
+        }
+      }
+    } finally {
+      reader.close()
+    }
+    sheetNames.toSeq
+  }
+
+  private def disableXmlExternalEntities(factory: XMLInputFactory): Unit = {
+    try {
+      factory.setProperty(XMLInputFactory.SUPPORT_DTD, false)
+    } catch {
+      case _: IllegalArgumentException =>
+    }
+    try {
+      factory.setProperty("javax.xml.stream.isSupportingExternalEntities", false)
+    } catch {
+      case _: IllegalArgumentException =>
     }
   }
 }

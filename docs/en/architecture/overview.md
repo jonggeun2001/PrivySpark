@@ -25,7 +25,7 @@
 1. validate input path
 2. load ruleset, pre-validate regexes, and merge ruleset/CLI suppressions
 3. collect physical files and apply ignore-pattern filtering
-4. expand archive entries and workbook sheets, pass through direct compressed text-style inputs, probe magic bytes, detect CSV dialects, normalize text fallback, and filter ignored archive entries
+4. expand archive entries and workbook sheets from workbook metadata, pass through direct compressed text-style inputs, probe magic bytes, detect CSV dialects, normalize text fallback, and filter ignored archive entries
 5. build first-pass groups by `(directory, format)`
 6. sample a representative file for schema detection
 7. perform schema-aware split and determine whether directory identifiers are safe
@@ -44,6 +44,7 @@
 - Suppression is applied during `DetectionAggregator.buildMetrics`, before metric planning, so excluded `(column, pii_type)` pairs never materialize result rows.
 - Directory discovery uses breadth-first traversal and parallelizes `listStatus` per BFS level, capped by the safety ceiling `64`.
 - After file discovery, effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
+- `xlsx` pre-scan reads only workbook metadata on the driver and plans visible sheets. Sheet row/cell reads and empty-sheet handling are deferred to Spark reader-based schema/scan paths.
 - `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.
 - `--file-sample-ratio` applies to both batch scans and file-fallback scans, but only when a group has more files than `--file-sample-min-files`; when it does apply, PrivySpark uniformly samples at least one file using `ceil(fileCount * ratio)`.
 - When file sampling actually applies, `--sample-ratio < 1.0` is ignored for that group and a warning is logged.

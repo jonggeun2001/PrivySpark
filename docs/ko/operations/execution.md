@@ -63,7 +63,8 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 ## Excel reader 설정
 - `--excel-max-rows-in-memory`를 지정하면 `xlsx` schema detection과 실제 scan의 spark-excel reader에 `maxRowsInMemory` option으로 전달합니다.
 - CLI 값을 생략하면 `spark.privyspark.excel.maxRowsInMemory` Spark conf를 사용하고, 이 conf도 없으면 기본값 `2048`을 같은 reader option으로 전달합니다.
-- `--excel-byte-array-max-override`를 지정하면 드라이버 프리스캔과 spark-excel 실제 읽기 경로에서 Apache POI `IOUtils.setByteArrayMaxOverride` 값을 적용합니다.
+- `xlsx` pre-scan은 드라이버에서 workbook metadata만 읽어 visible sheet 목록을 만들고, sheet row/cell 내용은 Spark reader 경로에서 처리합니다.
+- `--excel-byte-array-max-override`를 지정하면 spark-excel 실제 읽기 경로에서 Apache POI `IOUtils.setByteArrayMaxOverride` 값을 적용합니다.
 - CLI 값을 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`을 적용합니다.
 - 이 설정은 큰 workbook을 streaming reader 경로로 처리하기 위한 메모리 완화 옵션이며, 단일 `xlsx` 시트 자체를 row 단위로 split해서 여러 executor가 나눠 읽게 만들지는 않습니다.
 
