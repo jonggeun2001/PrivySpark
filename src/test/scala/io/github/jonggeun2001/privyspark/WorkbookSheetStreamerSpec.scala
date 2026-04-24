@@ -91,6 +91,42 @@ class WorkbookSheetStreamerSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("formats numeric cells with workbook display styles") {
+    val tempDir = Files.createTempDirectory("privyspark-workbook-streamer-formats-")
+    val workbookPath = tempDir.resolve("formats.xlsx")
+
+    try {
+      writeWorkbook(workbookPath) { workbook =>
+        val dataFormat = workbook.createDataFormat()
+        val phoneStyle = workbook.createCellStyle()
+        phoneStyle.setDataFormat(dataFormat.getFormat("000-0000-0000"))
+        val dateStyle = workbook.createCellStyle()
+        dateStyle.setDataFormat(dataFormat.getFormat("yyyy-mm-dd"))
+
+        val sheet = workbook.createSheet("Formats")
+        val header = sheet.createRow(0)
+        header.createCell(0).setCellValue("phone")
+        header.createCell(1).setCellValue("birth_date")
+
+        val row = sheet.createRow(1)
+        val phone = row.createCell(0)
+        phone.setCellValue(1012345678d)
+        phone.setCellStyle(phoneStyle)
+        val date = row.createCell(1)
+        date.setCellValue(java.sql.Date.valueOf("2026-04-24"))
+        date.setCellStyle(dateStyle)
+      }
+
+      val expected = collectRows(sparkExcelRead(workbookPath, "Formats"))
+      val actual = collectRows(WorkbookSheetStreamer.readSheetDataFrame(spark, workbookPath.toString, "Formats"))
+
+      assert(actual == expected)
+      assert(actual == Seq(Seq("010-1234-5678", "2026-04-24")))
+    } finally {
+      deleteRecursively(tempDir)
+    }
+  }
+
   test("returns schema-only dataframe when a sheet has no data rows") {
     val tempDir = Files.createTempDirectory("privyspark-workbook-streamer-empty-")
     val workbookPath = tempDir.resolve("empty.xlsx")

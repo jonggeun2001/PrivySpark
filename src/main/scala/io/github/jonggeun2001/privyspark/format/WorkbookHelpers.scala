@@ -13,6 +13,7 @@ private[privyspark] object WorkbookHelpers {
   private val WorkbookXmlEntry = "xl/workbook.xml"
   private val WorkbookRelationshipsEntry = "xl/_rels/workbook.xml.rels"
   private[format] val SharedStringsEntry = "xl/sharedStrings.xml"
+  private[format] val StylesEntry = "xl/styles.xml"
   private val RelationshipsNamespace = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
   private case class WorkbookSheet(name: String, state: String, relationshipId: Option[String]) {

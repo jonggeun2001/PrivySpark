@@ -3,6 +3,8 @@ package io.github.jonggeun2001.privyspark.format
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
+import org.apache.poi.ss.usermodel.DataFormatter
+import org.apache.poi.xssf.model.StylesTable
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
@@ -40,7 +42,8 @@ private[privyspark] object WorkbookSheetStreamer {
     def rows(): Iterator[Row] = {
       val conf = serializableConf.value
       val sharedStrings = readSharedStrings(conf, filePath)
-      val iterator = SheetRowIterator.open(conf, filePath, sheetEntry, headerColumnCount, sharedStrings)
+      val styles = readStyles(conf, filePath)
+      val iterator = SheetRowIterator.open(conf, filePath, sheetEntry, headerColumnCount, sharedStrings, styles)
       Option(TaskContext.get()).foreach { context =>
         context.addTaskCompletionListener[Unit](_ => iterator.close())
       }
@@ -53,6 +56,15 @@ private[privyspark] object WorkbookSheetStreamer {
       .withZipEntry(conf, filePath, WorkbookHelpers.SharedStringsEntry)(WorkbookHelpers.readAllSharedStrings) match {
       case Right(sharedStrings) => sharedStrings
       case Left(errorMessage) if errorMessage.startsWith("Workbook part not found:") => Map.empty
+      case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
+    }
+  }
+
+  private def readStyles(conf: Configuration, filePath: String): Option[StylesTable] = {
+    WorkbookHelpers
+      .withZipEntry(conf, filePath, WorkbookHelpers.StylesEntry)(inputStream => new StylesTable(inputStream)) match {
+      case Right(styles) => Some(styles)
+      case Left(errorMessage) if errorMessage.startsWith("Workbook part not found:") => None
       case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
     }
   }
@@ -90,8 +102,10 @@ private[privyspark] object WorkbookSheetStreamer {
     input: OpenZipEntry,
     reader: XMLStreamReader,
     headerColumnCount: Int,
-    sharedStrings: Map[Int, String]
+    sharedStrings: Map[Int, String],
+    styles: Option[StylesTable]
   ) extends Iterator[Row] with AutoCloseable {
+    private val dataFormatter = new DataFormatter()
     private var nextRow: Option[Row] = None
     private var loaded = false
     private var closed = false
@@ -102,6 +116,7 @@ private[privyspark] object WorkbookSheetStreamer {
     private var currentRowValues = Array.fill[String](headerColumnCount)(null)
     private var inCell = false
     private var currentCellColumnIndex = 0
+    private var currentCellStyleIndex: Option[Int] = None
     private var currentCellType = ""
     private var currentTextElement: Option[String] = None
     private var currentText = new StringBuilder
@@ -176,6 +191,7 @@ private[privyspark] object WorkbookSheetStreamer {
         case "c" if inSheetData =>
           inCell = true
           currentCellType = attributeValue(reader, "t").map(_.trim).getOrElse("")
+          currentCellStyleIndex = attributeValue(reader, "s").flatMap(parseInt)
           currentCellColumnIndex = attributeValue(reader, "r")
             .flatMap(WorkbookHelpers.cellReferenceColumnIndex)
             .getOrElse {
@@ -234,11 +250,45 @@ private[privyspark] object WorkbookSheetStreamer {
           }
         case "inlineStr" =>
           currentInlineText.toString
+        case "" | "n" =>
+          formattedNumericCellValue()
         case _ if currentValue.nonEmpty =>
           currentValue
         case _ =>
           null
       }
+    }
+
+    private def formattedNumericCellValue(): String = {
+      val trimmed = currentValue.trim
+      if (trimmed.isEmpty) {
+        null
+      } else {
+        val numericValue =
+          try {
+            Some(trimmed.toDouble)
+          } catch {
+            case _: NumberFormatException => None
+          }
+        numericValue match {
+          case Some(value) =>
+            currentCellStyle.flatMap { style =>
+              Option(style.getDataFormatString).map { dataFormatString =>
+                dataFormatter.formatRawCellContents(value, style.getDataFormat.toInt, dataFormatString)
+              }
+            }.getOrElse(currentValue)
+          case None =>
+            currentValue
+        }
+      }
+    }
+
+    private def currentCellStyle = {
+      for {
+        table <- styles
+        index = currentCellStyleIndex.getOrElse(0)
+        if index >= 0 && index < table.getNumCellStyles
+      } yield table.getStyleAt(index)
     }
 
     private def attributeValue(reader: XMLStreamReader, localName: String): Option[String] = {
@@ -262,7 +312,8 @@ private[privyspark] object WorkbookSheetStreamer {
       filePath: String,
       sheetEntry: String,
       headerColumnCount: Int,
-      sharedStrings: Map[Int, String]
+      sharedStrings: Map[Int, String],
+      styles: Option[StylesTable]
     ): SheetRowIterator = {
       val input = OpenZipEntry.open(conf, filePath, sheetEntry)
       val reader =
@@ -273,7 +324,7 @@ private[privyspark] object WorkbookSheetStreamer {
             input.close()
             throw e
         }
-      new SheetRowIterator(input, reader, headerColumnCount, sharedStrings)
+      new SheetRowIterator(input, reader, headerColumnCount, sharedStrings, styles)
     }
 
     private def createXmlReader(inputStream: InputStream): XMLStreamReader = {
