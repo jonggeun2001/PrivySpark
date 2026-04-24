@@ -87,4 +87,48 @@ class WorkbookHelpersSpec extends AnyFunSuite {
       Files.deleteIfExists(tempDir)
     }
   }
+
+  test("inferWorkbookSheetSchemaSignature follows spark-excel blank and duplicate header names") {
+    val tempDir = Files.createTempDirectory("privyspark-workbook-schema-headers-")
+    val workbookPath = tempDir.resolve("headers.xlsx")
+
+    try {
+      val workbook = new XSSFWorkbook()
+      try {
+        val mixedHeaders = workbook.createSheet("MixedHeaders")
+        val mixedHeaderRow = mixedHeaders.createRow(0)
+        mixedHeaderRow.createCell(0).setCellValue("")
+        mixedHeaderRow.createCell(1).setCellValue("email")
+        mixedHeaderRow.createCell(2).setCellValue("email")
+        mixedHeaders.createRow(1).createCell(1).setCellValue("alice@example.com")
+
+        val blankHeader = workbook.createSheet("BlankHeader")
+        blankHeader.createRow(0).createCell(0).setCellValue("")
+        blankHeader.createRow(1).createCell(0).setCellValue("value")
+
+        val outputStream = Files.newOutputStream(workbookPath)
+        try {
+          workbook.write(outputStream)
+        } finally {
+          outputStream.close()
+        }
+      } finally {
+        workbook.close()
+      }
+
+      val conf = new Configuration()
+
+      assert(
+        WorkbookHelpers.inferWorkbookSheetSchemaSignature(conf, workbookPath.toString, "MixedHeaders") ==
+          Right("_c0|email1|email2")
+      )
+      assert(
+        WorkbookHelpers.inferWorkbookSheetSchemaSignature(conf, workbookPath.toString, "BlankHeader") ==
+          Right("_c0")
+      )
+    } finally {
+      Files.deleteIfExists(workbookPath)
+      Files.deleteIfExists(tempDir)
+    }
+  }
 }

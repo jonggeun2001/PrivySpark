@@ -76,12 +76,12 @@ private[privyspark] object WorkbookHelpers {
               val headerNames = headerCells
                 .sortBy(_.columnIndex)
                 .map(cell => resolveHeaderCellValue(cell.value, resolvedSharedStrings))
-                .filter(_.nonEmpty)
+              val normalizedHeaderNames = normalizeHeaderNames(headerNames)
 
-              if (headerNames.isEmpty) {
+              if (normalizedHeaderNames.isEmpty) {
                 Left("head of empty list")
               } else {
-                Right(deduplicateHeaderNames(headerNames).map(_.toLowerCase).sorted.mkString("|"))
+                Right(normalizedHeaderNames.map(_.toLowerCase).sorted.mkString("|"))
               }
             }
           }
@@ -261,9 +261,9 @@ private[privyspark] object WorkbookHelpers {
                 currentInlineText.append(currentText.toString)
                 currentTextElement = None
               case "c" if inHeaderRow =>
-                headerCellValue(currentCellType, currentValue, currentInlineText.toString).foreach { value =>
-                  headerCells += HeaderCell(currentCellColumnIndex, value)
-                }
+                val value = headerCellValue(currentCellType, currentValue, currentInlineText.toString)
+                  .getOrElse(LiteralHeaderValue(""))
+                headerCells += HeaderCell(currentCellColumnIndex, value)
               case "row" if inHeaderRow =>
                 inHeaderRow = false
                 finished = true
@@ -356,12 +356,13 @@ private[privyspark] object WorkbookHelpers {
     }
   }
 
-  private def deduplicateHeaderNames(names: Seq[String]): Seq[String] = {
+  private def normalizeHeaderNames(names: Seq[String]): Seq[String] = {
     val duplicateNames = names.groupBy(identity).collect {
-      case (name, occurrences) if occurrences.size > 1 => name
+      case (name, occurrences) if name.nonEmpty && occurrences.size > 1 => name
     }.toSet
     names.zipWithIndex.map {
-      case (name, index) if duplicateNames.contains(name) => s"${name}_$index"
+      case (name, index) if name.isEmpty => s"_c$index"
+      case (name, index) if duplicateNames.contains(name) => s"$name$index"
       case (name, _) => name
     }
   }
