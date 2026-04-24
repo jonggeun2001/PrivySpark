@@ -654,19 +654,29 @@ private[privyspark] object DirectoryScanner {
             "csv_has_header" -> csvHasHeader
           )
         case Left(errorMessage) =>
-          DriverLogger.debug(
-            "group_schema_signature_failed",
-            "directory" -> group.directoryPath,
-            "file" -> physicalPath,
-            "format" -> group.format,
-            "reason" -> errorMessage
-          )
-          errors += ScanError(
-            datasetPath,
-            timestamp,
-            resolveLogicalIdentifier(group, datasetPath, sourceKey),
-            s"Schema detection failed: $errorMessage"
-          )
+          if (isEmptyWorkbookSheetSchemaError(group.format, errorMessage)) {
+            DriverLogger.debug(
+              "group_schema_signature_empty_xlsx_sheet",
+              "directory" -> group.directoryPath,
+              "file" -> physicalPath,
+              "format" -> group.format,
+              "file_identifier" -> resolveLogicalIdentifier(group, datasetPath, sourceKey)
+            )
+          } else {
+            DriverLogger.debug(
+              "group_schema_signature_failed",
+              "directory" -> group.directoryPath,
+              "file" -> physicalPath,
+              "format" -> group.format,
+              "reason" -> errorMessage
+            )
+            errors += ScanError(
+              datasetPath,
+              timestamp,
+              resolveLogicalIdentifier(group, datasetPath, sourceKey),
+              s"Schema detection failed: $errorMessage"
+            )
+          }
       }
     }
 
@@ -691,4 +701,7 @@ private[privyspark] object DirectoryScanner {
     )
     (groups, errors.toSeq)
   }
+
+  private def isEmptyWorkbookSheetSchemaError(format: String, errorMessage: String): Boolean =
+    format == XlsxFormat && errorMessage == "head of empty list"
 }
