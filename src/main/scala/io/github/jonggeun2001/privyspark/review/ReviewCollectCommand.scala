@@ -114,8 +114,9 @@ private[privyspark] object ReviewCollectCommand {
       .toSeq
 
     val existingAllowlistPath = s"$currentPath/allowlist.jsonl"
-    val existingExact = if (pathExists(conf, existingAllowlistPath)) AllowlistMatcher.loadEntries(conf, existingAllowlistPath) else Seq.empty
-    val existingPatterns = if (pathExists(conf, existingAllowlistPath)) AllowlistMatcher.loadPatternEntries(conf, existingAllowlistPath) else Seq.empty
+    val existingAllowlistReadablePath = resolveReadableStateFilePath(conf, existingAllowlistPath)
+    val existingExact = existingAllowlistReadablePath.map(AllowlistMatcher.loadEntries(conf, _)).getOrElse(Seq.empty)
+    val existingPatterns = existingAllowlistReadablePath.map(AllowlistMatcher.loadPatternEntries(conf, _)).getOrElse(Seq.empty)
     val latestFindingKeys = latestAccepted.map(_.finding.findingKey).toSet
     val exactScope = collectExactScope(spark, config, latestAccepted)
     val affectedExactKeys = exactScope.affectedKeys
@@ -316,6 +317,9 @@ private[privyspark] object ReviewCollectCommand {
     hadoopPath.getFileSystem(conf).exists(hadoopPath)
   }
 
+  private def resolveReadableStateFilePath(conf: Configuration, path: String): Option[String] =
+    Seq(path, s"$path.bak").find(pathExists(conf, _))
+
   private def parseEnvelope(sourcePath: String, json: String): Either[String, ResponseEnvelope] = {
     val schemaVersion = extractJsonStringField(json, "schema_version").orElse(extractNumericField(json, "schema_version")).getOrElse("")
     if (schemaVersion != "1") {
@@ -349,27 +353,28 @@ private[privyspark] object ReviewCollectCommand {
     )
 
   private def loadActionPlans(conf: Configuration, path: String): Seq[ActionPlan] = {
-    if (!pathExists(conf, path)) {
-      Seq.empty
-    } else {
-      readLines(conf, path).map { line =>
-        val hiveTableFqn = extractJsonStringField(line, "hive_table_fqn").getOrElse("")
-        val (fallbackDatabase, fallbackTable) = splitHiveTableFqn(hiveTableFqn)
-        ActionPlan(
-          findingKey = extractJsonStringField(line, "finding_key").getOrElse(""),
-          scanPath = extractJsonStringField(line, "scan_path").getOrElse(""),
-          hiveDatabase = extractJsonStringField(line, "hive_database").getOrElse(fallbackDatabase),
-          hiveTable = extractJsonStringField(line, "hive_table").getOrElse(fallbackTable),
-          hiveTableFqn = hiveTableFqn,
-          columnName = extractJsonStringField(line, "column_name").getOrElse(""),
-          piiType = extractJsonStringField(line, "pii_type").getOrElse(""),
-          actionPlan = extractJsonStringField(line, "action_plan").getOrElse(""),
-          actionDueDate = extractJsonStringField(line, "action_due_date").getOrElse(""),
-          responder = extractJsonStringField(line, "responder").getOrElse(""),
-          respondedAt = extractJsonStringField(line, "responded_at").getOrElse(""),
-          status = extractJsonStringField(line, "status").getOrElse(RemediationPlanned)
-        )
-      }
+    resolveReadableStateFilePath(conf, path) match {
+      case None =>
+        Seq.empty
+      case Some(readablePath) =>
+        readLines(conf, readablePath).map { line =>
+          val hiveTableFqn = extractJsonStringField(line, "hive_table_fqn").getOrElse("")
+          val (fallbackDatabase, fallbackTable) = splitHiveTableFqn(hiveTableFqn)
+          ActionPlan(
+            findingKey = extractJsonStringField(line, "finding_key").getOrElse(""),
+            scanPath = extractJsonStringField(line, "scan_path").getOrElse(""),
+            hiveDatabase = extractJsonStringField(line, "hive_database").getOrElse(fallbackDatabase),
+            hiveTable = extractJsonStringField(line, "hive_table").getOrElse(fallbackTable),
+            hiveTableFqn = hiveTableFqn,
+            columnName = extractJsonStringField(line, "column_name").getOrElse(""),
+            piiType = extractJsonStringField(line, "pii_type").getOrElse(""),
+            actionPlan = extractJsonStringField(line, "action_plan").getOrElse(""),
+            actionDueDate = extractJsonStringField(line, "action_due_date").getOrElse(""),
+            responder = extractJsonStringField(line, "responder").getOrElse(""),
+            respondedAt = extractJsonStringField(line, "responded_at").getOrElse(""),
+            status = extractJsonStringField(line, "status").getOrElse(RemediationPlanned)
+          )
+        }
     }
   }
 
