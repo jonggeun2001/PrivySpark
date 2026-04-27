@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.model.ScanResult
 import io.github.jonggeun2001.privyspark.report.JsonCodec.jsonString
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
+import org.apache.spark.sql.DataFrame
 
 import java.io.{BufferedWriter, OutputStreamWriter}
 import java.nio.charset.StandardCharsets
@@ -26,9 +27,37 @@ private[privyspark] object ReviewHtmlWriter {
     sampleMode: String
   ): Unit = {
     val normalizedSampleMode = normalizeSampleMode(sampleMode).getOrElse(DefaultSampleMode)
-    val findings = ReviewFindingBuilder.fromScanResults(results)
+    val findings = ReviewFindingBuilder.fromScanResultsIterator(
+      results.iterator,
+      ReviewFindingBuilder.DefaultMaxEvidenceSamples
+    )
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode)
+  }
+
+  def write(
+    conf: Configuration,
+    outputRoot: String,
+    scanPath: String,
+    resultDf: DataFrame,
+    sampleMode: String
+  ): Unit = {
+    val normalizedSampleMode = normalizeSampleMode(sampleMode).getOrElse(DefaultSampleMode)
+    val findings = ReviewFindingBuilder.fromScanResultsIterator(
+      ScanResultsReader.iterateScanResults(resultDf),
+      ReviewFindingBuilder.DefaultMaxEvidenceSamples
+    )
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode)
+  }
+
+  private def writeFindings(
+    conf: Configuration,
+    outputRoot: String,
+    scanPath: String,
+    findings: Seq[ReviewFinding],
+    sampleMode: String
+  ): Unit = {
     val scanResultsFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
-    val html = renderHtml(scanPath, scanResultsFingerprint, findings, normalizedSampleMode)
+    val html = renderHtml(scanPath, scanResultsFingerprint, findings, sampleMode)
     val reviewDir = new Path(new Path(outputRoot), "review")
     val htmlPath = new Path(reviewDir, "review.html")
     val fs = htmlPath.getFileSystem(conf)

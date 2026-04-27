@@ -6,6 +6,7 @@ import io.github.jonggeun2001.privyspark.model.{ScanReadOptions, ScanResult}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
+import scala.collection.JavaConverters._
 import scala.util.Try
 
 private[privyspark] object ScanResultsReader {
@@ -25,6 +26,10 @@ private[privyspark] object ScanResultsReader {
   }
 
   def toScanResults(df: DataFrame): Seq[ScanResult] = {
+    iterateScanResults(df).toSeq
+  }
+
+  def iterateScanResults(df: DataFrame): Iterator[ScanResult] = {
     val normalizedColumns = df.columns.map(columnName => columnName.toLowerCase -> columnName).toMap
     val requiredColumns = Seq(
       "dataset_path",
@@ -46,30 +51,7 @@ private[privyspark] object ScanResultsReader {
       require(normalizedColumns.contains(columnName), s"scan_results is missing required column: $columnName")
     }
 
-    df.collect().toSeq.map { row =>
-      ScanResult(
-        dataset_path = valueOf(row, normalizedColumns("dataset_path")),
-        scan_timestamp = valueOf(row, normalizedColumns("scan_timestamp")),
-        file_identifier = valueOf(row, normalizedColumns("file_identifier")),
-        column_name = valueOf(row, normalizedColumns("column_name")),
-        pii_type = valueOf(row, normalizedColumns("pii_type")),
-        match_count = longValue(row, normalizedColumns("match_count")),
-        sampled_row_count = longValue(row, normalizedColumns("sampled_row_count")),
-        match_ratio = doubleValue(row, normalizedColumns("match_ratio")),
-        non_empty_match_ratio = doubleValue(row, normalizedColumns("non_empty_match_ratio")),
-        confidence = doubleValue(row, normalizedColumns("confidence")),
-        sample_raw_value = valueOf(row, normalizedColumns("sample_raw_value")),
-        sample_matched_fragment = valueOf(row, normalizedColumns("sample_matched_fragment")),
-        file_size = longValue(row, normalizedColumns("file_size")),
-        file_mtime_epoch_ms = longValue(row, normalizedColumns("file_mtime_epoch_ms")),
-        hive_table_fqn = optionalValue(row, normalizedColumns, "hive_table_fqn"),
-        review_status = optionalValue(row, normalizedColumns, "review_status", "pending"),
-        review_reason = optionalValue(row, normalizedColumns, "review_reason"),
-        review_invalidated = booleanValue(row, normalizedColumns.get("review_invalidated")),
-        review_scope_file_identifiers = optionalValue(row, normalizedColumns, "review_scope_file_identifiers"),
-        review_scope_file_fingerprints = optionalValue(row, normalizedColumns, "review_scope_file_fingerprints")
-      )
-    }
+    df.toLocalIterator().asScala.map(row => toScanResult(row, normalizedColumns))
   }
 
   def resolveScanResultsFormat(
@@ -95,6 +77,30 @@ private[privyspark] object ScanResultsReader {
 
   private def valueOf(row: Row, columnName: String): String =
     if (row.isNullAt(row.fieldIndex(columnName))) "" else Option(row.get(row.fieldIndex(columnName))).map(_.toString).getOrElse("")
+
+  private def toScanResult(row: Row, normalizedColumns: Map[String, String]): ScanResult =
+    ScanResult(
+      dataset_path = valueOf(row, normalizedColumns("dataset_path")),
+      scan_timestamp = valueOf(row, normalizedColumns("scan_timestamp")),
+      file_identifier = valueOf(row, normalizedColumns("file_identifier")),
+      column_name = valueOf(row, normalizedColumns("column_name")),
+      pii_type = valueOf(row, normalizedColumns("pii_type")),
+      match_count = longValue(row, normalizedColumns("match_count")),
+      sampled_row_count = longValue(row, normalizedColumns("sampled_row_count")),
+      match_ratio = doubleValue(row, normalizedColumns("match_ratio")),
+      non_empty_match_ratio = doubleValue(row, normalizedColumns("non_empty_match_ratio")),
+      confidence = doubleValue(row, normalizedColumns("confidence")),
+      sample_raw_value = valueOf(row, normalizedColumns("sample_raw_value")),
+      sample_matched_fragment = valueOf(row, normalizedColumns("sample_matched_fragment")),
+      file_size = longValue(row, normalizedColumns("file_size")),
+      file_mtime_epoch_ms = longValue(row, normalizedColumns("file_mtime_epoch_ms")),
+      hive_table_fqn = optionalValue(row, normalizedColumns, "hive_table_fqn"),
+      review_status = optionalValue(row, normalizedColumns, "review_status", "pending"),
+      review_reason = optionalValue(row, normalizedColumns, "review_reason"),
+      review_invalidated = booleanValue(row, normalizedColumns.get("review_invalidated")),
+      review_scope_file_identifiers = optionalValue(row, normalizedColumns, "review_scope_file_identifiers"),
+      review_scope_file_fingerprints = optionalValue(row, normalizedColumns, "review_scope_file_fingerprints")
+    )
 
   private def optionalValue(row: Row, columns: Map[String, String], normalizedColumnName: String, defaultValue: String = ""): String =
     columns.get(normalizedColumnName).map(valueOf(row, _)).getOrElse(defaultValue)

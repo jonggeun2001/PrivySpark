@@ -65,8 +65,10 @@ private[privyspark] object ReviewCollectCommand {
 
   def run(spark: SparkSession, config: ReviewCollectCliConfig): Unit = {
     val conf = spark.sparkContext.hadoopConfiguration
-    val results = ScanResultsReader.toScanResults(ScanResultsReader.read(spark, config.scanResultsPath))
-    val findings = ReviewFindingBuilder.fromScanResults(results)
+    val findings = ReviewFindingBuilder.fromScanResultsIterator(
+      ScanResultsReader.iterateScanResults(ScanResultsReader.read(spark, config.scanResultsPath)),
+      Int.MaxValue
+    )
     val findingsByKey = findings.map(finding => finding.findingKey -> finding).toMap
     val expectedScanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
     val expectedScanPaths = findings.map(_.scanPath).distinct.toSet

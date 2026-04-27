@@ -8,7 +8,7 @@ import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupI
 import io.github.jonggeun2001.privyspark.model.{ProgressRun, ScanReadOptions, Suppression}
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager._
-import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewApplyCommand, ReviewCollectCommand, ReviewHtmlWriter, ScanResultsReader}
+import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewApplyCommand, ReviewCollectCommand, ReviewHtmlWriter}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{renderConfiguredParallelism, resolveCliParallelism}
 import io.github.jonggeun2001.privyspark.util.{DriverLogLevel, DriverLogger}
@@ -336,7 +336,7 @@ object PrivySparkApp {
               spark.sparkContext.hadoopConfiguration,
               config.outputPath,
               config.inputPath,
-              ScanResultsReader.toScanResults(resultDf),
+              resultDf,
               config.reviewSampleMode
             )
           }
