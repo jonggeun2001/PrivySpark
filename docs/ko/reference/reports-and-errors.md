@@ -39,11 +39,12 @@
 `scan_results.scan_timestamp`는 CLI 시작 시각 고정값이 아니라, 각 결과 row가 실제로 만들어진 시점의 UTC ISO-8601 시각입니다. 따라서 장시간 스캔이나 다중 그룹 스캔에서는 결과 row마다 값이 달라질 수 있습니다.
 
 ## `hive_table_fqn` 규칙
-- Hive 지원이 가능한 SparkSession에서는 driver가 실행 초기에 Hive Catalog의 database/table 목록을 1회 열거하고, table-level `LOCATION`을 정규화 URI prefix 인덱스로 broadcast 합니다.
+- `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다.
+- 활성화되면 driver가 Hive Metastore underlying MariaDB의 `DBS`/`TBLS`/`SDS` 테이블을 JDBC로 1회 조회하고, table-level `LOCATION`을 정규화 URI prefix 인덱스로 broadcast 합니다.
 - 결과 row의 입력 파일 경로가 등록된 table `LOCATION` 하위에 있으면 `db.table` 형식으로 `hive_table_fqn`을 채웁니다.
 - 여러 table `LOCATION`이 겹치면 정규화된 URI 기준 longest-prefix match를 사용합니다. 같은 길이의 중복 prefix는 deterministic 정렬 결과를 사용합니다.
 - archive entry와 Excel sheet 식별자는 `<archive>!<entry>`, `<workbook>#<sheet>`에서 host archive/workbook path만 떼어 lookup 합니다.
-- Hive 통합이 비활성화됐거나, `spark-hive`/`hive-site.xml`/metastore 접근이 불가능하거나, 매칭되는 table이 없으면 빈 문자열 `""`을 기록합니다.
+- 옵션이 미지정됐거나, JDBC 접속/쿼리/password 파일 읽기가 실패했거나, 매칭되는 table이 없으면 빈 문자열 `""`을 기록합니다.
 - partition별 `LOCATION` override는 현재 열거하지 않습니다. table-level `LOCATION`만 사용합니다.
 
 ## `file_identifier` 규칙
