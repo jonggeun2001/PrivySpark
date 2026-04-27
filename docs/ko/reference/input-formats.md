@@ -2,6 +2,7 @@
 
 ## 지원 입력
 - 확장자 기반 우선 지원: `csv`, `json`, `jsonl`, `ndjson`, `parquet`, `orc`, `avro`, `xlsx`, `zip`, `jar`, `tar`, `tar.gz`, `tgz`, `tar.bz2`, `tbz2`, `tar.xz`, `txz`, `tar.zst`, `tzst`, `7z`, `rar`
+- physical file 경로의 공백은 그대로 허용하고, Spark glob 특수문자(`*`, `?`, `[`, `]`, `{`, `}`)는 schema detection과 scan reader에 literal path로 전달합니다. 이 처리는 ignore 패턴 문법과 별개로 실제 파일명에만 적용됩니다.
 - direct text-style data file(`csv`, `json`, `jsonl`, `ndjson`)에 붙은 outer compression wrapper `gz`, `bz2`는 원본 경로 그대로 Spark/Hadoop reader에 전달합니다. 예: `customers.csv.gz`, `events.json.bz2`
 - 무확장자 파일과 대부분의 미지원 확장자 파일은 앞부분 매직바이트로 `parquet`, `orc`를 먼저 판별합니다. 다만 `pdf`, `jpg` 같은 명확한 비데이터 바이너리 확장자는 probe 없이 바로 미지원 입력으로 분류합니다.
 - 매직바이트가 일치하지 않더라도 UTF-8 텍스트에서 안정적인 구분자와 헤더/데이터 구조가 확인되면 내부 `csv` 포맷으로 승격해 컬럼 단위로 스캔합니다. CSV dialect 감지에 실패하거나 텍스트 구조가 모호하면 UTF-8 또는 EUC-KR 텍스트처럼 보이는 입력은 내부 `text` 포맷으로 정규화해 단일 `value` 컬럼으로 스캔합니다.
@@ -26,8 +27,9 @@
 - pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 읽지 않습니다.
 - 빈 visible sheet는 header 기반 schema detection 이후 결과/오류 없이 건너뜁니다. hidden/veryHidden sheet는 제외합니다.
 - 시트 식별자는 `<workbook>#<sheet>` 형식을 사용합니다.
-- `--excel-max-rows-in-memory` 또는 `spark.privyspark.excel.maxRowsInMemory`를 설정하면 실제 scan의 spark-excel `maxRowsInMemory` reader option으로 전달합니다. 둘 다 생략하면 기본값 `2048`을 전달합니다. 이 설정은 단일 시트를 분산 split하지 않고, 큰 workbook을 단일 reader task에서 streaming 처리하도록 완화합니다.
-- `--excel-byte-array-max-override` 또는 `spark.privyspark.excel.byteArrayMaxOverride`를 설정하면 Apache POI byte array allocation 상한을 조정합니다. 둘 다 생략하면 기본값 `300000000`을 적용합니다.
+- 실제 scan은 Spark executor task 안에서 StAX 기반 sheet row 스트리머로 수행합니다. sharedStrings는 task 수명 동안 executor 메모리에 적재하고, sheet XML은 row 단위로 스트리밍합니다.
+- `--excel-max-rows-in-memory`는 과거 spark-excel scan reader 호환용으로만 받습니다. 값을 명시하면 `excel_max_rows_in_memory_unused` warning을 남기며 실제 scan에는 사용하지 않습니다.
+- `--excel-byte-array-max-override` 또는 `spark.privyspark.excel.byteArrayMaxOverride`를 설정하면 Apache POI byte array allocation 상한을 조정합니다. 이 설정은 Excel report writing 등 POI 사용 경로를 위한 호환 설정입니다. 둘 다 생략하면 기본값 `300000000`을 적용합니다.
 
 ## 그룹화와 스캔 단위
 - 기본 스캔 단위는 파일입니다.

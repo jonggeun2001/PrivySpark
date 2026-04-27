@@ -1,8 +1,9 @@
 # Execution and Operations
 
 ## Execution Model
-- The public commands are `privyspark scan` and `privyspark review apply`.
+- The public commands are `privyspark scan`, `privyspark review apply`, and `privyspark review collect`.
 - Input and output paths must be absolute paths or URIs.
+- Input filenames may contain spaces and Spark glob-special characters (`*`, `?`, `[`, `]`, `{`, `}`); PrivySpark treats them as literal filenames. Glob syntax applies only to `--ignore` and `--ignore-file` patterns.
 - The default target runtime is Spark on YARN cluster mode.
 - The build artifact is a Shadow fat JAR (`*-all.jar`).
 
@@ -17,13 +18,16 @@
 - `--pre-scan-parallelism <INT>`: parallelism for directory discovery, file pre-scan expansion, and schema split, `> 0`
 - `--group-parallelism <INT>`: group scan parallelism, `> 0`
 - `--file-parallelism <INT>`: file fallback scan parallelism, `> 0`
-- `--excel-max-rows-in-memory <INT>`: spark-excel `maxRowsInMemory` reader option for `xlsx` reads, default `2048`, `> 0`
+- `--excel-max-rows-in-memory <INT>`: compatibility option for the previous spark-excel scan reader path, `> 0`; explicitly setting it logs a warning and no longer affects `xlsx` scan reads
 - `--excel-byte-array-max-override <INT>`: Apache POI byte array allocation max override, default `300000000`, `> 0`
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
+- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html`
+- `--review-sample-mode <raw|masked|none>`: sample display mode for `review.html`, default `masked`
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
 - `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
+- `--disable-hive-table-lookup`: disable `hive_table_fqn` mapping from Hive Catalog table `LOCATION` prefixes
 
 ## `review apply` CLI Arguments
 - `--scan-results <ABS_PATH_OR_URI>`: edited `scan_results` input path. `csv`, `parquet`, and `xlsx` (`scan_results` sheet) are supported.
@@ -31,6 +35,12 @@
 - `--allowlist <ABS_PATH_OR_URI>`: allowlist JSONL path to create or update
 - `--reviewer <STRING>`: reviewer identifier
 - `--dry-run`: calculates staged entries without writing the output file
+
+## `review collect` CLI Arguments
+- `--scan-results <ABS_PATH_OR_URI>`: current `scan_results` path. `csv`, `parquet`, and `xlsx` (`scan_results` sheet) are supported.
+- `--review-state-root <ABS_PATH_OR_URI>`: state root where response JSON files are read and cumulative review state is written
+
+`review collect` reads `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`.
 
 ## Ignore Patterns
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`
@@ -51,6 +61,15 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 - `--suppression-file` is read through Hadoop `FileSystem`. In YARN cluster mode, distribute client-local files first with `--files` or `PRIVYSPARK_SPARK_FILES`, then reference the distributed alias.
 - CLI suppressions are union-merged with ruleset YAML `suppressions:`.
 
+## Hive Table Lookup
+- Hive integration is auto-detected. When the Spark runtime provides `spark-hive` and `hive-site.xml` is available on the driver classpath or Spark configuration path, PrivySpark creates the default session with `enableHiveSupport()`.
+- At scan startup, the driver enumerates Hive databases/tables once and broadcasts a table-level `LOCATION` prefix index. If a result row's physical input path falls under a table prefix, `scan_results.hive_table_fqn` is filled with `db.table`.
+- If `spark-hive` classes are unavailable, PrivySpark logs `hive_disabled_no_class` once and continues with an empty mapping.
+- If HiveSession creation or metastore enumeration fails, PrivySpark logs `hive_disabled_metastore_init_failed` and continues with an empty mapping. Successful activation logs `hive_enabled`, and index creation logs `hive_lookup_ready size=<N>`.
+- Use `--disable-hive-table-lookup` when operators want the scan to avoid metastore access regardless of Hive availability. In that mode enumeration is skipped and `hive_table_fqn` is always `""`.
+- Archive entries and Excel sheets are looked up by the host archive/workbook path after stripping `<archive>!<entry>` and `<workbook>#<sheet>` suffixes.
+- Partition-level `LOCATION` overrides are not supported yet. PrivySpark uses only table-level `LOCATION`.
+
 ## Parallelism
 - CLI values are passed directly into application logic.
 - When omitted, PrivySpark uses `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`, or the application defaults (`4`, `4`, `3`).
@@ -61,12 +80,12 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
 
 ## Excel Reader Configuration
-- When `--excel-max-rows-in-memory` is set, PrivySpark passes it to the spark-excel reader as `maxRowsInMemory` for actual `xlsx` scans.
-- When the CLI option is omitted, PrivySpark uses the `spark.privyspark.excel.maxRowsInMemory` Spark conf, and if that conf is also absent it passes the default value `2048`.
-- During `xlsx` pre-scan, the driver lightly parses workbook metadata and header row XML to build visible sheet lists and schema signatures; sheet body row/cell contents are handled by the Spark reader path.
-- When `--excel-byte-array-max-override` is set, PrivySpark applies Apache POI `IOUtils.setByteArrayMaxOverride` on the spark-excel read path.
+- During `xlsx` pre-scan, the driver lightly parses workbook metadata and header row XML to build visible sheet lists and schema signatures; sheet body row/cell contents are handled by the executor-side StAX streamer.
+- `--excel-max-rows-in-memory` is retained for CLI compatibility with the previous spark-excel scan reader. When explicitly set, PrivySpark logs `excel_max_rows_in_memory_unused` and does not use the value for scan reads.
+- The `spark.privyspark.excel.maxRowsInMemory` Spark conf also no longer affects executor-side `xlsx` scans.
+- When `--excel-byte-array-max-override` is set, PrivySpark applies Apache POI `IOUtils.setByteArrayMaxOverride`. This is retained for POI-backed paths such as Excel report writing.
 - When the CLI option is omitted, PrivySpark uses the `spark.privyspark.excel.byteArrayMaxOverride` Spark conf, and if that conf is also absent it applies the default value `300000000`.
-- This setting reduces memory pressure by enabling the streaming reader path for large workbooks; it does not make a single `xlsx` sheet row-splittable across executors.
+- The executor-side `xlsx` streamer reads one workbook sheet in one Spark task. It does not make a single sheet row-splittable across executors, and it intentionally avoids cache/persist, so repeated actions reread the workbook zip.
 
 ## Sampling
 - `--sample-ratio` is non-deterministic row sampling.

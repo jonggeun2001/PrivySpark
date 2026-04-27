@@ -1,6 +1,7 @@
 package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
+import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupIndex}
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
@@ -8,6 +9,7 @@ import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistM
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{executeInParallel, resolveFileParallelism}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveDirectoryIdentifier, resolveLogicalIdentifier, resolvePhysicalPath}
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 
 import scala.collection.mutable.ArrayBuffer
@@ -26,7 +28,8 @@ private[privyspark] object AllowlistApplier {
     batchFileIdentifierColumnName: String,
     selectedFileCount: Int,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
-    progressRun: Option[ProgressRun] = None
+    progressRun: Option[ProgressRun] = None,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): Seq[ScanResult] = {
     if (matchedSourceKeys.isEmpty) {
       ReviewSnapshotLog.logReviewSnapshotSkipped("batch", matchedFiles = 0, selectedFiles = selectedFileCount)
@@ -82,6 +85,7 @@ private[privyspark] object AllowlistApplier {
 
       matchedSourceKeys.flatMap { sourceKey =>
         val fileIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
+        val fqn = hiveTableFqn(hiveLookup, resolvePhysicalPath(group, sourceKey))
         metricMap.get(fileIdentifier).toSeq.flatMap { fileMetrics =>
           ScanResultBuilder.buildScanResults(
             datasetPath,
@@ -93,6 +97,7 @@ private[privyspark] object AllowlistApplier {
             fileMetrics.sampleValues,
             fileMetrics.fileSize,
             fileMetrics.fileMtimeEpochMs,
+            hiveTableFqn = fqn,
             reviewScopeFileFingerprints = ReviewSnapshotLog.encodeRecordedFingerprint(fileMetrics.recordedFingerprint)
           )
         }
@@ -115,9 +120,11 @@ private[privyspark] object AllowlistApplier {
         val reviewScopeIdentifiers = ReviewSnapshotLog.parseReviewScopeIdentifiers(result.review_scope_file_identifiers)
         val hasCandidate =
           allowlistMatcher.hasDirectoryCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type) ||
+            allowlistMatcher.hasPatternCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type) ||
             (if (reviewScopeIdentifiers.nonEmpty) {
               reviewScopeIdentifiers.exists(identifier =>
-                allowlistMatcher.hasExactCandidate(result.dataset_path, identifier, result.column_name, result.pii_type)
+                allowlistMatcher.hasExactCandidate(result.dataset_path, identifier, result.column_name, result.pii_type) ||
+                  allowlistMatcher.hasPatternCandidate(result.dataset_path, identifier, result.column_name, result.pii_type)
               )
             } else {
               allowlistMatcher.hasExactCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)
@@ -193,7 +200,8 @@ private[privyspark] object AllowlistApplier {
     allowlistMatcher: AllowlistMatcher,
     allowlistInputRoot: Option[String],
     progressRun: Option[ProgressRun],
-    csvHeadCache: CsvHeadCache
+    csvHeadCache: CsvHeadCache,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     val (splitGroups, splitErrors) = DirectoryScanner.splitGroupBySchema(
       spark,
@@ -241,7 +249,8 @@ private[privyspark] object AllowlistApplier {
         allowlistMatcher,
         allowlistInputRoot,
         progressRun,
-        csvHeadCache
+        csvHeadCache,
+        hiveLookup = hiveLookup
       )
       rescannedResults ++= groupResults
       rescannedErrors ++= groupErrors
@@ -259,4 +268,7 @@ private[privyspark] object AllowlistApplier {
     )
     (rescannedResults.toSeq, rescannedErrors.toSeq)
   }
+
+  private def hiveTableFqn(hiveLookup: Option[Broadcast[HiveTableLookupIndex]], rawPath: String): String =
+    hiveLookup.map(_.value.lookup(HiveTableLookup.stripCompositeIdentifier(rawPath))).getOrElse("")
 }

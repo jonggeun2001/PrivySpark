@@ -12,6 +12,7 @@
 - `RulesetLoader.scala`: 기본/외부 ruleset과 suppression 로딩, regex 검증
 - `util/DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
 - `detect/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
+- `hive/HiveTableLookup.scala`: Hive table `LOCATION` 정규화, longest-prefix lookup 인덱스, broadcast 생성
 - `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: 입력 확장, 그룹화, 스캔 실행
 - `report/ReportWriter.scala`: 최종 리포트 저장과 포맷별 산출물 생성
 - `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, progress/최종 리포트 저장
@@ -24,18 +25,19 @@
 ## 처리 플로우
 1. 입력 경로 검증
 2. ruleset 로드, regex 사전 검증, ruleset/CLI suppression 병합
-3. 물리 파일 수집과 ignore 패턴 필터
-4. archive 엔트리 확장, workbook metadata 기반 시트 목록 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, CSV dialect 감지 및 text fallback 정규화, archive entry ignore 필터
-5. `(directory, format)` 기준 1차 그룹화
-6. 대표 파일 기준 스키마 샘플링
-7. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
-8. sampled multi-file group이면 exact split 재검증 후 재분류된 그룹 스캔
-9. `<output>/_progress-preparing.json` lock 획득 후 `<output>/_progress/<run_id>` 준비 및 stale progress 정리
-10. non-sampled group 중 batch-capable group이면 필요 시 file sampling 후 그룹 batch scan
-11. non-sampled `xlsx` group은 direct file scan
-12. 일반 group batch 실패 시 파일 단위 fallback
-13. group/file/allowlist 작업 실행 중 in-flight marker를 만들고, group/file 완료 시 progress JSONL 기록
-14. progress JSONL을 최종 `scan_results`/`scan_errors`로 merge 후 `_progress/<run_id>` 삭제
+3. Hive lookup이 활성화되면 driver에서 Hive Catalog table `LOCATION`을 1회 열거해 broadcast 인덱스 생성
+4. 물리 파일 수집과 ignore 패턴 필터
+5. archive 엔트리 확장, workbook metadata 기반 시트 목록 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, CSV dialect 감지 및 text fallback 정규화, archive entry ignore 필터
+6. `(directory, format)` 기준 1차 그룹화
+7. 대표 파일 기준 스키마 샘플링
+8. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
+9. sampled multi-file group이면 exact split 재검증 후 재분류된 그룹 스캔
+10. `<output>/_progress-preparing.json` lock 획득 후 `<output>/_progress/<run_id>` 준비 및 stale progress 정리
+11. non-sampled group 중 batch-capable group이면 필요 시 file sampling 후 그룹 batch scan
+12. non-sampled `xlsx` group은 direct file scan
+13. 일반 group batch 실패 시 파일 단위 fallback
+14. group/file/allowlist 작업 실행 중 in-flight marker를 만들고, group/file 완료 시 progress JSONL 기록
+15. progress JSONL을 최종 `scan_results`/`scan_errors`로 merge 후 `_progress/<run_id>` 삭제
 
 ## 운영 불변 조건
 - `scan_results`에는 해석용 샘플 값 두 개를 저장합니다. `sample_matched_fragment`는 검출된 조각 그대로이고, `sample_raw_value`는 앞뒤 최대 50자 문맥만 저장합니다.
@@ -44,7 +46,8 @@
 - suppression은 `DetectionAggregator.buildMetrics`에서 metric plan 생성 전에 적용해 제외된 `(column, pii_type)` 조합이 결과 row 자체를 만들지 않게 합니다.
 - 디렉터리 discovery는 BFS 순회로 진행하고, 각 레벨의 `listStatus`는 safety ceiling `64` 안에서 병렬 실행합니다.
 - discovery 이후 pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
-- `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 계획합니다. sheet body row/cell 읽기는 Spark reader 기반 scan 단계로 넘깁니다.
+- Hive lookup은 table-level `LOCATION`만 열거하고, 실패 시 warning 후 빈 매핑으로 진행합니다. 결과 비교용 review snapshot payload에는 `hive_table_fqn`을 포함하지 않습니다.
+- `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 계획합니다. sheet body row/cell 읽기는 executor-side StAX scan 단계로 넘깁니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.
 - `--file-sample-ratio`는 batch scan과 file fallback scan에서 적용하고, 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.
 - 실제 file sampling이 적용된 그룹에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.

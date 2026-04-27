@@ -1,8 +1,9 @@
 # 실행과 운영
 
 ## 실행 모델
-- 공개 명령은 `privyspark scan`, `privyspark review apply`입니다.
+- 공개 명령은 `privyspark scan`, `privyspark review apply`, `privyspark review collect`입니다.
 - 입력/출력 경로는 절대경로 또는 URI만 허용합니다.
+- 입력 파일명에 공백과 Spark glob 특수문자(`*`, `?`, `[`, `]`, `{`, `}`)가 포함되어도 실제 파일명으로 처리합니다. glob 문법은 `--ignore`, `--ignore-file` 패턴에만 적용됩니다.
 - Spark on YARN cluster 실행을 기본 전제로 합니다.
 - 빌드 산출물은 Shadow fat JAR(`*-all.jar`)입니다.
 
@@ -17,13 +18,16 @@
 - `--pre-scan-parallelism <INT>`: 디렉터리 discovery, 파일 pre-scan 확장, schema split 병렬도, `> 0`
 - `--group-parallelism <INT>`: 그룹 스캔 병렬도, `> 0`
 - `--file-parallelism <INT>`: 파일 폴백 스캔 병렬도, `> 0`
-- `--excel-max-rows-in-memory <INT>`: `xlsx` 읽기 시 spark-excel `maxRowsInMemory` reader option, 기본 `2048`, `> 0`
+- `--excel-max-rows-in-memory <INT>`: 과거 spark-excel scan reader 호환용 옵션, `> 0`; 명시하면 warning을 남기며 현재 `xlsx` scan에는 사용하지 않음
 - `--excel-byte-array-max-override <INT>`: Apache POI byte array allocation 상한 override, 기본 `300000000`, `> 0`
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
 - `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
+- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. `<review-state-root>/current/allowlist.jsonl`을 적용하고 `<output>/review/review.html`을 생성
+- `--review-sample-mode <raw|masked|none>`: `review.html` 검출 샘플 표시 방식, 기본 `masked`
 - `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
 - `--suppression-file <PATH>`: 줄 단위 suppression 파일 경로, `#` 주석과 빈 줄 무시
+- `--disable-hive-table-lookup`: Hive Catalog table `LOCATION` 기반 `hive_table_fqn` 매핑을 비활성화
 
 ## `review apply` CLI 인자
 - `--scan-results <ABS_PATH_OR_URI>`: 담당자가 편집한 `scan_results` 입력 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
@@ -31,6 +35,12 @@
 - `--allowlist <ABS_PATH_OR_URI>`: 생성 또는 갱신할 allowlist JSONL 경로
 - `--reviewer <STRING>`: 검토자 식별자
 - `--dry-run`: 실제 파일 기록 없이 반영 예정 엔트리 수만 계산
+
+## `review collect` CLI 인자
+- `--scan-results <ABS_PATH_OR_URI>`: 현재 스캔의 `scan_results` 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
+- `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
+
+`review collect`는 `<review-state-root>/inbox/*.json`을 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 다음 스캔은 같은 `--review-state-root`를 지정해 누적 오탐 allowlist를 반영합니다.
 
 ## Ignore 패턴
 - `/`가 없는 패턴은 basename 기준으로 매칭합니다. 예: `_SUCCESS`, `*.crc`
@@ -51,6 +61,15 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - `--suppression-file`은 Hadoop `FileSystem`으로 읽습니다. YARN cluster에서 client 로컬 파일을 쓰려면 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 먼저 배포한 뒤 alias 경로를 `--suppression-file`에 넘겨야 합니다.
 - CLI suppression은 ruleset YAML의 `suppressions:`와 union으로 합쳐집니다.
 
+## Hive table lookup
+- 기본 동작은 자동 감지입니다. Spark runtime에 `spark-hive`가 제공되고 `hive-site.xml`이 driver classpath 또는 Spark conf 경로에 있으면 `enableHiveSupport()`로 Hive Catalog를 사용합니다.
+- 실행 초기에 driver가 Hive database/table 목록을 1회 열거하고 table-level `LOCATION` prefix 인덱스를 broadcast 합니다. 결과 row의 물리 입력 경로가 해당 prefix 하위이면 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다.
+- `spark-hive` 클래스가 없으면 `hive_disabled_no_class` warning을 1회 남기고 빈 매핑으로 계속 진행합니다.
+- HiveSession 생성 또는 metastore enumeration이 실패하면 `hive_disabled_metastore_init_failed` warning을 남기고 빈 매핑으로 계속 진행합니다. 정상 활성화 시 `hive_enabled`, 인덱스 준비 시 `hive_lookup_ready size=<N>` info 로그가 남습니다.
+- 운영자가 Hive 장애와 무관하게 스캔을 진행하려면 `--disable-hive-table-lookup`을 사용합니다. 이 경우 enumeration을 수행하지 않고 `hive_table_fqn`은 모두 `""`입니다.
+- archive entry와 Excel sheet는 `<archive>!<entry>`, `<workbook>#<sheet>`에서 host archive/workbook path만 lookup 합니다.
+- partition별 `LOCATION` override는 현재 지원하지 않습니다. table-level `LOCATION`만 사용합니다.
+
 ## 병렬도
 - CLI 값을 주면 해당 값이 앱 로직에 직접 전달됩니다.
 - CLI 값을 생략하면 `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 또는 앱 기본값(`4`, `4`, `3`)을 사용합니다.
@@ -61,12 +80,12 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 여기서 중요한 점은 앱 레벨 병렬도가 곧 executor 수를 직접 보장하는 것은 아니라는 점입니다. 실제 executor 분산은 입력 파티션 수, Spark scheduler, dynamic allocation backlog에 함께 영향을 받습니다.
 
 ## Excel reader 설정
-- `--excel-max-rows-in-memory`를 지정하면 `xlsx` 실제 scan의 spark-excel reader에 `maxRowsInMemory` option으로 전달합니다.
-- CLI 값을 생략하면 `spark.privyspark.excel.maxRowsInMemory` Spark conf를 사용하고, 이 conf도 없으면 기본값 `2048`을 같은 reader option으로 전달합니다.
-- `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 Spark reader 경로에서 처리합니다.
-- `--excel-byte-array-max-override`를 지정하면 spark-excel 실제 읽기 경로에서 Apache POI `IOUtils.setByteArrayMaxOverride` 값을 적용합니다.
+- `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 Spark executor task의 StAX 스트리머에서 처리합니다.
+- `--excel-max-rows-in-memory`는 이전 spark-excel scan reader와의 CLI 호환을 위해 유지합니다. 값을 지정하면 `excel_max_rows_in_memory_unused` warning 로그를 남기고 scan 동작에는 사용하지 않습니다.
+- `spark.privyspark.excel.maxRowsInMemory` Spark conf도 현재 executor-side `xlsx` scan에는 영향을 주지 않습니다.
+- `--excel-byte-array-max-override`를 지정하면 Apache POI `IOUtils.setByteArrayMaxOverride` 값을 적용합니다. 이 설정은 POI 기반 Excel report writing 등 POI 사용 경로를 위한 호환 설정입니다.
 - CLI 값을 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`을 적용합니다.
-- 이 설정은 큰 workbook을 streaming reader 경로로 처리하기 위한 메모리 완화 옵션이며, 단일 `xlsx` 시트 자체를 row 단위로 split해서 여러 executor가 나눠 읽게 만들지는 않습니다.
+- executor-side `xlsx` 스트리머는 한 workbook sheet를 하나의 Spark task에서 읽습니다. 단일 시트 자체를 row 단위로 split해서 여러 executor가 나눠 읽게 만들지는 않으며, cache/persist도 추가하지 않아 여러 action에서는 workbook zip을 다시 읽습니다.
 
 ## 샘플링
 - `--sample-ratio`는 비결정적 row sampling입니다.

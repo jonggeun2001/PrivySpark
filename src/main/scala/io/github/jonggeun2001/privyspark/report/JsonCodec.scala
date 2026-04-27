@@ -6,7 +6,7 @@ import scala.util.Try
 
 private[privyspark] object JsonCodec {
   def scanResultToJson(result: ScanResult): String =
-    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"sampled_row_count":${result.sampled_row_count},"match_ratio":${result.match_ratio},"non_empty_match_ratio":${result.non_empty_match_ratio},"confidence":${result.confidence},"sample_raw_value":${jsonString(result.sample_raw_value)},"sample_matched_fragment":${jsonString(result.sample_matched_fragment)},"file_size":${result.file_size},"file_mtime_epoch_ms":${result.file_mtime_epoch_ms},"review_status":${jsonString(result.review_status)},"review_reason":${jsonString(result.review_reason)},"review_invalidated":${result.review_invalidated},"review_scope_file_identifiers":${jsonString(result.review_scope_file_identifiers)},"review_scope_file_fingerprints":${jsonString(result.review_scope_file_fingerprints)}}"""
+    s"""{"dataset_path":${jsonString(result.dataset_path)},"scan_timestamp":${jsonString(result.scan_timestamp)},"file_identifier":${jsonString(result.file_identifier)},"column_name":${jsonString(result.column_name)},"pii_type":${jsonString(result.pii_type)},"match_count":${result.match_count},"sampled_row_count":${result.sampled_row_count},"match_ratio":${result.match_ratio},"non_empty_match_ratio":${result.non_empty_match_ratio},"confidence":${result.confidence},"sample_raw_value":${jsonString(result.sample_raw_value)},"sample_matched_fragment":${jsonString(result.sample_matched_fragment)},"file_size":${result.file_size},"file_mtime_epoch_ms":${result.file_mtime_epoch_ms},"hive_table_fqn":${jsonString(result.hive_table_fqn)},"review_status":${jsonString(result.review_status)},"review_reason":${jsonString(result.review_reason)},"review_invalidated":${result.review_invalidated},"review_scope_file_identifiers":${jsonString(result.review_scope_file_identifiers)},"review_scope_file_fingerprints":${jsonString(result.review_scope_file_fingerprints)}}"""
 
   def scanErrorToJson(error: ScanError): String =
     s"""{"dataset_path":${jsonString(error.dataset_path)},"scan_timestamp":${jsonString(error.scan_timestamp)},"file_identifier":${jsonString(error.file_identifier)},"error_message":${jsonString(error.error_message)}}"""
@@ -53,6 +53,40 @@ private[privyspark] object JsonCodec {
         Some(false)
       } else {
         None
+      }
+    }
+
+  def extractJsonObjectArrayField(json: String, field: String): Option[Seq[String]] =
+    findJsonFieldValueStart(json, field).flatMap { startIndex =>
+      if (startIndex >= json.length || json.charAt(startIndex) != '[') {
+        None
+      } else {
+        val objects = scala.collection.mutable.ArrayBuffer.empty[String]
+        var index = startIndex + 1
+        var done = false
+        while (!done && index < json.length) {
+          index = skipWhitespace(json, index)
+          if (index < json.length && json.charAt(index) == ']') {
+            done = true
+            index += 1
+          } else if (index < json.length && json.charAt(index) == '{') {
+            val nextIndex = skipJsonValue(json, index)
+            if (nextIndex < 0) {
+              return None
+            }
+            objects += json.substring(index, nextIndex)
+            index = skipWhitespace(json, nextIndex)
+            if (index < json.length && json.charAt(index) == ',') {
+              index += 1
+            } else if (index < json.length && json.charAt(index) == ']') {
+              done = true
+              index += 1
+            }
+          } else {
+            return None
+          }
+        }
+        if (done) Some(objects.toSeq) else None
       }
     }
 

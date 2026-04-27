@@ -44,6 +44,7 @@ final case class ScanResult(
   sample_matched_fragment: String,
   file_size: Long = 0L,
   file_mtime_epoch_ms: Long = 0L,
+  hive_table_fqn: String = "",
   review_status: String = "pending",
   review_reason: String = "",
   review_invalidated: Boolean = false,

@@ -12,6 +12,7 @@
 - `RulesetLoader.scala`: built-in/external ruleset loading, suppression loading, and regex validation
 - `util/DriverLogger.scala`: driver log level parsing and structured log format
 - `detect/DetectionAggregator.scala`: metric aggregation and fallback strategies
+- `hive/HiveTableLookup.scala`: Hive table `LOCATION` normalization, longest-prefix lookup indexing, and broadcast creation
 - `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: input expansion, grouping, and scan execution
 - `report/ReportWriter.scala`: final report writing and format-specific outputs
 - `PrivySparkApp.scala`: input expansion, grouping, exact split, scan orchestration, progress/final report writing
@@ -24,18 +25,19 @@
 ## Processing Flow
 1. validate input path
 2. load ruleset, pre-validate regexes, and merge ruleset/CLI suppressions
-3. collect physical files and apply ignore-pattern filtering
-4. expand archive entries and workbook sheets from workbook metadata, pass through direct compressed text-style inputs, probe magic bytes, detect CSV dialects, normalize text fallback, and filter ignored archive entries
-5. build first-pass groups by `(directory, format)`
-6. sample a representative file for schema detection
-7. perform schema-aware split and determine whether directory identifiers are safe
-8. exact-split revalidate sampled multi-file groups before scanning
-9. acquire `<output>/_progress-preparing.json`, prepare `<output>/_progress/<run_id>`, clean stale progress
-10. batch scan non-sampled batch-capable groups, optionally with file sampling
-11. direct-file scan non-sampled `xlsx` groups
-12. fall back to file-level scanning if a normal group batch scan fails
-13. create in-flight markers while group/file/allowlist work is active, then write progress JSONL shards when a group or file completes
-14. merge progress JSONL into final `scan_results` and `scan_errors`, then remove `_progress/<run_id>`
+3. when Hive lookup is enabled, enumerate Hive Catalog table `LOCATION` values once on the driver and create a broadcast index
+4. collect physical files and apply ignore-pattern filtering
+5. expand archive entries and workbook sheets from workbook metadata, pass through direct compressed text-style inputs, probe magic bytes, detect CSV dialects, normalize text fallback, and filter ignored archive entries
+6. build first-pass groups by `(directory, format)`
+7. sample a representative file for schema detection
+8. perform schema-aware split and determine whether directory identifiers are safe
+9. exact-split revalidate sampled multi-file groups before scanning
+10. acquire `<output>/_progress-preparing.json`, prepare `<output>/_progress/<run_id>`, clean stale progress
+11. batch scan non-sampled batch-capable groups, optionally with file sampling
+12. direct-file scan non-sampled `xlsx` groups
+13. fall back to file-level scanning if a normal group batch scan fails
+14. create in-flight markers while group/file/allowlist work is active, then write progress JSONL shards when a group or file completes
+15. merge progress JSONL into final `scan_results` and `scan_errors`, then remove `_progress/<run_id>`
 
 ## Operational Invariants
 - `scan_results` stores two interpretation aids: `sample_matched_fragment` keeps the detected fragment itself, and `sample_raw_value` keeps only up to 50 characters of surrounding context on each side.
@@ -44,7 +46,8 @@
 - Suppression is applied during `DetectionAggregator.buildMetrics`, before metric planning, so excluded `(column, pii_type)` pairs never materialize result rows.
 - Directory discovery uses breadth-first traversal and parallelizes `listStatus` per BFS level, capped by the safety ceiling `64`.
 - After file discovery, effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
-- `xlsx` pre-scan lightly parses workbook metadata and header row XML on the driver to plan visible sheets and schema signatures. Sheet body row/cell reads are deferred to Spark reader-based scan paths.
+- Hive lookup enumerates only table-level `LOCATION` values and falls back to an empty mapping with a warning on failure. `hive_table_fqn` is intentionally excluded from review snapshot comparison payloads.
+- `xlsx` pre-scan lightly parses workbook metadata and header row XML on the driver to plan visible sheets and schema signatures. Sheet body row/cell reads are deferred to the executor-side StAX scan path.
 - `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.
 - `--file-sample-ratio` applies to both batch scans and file-fallback scans, but only when a group has more files than `--file-sample-min-files`; when it does apply, PrivySpark uniformly samples at least one file using `ceil(fileCount * ratio)`.
 - When file sampling actually applies, `--sample-ratio < 1.0` is ignored for that group and a warning is logged.

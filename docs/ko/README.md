@@ -13,6 +13,7 @@
 - [reference/rules-and-detection.md](reference/rules-and-detection.md): ruleset 규칙, `match_type`, 탐지 타입, 집계 전략
 - [reference/reports-and-errors.md](reference/reports-and-errors.md): 최종 출력, 오류 리포트, 샘플 값 저장 정책
 - [reference/review-workflow.md](reference/review-workflow.md): false positive 검토, allowlist 생성, 재스캔 suppression
+- [reference/offline-review-collector.md](reference/offline-review-collector.md): 서버 없는 담당자 리뷰, response JSON 회수, 누적 review state 운영
 
 ## 아키텍처
 - [architecture/overview.md](architecture/overview.md): 컴포넌트 맵, 처리 플로우, 운영 불변 조건

@@ -24,6 +24,7 @@ private[privyspark] object ScanResultBuilder {
     sampleValues: Map[String, SampleValue] = Map.empty,
     fileSize: Long = 0L,
     fileMtimeEpochMs: Long = 0L,
+    hiveTableFqn: String = "",
     reviewScopeFileIdentifiers: Seq[String] = Seq.empty,
     reviewScopeFileFingerprints: String = ""
   ): Seq[ScanResult] = {
@@ -51,6 +52,7 @@ private[privyspark] object ScanResultBuilder {
           sample_matched_fragment = sampleValue.map(_.sampleMatchedFragment).getOrElse(""),
           file_size = fileSize,
           file_mtime_epoch_ms = fileMtimeEpochMs,
+          hive_table_fqn = hiveTableFqn,
           review_scope_file_identifiers = ReviewScopeIdentifierCodec.encode(reviewScopeFileIdentifiers),
           review_scope_file_fingerprints = reviewScopeFileFingerprints
         )
@@ -59,6 +61,7 @@ private[privyspark] object ScanResultBuilder {
   }
 
   def comparableResultPayloads(results: Seq[ScanResult]): Seq[(String, String, String, Long, Long, Double, Double, Double)] =
+    // Hive mapping depends on external metastore state and must not invalidate review snapshots.
     results
       .map(result =>
         (

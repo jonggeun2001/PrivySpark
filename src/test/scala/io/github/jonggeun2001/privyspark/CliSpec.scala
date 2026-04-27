@@ -29,12 +29,15 @@ class CliSpec extends AnyFunSuite {
     assert(config.ignorePatterns.isEmpty)
     assert(config.ignoreFile.isEmpty)
     assert(config.allowlist.isEmpty)
+    assert(config.reviewStateRoot.isEmpty)
+    assert(config.reviewSampleMode == "masked")
     assert(config.suppressions.isEmpty)
     assert(config.suppressionFile.isEmpty)
+    assert(!config.disableHiveTableLookup)
     assert(config.effectiveOutputFormats == Seq("parquet"))
   }
 
-  test("parses optional scan ruleset, sampling, parallelism, ignore options, allowlist, and output formats") {
+  test("parses optional scan ruleset, sampling, parallelism, Hive lookup, ignore options, allowlist, and output formats") {
     val parsed = Cli.parse(
       Array(
         "--path",
@@ -71,8 +74,13 @@ class CliSpec extends AnyFunSuite {
         "backup/**",
         "--allowlist",
         "/etc/privyspark/allowlist.jsonl",
+        "--review-state-root",
+        "/var/lib/privyspark/review-state",
+        "--review-sample-mode",
+        "raw",
         "--ignore-file",
         "/etc/privyspark/ignore.txt",
+        "--disable-hive-table-lookup",
         "--suppress",
         "prdctcd:driver_license_number",
         "--suppress",
@@ -98,7 +106,10 @@ class CliSpec extends AnyFunSuite {
     assert(config.effectiveOutputFormats == Seq("csv", "excel"))
     assert(config.ignorePatterns == Seq("_SUCCESS", "backup/**"))
     assert(config.allowlist.contains("/etc/privyspark/allowlist.jsonl"))
+    assert(config.reviewStateRoot.contains("/var/lib/privyspark/review-state"))
+    assert(config.reviewSampleMode == "raw")
     assert(config.ignoreFile.contains("/etc/privyspark/ignore.txt"))
+    assert(config.disableHiveTableLookup)
     assert(config.suppressions == Seq("prdctcd:driver_license_number", "foo:email", "ns:email:email"))
     assert(config.suppressionFile.contains("/etc/privyspark/suppressions.txt"))
   }
@@ -135,6 +146,8 @@ class CliSpec extends AnyFunSuite {
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd:"))
     val blankSuppressionFile =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppression-file", "   "))
+    val invalidReviewSampleMode =
+      Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--review-sample-mode", "verbose"))
 
     assert(zeroRatio.isEmpty)
     assert(overOneRatio.isEmpty)
@@ -153,6 +166,7 @@ class CliSpec extends AnyFunSuite {
     assert(missingSuppressionColumn.isEmpty)
     assert(missingSuppressionPiiType.isEmpty)
     assert(blankSuppressionFile.isEmpty)
+    assert(invalidReviewSampleMode.isEmpty)
   }
 
   test("parses review apply subcommand") {
@@ -181,6 +195,26 @@ class CliSpec extends AnyFunSuite {
     assert(config.allowlistPath == "/data/review/allowlist.jsonl")
     assert(config.reviewer == "reviewer@example.com")
     assert(config.dryRun)
+  }
+
+  test("parses review collect subcommand") {
+    val parsed = Cli.parse(
+      Array(
+        "review",
+        "collect",
+        "--scan-results",
+        "/data/output/parquet/scan_results",
+        "--review-state-root",
+        "/data/review-state"
+      )
+    )
+
+    assert(parsed.nonEmpty)
+    assert(parsed.get.isInstanceOf[CliCommand.ReviewCollect])
+
+    val config = parsed.get.asInstanceOf[CliCommand.ReviewCollect].config
+    assert(config.scanResultsPath == "/data/output/parquet/scan_results")
+    assert(config.reviewStateRoot == "/data/review-state")
   }
 
   test("captures parser errors without terminating") {
