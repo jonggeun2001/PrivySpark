@@ -110,7 +110,7 @@ private[privyspark] object ReviewCollectCommand {
     val latestAccepted = accepted
       .groupBy(_.finding.findingKey)
       .values
-      .map(_.maxBy(response => response.respondedAt))
+      .map(_.maxBy(response => instantOrderingKey(response.respondedAt)))
       .toSeq
 
     val existingAllowlistPath = s"$currentPath/allowlist.jsonl"
@@ -208,6 +208,11 @@ private[privyspark] object ReviewCollectCommand {
     } else {
       None
     }
+  }
+
+  private def instantOrderingKey(value: String): (Long, Int) = {
+    val instant = Instant.parse(value)
+    instant.getEpochSecond -> instant.getNano
   }
 
   private final case class ExactScope(affectedKeys: Set[AllowlistKey], entries: Seq[AllowlistEntry])
