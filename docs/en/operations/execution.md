@@ -1,7 +1,7 @@
 # Execution and Operations
 
 ## Execution Model
-- The public commands are `privyspark scan` and `privyspark review apply`.
+- The public commands are `privyspark scan`, `privyspark review apply`, and `privyspark review collect`.
 - Input and output paths must be absolute paths or URIs.
 - Input filenames may contain spaces and Spark glob-special characters (`*`, `?`, `[`, `]`, `{`, `}`); PrivySpark treats them as literal filenames. Glob syntax applies only to `--ignore` and `--ignore-file` patterns.
 - The default target runtime is Spark on YARN cluster mode.
@@ -23,6 +23,8 @@
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
+- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html`
+- `--review-sample-mode <raw|masked|none>`: sample display mode for `review.html`, default `masked`
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
 - `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
 - `--disable-hive-table-lookup`: disable `hive_table_fqn` mapping from Hive Catalog table `LOCATION` prefixes
@@ -33,6 +35,12 @@
 - `--allowlist <ABS_PATH_OR_URI>`: allowlist JSONL path to create or update
 - `--reviewer <STRING>`: reviewer identifier
 - `--dry-run`: calculates staged entries without writing the output file
+
+## `review collect` CLI Arguments
+- `--scan-results <ABS_PATH_OR_URI>`: current `scan_results` path. `csv`, `parquet`, and `xlsx` (`scan_results` sheet) are supported.
+- `--review-state-root <ABS_PATH_OR_URI>`: state root where response JSON files are read and cumulative review state is written
+
+`review collect` reads `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`.
 
 ## Ignore Patterns
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`

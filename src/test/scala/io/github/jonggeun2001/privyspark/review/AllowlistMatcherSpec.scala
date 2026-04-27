@@ -156,6 +156,51 @@ class AllowlistMatcherSpec extends AnyFunSuite {
     }
   }
 
+  test("evaluate suppresses wildcard pattern entries without fingerprint metadata") {
+    val tempFile = Files.createTempFile("privyspark-pattern-allowlist-", ".jsonl")
+    val line =
+      """{"entry_type":"pattern","dataset_path":"/data","file_identifier":"reviews/*","column_name":"temp_*","pii_type":"driver_license_number","reason":"known temporary identifiers","reviewer":"reviewer@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"finding"}"""
+
+    try {
+      Files.write(tempFile, s"$line\n".getBytes(StandardCharsets.UTF_8))
+      val matcher = AllowlistMatcher.load(new org.apache.hadoop.conf.Configuration(), tempFile.toAbsolutePath.toString)
+
+      val evaluation = matcher.evaluate(
+        "/data",
+        "temp_driver_no",
+        "driver_license_number",
+        Seq(fingerprint("reviews/a.csv", "changed"))
+      )
+
+      assert(evaluation.shouldSuppress)
+      assert(matcher.size == 1)
+    } finally {
+      Files.deleteIfExists(tempFile)
+    }
+  }
+
+  test("evaluate ignores expired wildcard pattern entries") {
+    val tempFile = Files.createTempFile("privyspark-expired-pattern-allowlist-", ".jsonl")
+    val line =
+      """{"entry_type":"pattern","dataset_path":"/data","file_identifier":"reviews/*","column_name":"temp_*","pii_type":"driver_license_number","reason":"expired temporary identifiers","reviewer":"reviewer@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2000-01-01","source_finding_key":"finding"}"""
+
+    try {
+      Files.write(tempFile, s"$line\n".getBytes(StandardCharsets.UTF_8))
+      val matcher = AllowlistMatcher.load(new org.apache.hadoop.conf.Configuration(), tempFile.toAbsolutePath.toString)
+
+      val evaluation = matcher.evaluate(
+        "/data",
+        "temp_driver_no",
+        "driver_license_number",
+        Seq(fingerprint("reviews/a.csv", "changed"))
+      )
+
+      assert(!evaluation.shouldSuppress)
+    } finally {
+      Files.deleteIfExists(tempFile)
+    }
+  }
+
   private def allowlistEntry(fileIdentifier: String): AllowlistEntry =
     AllowlistEntry(
       datasetPath = "/data",

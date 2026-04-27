@@ -9,20 +9,26 @@ import org.apache.spark.SparkFiles
 import java.io.{BufferedReader, InputStreamReader}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Paths}
+import java.time.LocalDate
+import java.util.Locale
 import scala.collection.mutable.ArrayBuffer
 
 final class AllowlistMatcher private (
   private val entriesByKey: Map[AllowlistKey, AllowlistEntry],
-  private val directoryCandidates: Set[(String, String, String, String)]
+  private val directoryCandidates: Set[(String, String, String, String)],
+  private val patternEntries: Seq[PatternAllowlistEntry]
 ) {
-  def isEmpty: Boolean = entriesByKey.isEmpty
-  def size: Int = entriesByKey.size
+  def isEmpty: Boolean = entriesByKey.isEmpty && patternEntries.isEmpty
+  def size: Int = entriesByKey.size + patternEntries.size
 
   def hasExactCandidate(datasetPath: String, fileIdentifier: String, columnName: String, piiType: String): Boolean =
     entriesByKey.contains(AllowlistKey(datasetPath, fileIdentifier, columnName, piiType))
 
   def hasDirectoryCandidate(datasetPath: String, directoryIdentifier: String, columnName: String, piiType: String): Boolean =
     directoryCandidates.contains((datasetPath, directoryIdentifier, columnName, piiType))
+
+  def hasPatternCandidate(datasetPath: String, fileIdentifier: String, columnName: String, piiType: String): Boolean =
+    activePatternEntries.exists(patternMatches(_, datasetPath, fileIdentifier, columnName, piiType))
 
   def evaluate(
     datasetPath: String,
@@ -32,6 +38,15 @@ final class AllowlistMatcher private (
   ): AllowlistEvaluation = {
     if (fingerprints.isEmpty) {
       return AllowlistEvaluation(shouldSuppress = false)
+    }
+
+    val activePatterns = activePatternEntries
+    val allFingerprintsCoveredByPattern =
+      activePatterns.nonEmpty &&
+        fingerprints.forall(fingerprint => activePatterns.exists(patternMatches(_, datasetPath, fingerprint.fileIdentifier, columnName, piiType)))
+
+    if (allFingerprintsCoveredByPattern) {
+      return AllowlistEvaluation(shouldSuppress = true)
     }
 
     val exactMatches = fingerprints.flatMap { fingerprint =>
@@ -66,30 +81,92 @@ final class AllowlistMatcher private (
       entry.fileMtimeEpochMs == fingerprint.fileMtimeEpochMs &&
       entry.fileChecksumAlgo.equalsIgnoreCase(fingerprint.fileChecksumAlgo) &&
       entry.fileChecksum.equalsIgnoreCase(fingerprint.fileChecksum)
+
+  private def activePatternEntries: Seq[PatternAllowlistEntry] =
+    patternEntries.filterNot(entry => isExpired(entry.expiresAt))
+
+  private def isExpired(expiresAt: String): Boolean =
+    try {
+      LocalDate.parse(expiresAt).isBefore(LocalDate.now())
+    } catch {
+      case _: RuntimeException => true
+    }
+
+  private def patternMatches(
+    entry: PatternAllowlistEntry,
+    datasetPath: String,
+    fileIdentifier: String,
+    columnName: String,
+    piiType: String
+  ): Boolean =
+    entry.datasetPath == datasetPath &&
+      wildcardMatches(entry.fileIdentifierPattern, fileIdentifier) &&
+      wildcardMatches(entry.columnNamePattern, columnName) &&
+      wildcardMatches(entry.piiTypePattern, piiType)
+
+  private def wildcardMatches(pattern: String, value: String): Boolean = {
+    val normalizedPattern = Option(pattern).getOrElse("")
+    val normalizedValue = Option(value).getOrElse("")
+    val regex = normalizedPattern.flatMap {
+      case '*' => ".*"
+      case ch if "\\.[]{}()+-^$?|".contains(ch) => "\\" + ch
+      case ch => ch.toString
+    }
+    normalizedValue.matches(regex)
+  }
 }
 
 object AllowlistMatcher {
   val empty: AllowlistMatcher = fromEntries(Seq.empty)
 
-  def fromEntries(entries: Seq[AllowlistEntry]): AllowlistMatcher = {
+  def fromEntries(entries: Seq[AllowlistEntry]): AllowlistMatcher = fromEntries(entries, Seq.empty)
+
+  def fromEntries(entries: Seq[AllowlistEntry], patterns: Seq[PatternAllowlistEntry]): AllowlistMatcher = {
     val normalizedEntries = entries.groupBy(_.key).map {
       case (key, groupedEntries) => key -> groupedEntries.last
     }
+    val normalizedPatterns = patterns.groupBy(_.key).map {
+      case (_, groupedEntries) => groupedEntries.last
+    }.toSeq
     val derivedDirectoryCandidates = normalizedEntries.values.flatMap { entry =>
       directoryCandidate(entry).map { directoryIdentifier =>
         (entry.datasetPath, directoryIdentifier, entry.columnName, entry.piiType)
       }
     }.toSet
-    new AllowlistMatcher(normalizedEntries, derivedDirectoryCandidates)
+    new AllowlistMatcher(normalizedEntries, derivedDirectoryCandidates, normalizedPatterns)
   }
+
+  def combine(matchers: Seq[AllowlistMatcher]): AllowlistMatcher =
+    fromEntries(
+      matchers.flatMap(_.entriesByKey.values),
+      matchers.flatMap(_.patternEntries)
+    )
 
   def load(conf: Configuration, path: String): AllowlistMatcher = {
     val normalizedPath = Option(path).map(_.trim).getOrElse("")
     if (normalizedPath.isEmpty) {
       empty
     } else {
-      fromEntries(loadEntries(conf, resolveReadableAllowlistPath(conf, normalizedPath).getOrElse(normalizedPath)))
+      val resolvedPath = resolveReadableAllowlistPath(conf, normalizedPath).getOrElse(normalizedPath)
+      fromEntries(loadEntries(conf, resolvedPath), loadPatternEntries(conf, resolvedPath))
     }
+  }
+
+  def loadExisting(conf: Configuration, path: String): AllowlistMatcher = {
+    val normalizedPath = Option(path).map(_.trim).getOrElse("")
+    if (normalizedPath.isEmpty || resolveReadableAllowlistPath(conf, normalizedPath).isEmpty) {
+      empty
+    } else {
+      load(conf, normalizedPath)
+    }
+  }
+
+  def loadExistingMany(conf: Configuration, paths: Seq[String]): AllowlistMatcher = {
+    val resolvedPaths = paths.flatMap(path => resolveReadableAllowlistPath(conf, path.trim))
+    fromEntries(
+      resolvedPaths.flatMap(loadEntries(conf, _)),
+      resolvedPaths.flatMap(loadPatternEntries(conf, _))
+    )
   }
 
   def loadEntries(conf: Configuration, path: String): Seq[AllowlistEntry] = {
@@ -98,6 +175,15 @@ object AllowlistMatcher {
       Seq.empty
     } else {
       readLines(conf, resolveReadableAllowlistPath(conf, normalizedPath).getOrElse(normalizedPath)).flatMap(parseEntry)
+    }
+  }
+
+  def loadPatternEntries(conf: Configuration, path: String): Seq[PatternAllowlistEntry] = {
+    val normalizedPath = Option(path).map(_.trim).getOrElse("")
+    if (normalizedPath.isEmpty) {
+      Seq.empty
+    } else {
+      readLines(conf, resolveReadableAllowlistPath(conf, normalizedPath).getOrElse(normalizedPath)).flatMap(parsePatternEntry)
     }
   }
 
@@ -115,6 +201,10 @@ object AllowlistMatcher {
   }
 
   private def parseEntry(line: String): Option[AllowlistEntry] = {
+    val entryType = extractJsonStringField(line, "entry_type").map(_.trim.toLowerCase(Locale.ROOT))
+    if (entryType.contains("pattern")) {
+      return None
+    }
     for {
       datasetPath <- extractJsonStringField(line, "dataset_path")
       fileIdentifier <- extractJsonStringField(line, "file_identifier")
@@ -139,6 +229,37 @@ object AllowlistMatcher {
         fileMtimeEpochMs = fileMtimeEpochMs,
         fileChecksumAlgo = extractJsonStringField(line, "file_checksum_algo").getOrElse(FileIdentifierResolver.DefaultChecksumAlgo),
         fileChecksum = fileChecksum
+      )
+    }
+  }
+
+  private def parsePatternEntry(line: String): Option[PatternAllowlistEntry] = {
+    val entryType = extractJsonStringField(line, "entry_type").map(_.trim.toLowerCase(Locale.ROOT))
+    if (!entryType.contains("pattern")) {
+      None
+    } else {
+      for {
+        datasetPath <- extractJsonStringField(line, "dataset_path")
+        fileIdentifierPattern <- extractJsonStringField(line, "file_identifier_pattern")
+          .orElse(extractJsonStringField(line, "file_identifier"))
+        columnNamePattern <- extractJsonStringField(line, "column_name_pattern")
+          .orElse(extractJsonStringField(line, "column_name"))
+        piiTypePattern <- extractJsonStringField(line, "pii_type_pattern")
+          .orElse(extractJsonStringField(line, "pii_type"))
+        reason <- extractJsonStringField(line, "reason")
+        reviewer <- extractJsonStringField(line, "reviewer")
+        reviewedAt <- extractJsonStringField(line, "reviewed_at")
+        expiresAt <- extractJsonStringField(line, "expires_at")
+      } yield PatternAllowlistEntry(
+        datasetPath = datasetPath,
+        fileIdentifierPattern = fileIdentifierPattern,
+        columnNamePattern = columnNamePattern,
+        piiTypePattern = piiTypePattern,
+        reason = reason,
+        reviewer = reviewer,
+        reviewedAt = reviewedAt,
+        expiresAt = expiresAt,
+        sourceFindingKey = extractJsonStringField(line, "source_finding_key").getOrElse("")
       )
     }
   }

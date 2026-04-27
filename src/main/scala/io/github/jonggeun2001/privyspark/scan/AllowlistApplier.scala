@@ -120,9 +120,11 @@ private[privyspark] object AllowlistApplier {
         val reviewScopeIdentifiers = ReviewSnapshotLog.parseReviewScopeIdentifiers(result.review_scope_file_identifiers)
         val hasCandidate =
           allowlistMatcher.hasDirectoryCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type) ||
+            allowlistMatcher.hasPatternCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type) ||
             (if (reviewScopeIdentifiers.nonEmpty) {
               reviewScopeIdentifiers.exists(identifier =>
-                allowlistMatcher.hasExactCandidate(result.dataset_path, identifier, result.column_name, result.pii_type)
+                allowlistMatcher.hasExactCandidate(result.dataset_path, identifier, result.column_name, result.pii_type) ||
+                  allowlistMatcher.hasPatternCandidate(result.dataset_path, identifier, result.column_name, result.pii_type)
               )
             } else {
               allowlistMatcher.hasExactCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)

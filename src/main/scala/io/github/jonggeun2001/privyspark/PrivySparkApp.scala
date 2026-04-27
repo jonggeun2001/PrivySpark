@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.cli.{Cli, CliCommand, CliConfig, PathValidator, ReviewApplyCliConfig}
+import io.github.jonggeun2001.privyspark.cli.{Cli, CliCommand, CliConfig, PathValidator, ReviewApplyCliConfig, ReviewCollectCliConfig}
 import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, RulesetLoader, SuppressionSet}
 import io.github.jonggeun2001.privyspark.format.ExcelReadConfig
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
@@ -8,7 +8,7 @@ import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupI
 import io.github.jonggeun2001.privyspark.model.{ProgressRun, ScanReadOptions, Suppression}
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager._
-import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewApplyCommand}
+import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewApplyCommand, ReviewCollectCommand, ReviewHtmlWriter, ScanResultsReader}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{renderConfiguredParallelism, resolveCliParallelism}
 import io.github.jonggeun2001.privyspark.util.{DriverLogLevel, DriverLogger}
@@ -42,7 +42,8 @@ object PrivySparkApp {
     createSparkSession: () => SparkSession = () => buildDefaultSparkSession(),
     exitWith: Int => Unit = code => System.exit(code),
     runScanCommand: (SparkSession, CliConfig) => Unit = runScan,
-    runReviewApplyCommand: (SparkSession, ReviewApplyCliConfig) => Unit = ReviewApplyCommand.run
+    runReviewApplyCommand: (SparkSession, ReviewApplyCliConfig) => Unit = ReviewApplyCommand.run,
+    runReviewCollectCommand: (SparkSession, ReviewCollectCliConfig) => Unit = ReviewCollectCommand.run
   ): Unit = {
     val parseResult = Cli.parseWithErrors(args)
     val command = parseResult.command.getOrElse {
@@ -69,6 +70,11 @@ object PrivySparkApp {
           exitWith(2)
           return
         }
+        if (config.reviewStateRoot.exists(path => !PathValidator.isAbsolute(path))) {
+          emitAbsolutePathError("--review-state-root", config.reviewStateRoot.get)
+          exitWith(2)
+          return
+        }
       case CliCommand.ReviewApply(config) =>
         if (!validateAbsoluteArgument("--scan-results", config.scanResultsPath, exitWith)) {
           return
@@ -77,6 +83,13 @@ object PrivySparkApp {
           return
         }
         if (!validateAbsoluteArgument("--allowlist", config.allowlistPath, exitWith)) {
+          return
+        }
+      case CliCommand.ReviewCollect(config) =>
+        if (!validateAbsoluteArgument("--scan-results", config.scanResultsPath, exitWith)) {
+          return
+        }
+        if (!validateAbsoluteArgument("--review-state-root", config.reviewStateRoot, exitWith)) {
           return
         }
     }
@@ -92,6 +105,8 @@ object PrivySparkApp {
           runScanCommand(session, config)
         case CliCommand.ReviewApply(config) =>
           runReviewApplyCommand(session, config)
+        case CliCommand.ReviewCollect(config) =>
+          runReviewCollectCommand(session, config)
       }
     } catch {
       case control: ControlThrowable =>
@@ -172,9 +187,15 @@ object PrivySparkApp {
       config.ignorePatterns,
       config.ignoreFile
     )
-    val allowlistMatcher = config.allowlist
-      .map(path => AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, path))
-      .getOrElse(AllowlistMatcher.empty)
+    val reviewStateAllowlist = config.reviewStateRoot.map(root => s"${root.stripSuffix("/")}/current/allowlist.jsonl")
+    val allowlistMatcher = AllowlistMatcher.combine(Seq(
+      config.allowlist
+        .map(path => AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, path))
+        .getOrElse(AllowlistMatcher.empty),
+      reviewStateAllowlist
+        .map(path => AllowlistMatcher.loadExisting(spark.sparkContext.hadoopConfiguration, path))
+        .getOrElse(AllowlistMatcher.empty)
+    ))
 
     DriverLogger.info(
       "scan_start",
@@ -193,6 +214,8 @@ object PrivySparkApp {
       "ignore_patterns" -> config.ignorePatterns.size,
       "ignore_file" -> config.ignoreFile.getOrElse("none"),
       "allowlist" -> config.allowlist.getOrElse("none"),
+      "review_state_root" -> config.reviewStateRoot.getOrElse("none"),
+      "review_sample_mode" -> config.reviewSampleMode,
       "allowlist_entries" -> allowlistMatcher.size,
       "suppressions" -> config.suppressions.size,
       "suppression_file" -> config.suppressionFile.getOrElse("none"),
@@ -306,7 +329,18 @@ object PrivySparkApp {
         spark,
         config.outputPath,
         preparedProgressRun,
-        outputFormats
+        outputFormats,
+        resultDf => {
+          if (config.reviewStateRoot.nonEmpty) {
+            ReviewHtmlWriter.write(
+              spark.sparkContext.hadoopConfiguration,
+              config.outputPath,
+              config.inputPath,
+              ScanResultsReader.toScanResults(resultDf),
+              config.reviewSampleMode
+            )
+          }
+        }
       )
       DriverLogger.debug(
         "report_write_complete",

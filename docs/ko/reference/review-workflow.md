@@ -5,6 +5,8 @@
 - 검토 단위는 `(file_identifier, column_name, pii_type)` 입니다.
 - 파일 메타데이터와 checksum이 바뀌면 기존 false positive 판정은 자동으로 무효화됩니다.
 
+이 문서는 사람이 `scan_results`를 직접 편집하고 `review apply`로 exact allowlist를 만드는 단일 파일 워크플로우입니다. 서버 없이 담당자에게 `review.html`을 보내고 response JSON을 회수해 누적 state를 운영하려면 [offline-review-collector.md](offline-review-collector.md)를 사용합니다.
+
 ## 1. 1차 스캔
 ```bash
 privyspark scan \

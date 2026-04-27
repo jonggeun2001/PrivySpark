@@ -97,6 +97,14 @@ private[privyspark] object ProgressRunManager {
     outputRoot: String,
     progressRun: ProgressRun,
     outputFormats: Seq[String]
+  ): (Long, Long) = mergeProgressReports(spark, outputRoot, progressRun, outputFormats, _ => ())
+
+  def mergeProgressReports(
+    spark: SparkSession,
+    outputRoot: String,
+    progressRun: ProgressRun,
+    outputFormats: Seq[String],
+    afterReportWrite: org.apache.spark.sql.DataFrame => Unit
   ): (Long, Long) = {
     val normalizedOutputFormats = OutputFormats.requireSupported(outputFormats)
     DriverLogger.debug(
@@ -111,6 +119,7 @@ private[privyspark] object ProgressRunManager {
     val resultCount = resultDf.count()
     val errorCount = errorDf.count()
     ReportWriter.writeReports(spark, outputRoot, resultDf, errorDf, normalizedOutputFormats, () => ())
+    afterReportWrite(resultDf)
     ProgressIO.deleteProgressRun(spark.sparkContext.hadoopConfiguration, progressRun)
     DriverLogger.debug(
       "progress_merge_complete",

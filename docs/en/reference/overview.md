@@ -3,7 +3,7 @@
 PrivySpark is a Spark-based batch scanner that detects potential PII in a dataset path and writes aggregated result and error reports.
 
 ## Scope
-- The public commands are `privyspark scan` and `privyspark review apply`.
+- The public commands are `privyspark scan`, `privyspark review apply`, and `privyspark review collect`.
 - Input paths must be absolute paths or URIs.
 - Supported formats are `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`, and archive families `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, and `rar`.
 - Direct text-style data files (`csv`, `json/jsonl/ndjson`) wrapped by `gzip` or `bzip2` are passed through to Spark/Hadoop readers using the original path.
@@ -11,6 +11,7 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 - Only binary-looking unsupported inputs are recorded as `Unsupported file format`.
 - `--ignore` and `--ignore-file` define scan exclusions by basename or input-root-relative path.
 - `suppressions:` or `--suppress`, `--suppression-file` remove only selected `(column, pii_type)` result pairs.
+- `--review-state-root` applies the cumulative offline-review allowlist and writes `<output>/review/review.html`.
 
 ## Detection Model
 - Detection uses ruleset-based regexes directly.
@@ -29,6 +30,7 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 - Result report: `scan_results`
 - Error report: `scan_errors`
 - Output formats: Parquet + CSV
+- Offline review, when enabled: `<output>/review/review.html`
 - During long scans, intermediate JSONL shards may appear under `<output>/_progress/<run_id>`, but they are not the final consumer contract.
 
 ## Sample Datasets

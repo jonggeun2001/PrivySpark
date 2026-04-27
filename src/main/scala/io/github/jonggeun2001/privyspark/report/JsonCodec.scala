@@ -56,6 +56,40 @@ private[privyspark] object JsonCodec {
       }
     }
 
+  def extractJsonObjectArrayField(json: String, field: String): Option[Seq[String]] =
+    findJsonFieldValueStart(json, field).flatMap { startIndex =>
+      if (startIndex >= json.length || json.charAt(startIndex) != '[') {
+        None
+      } else {
+        val objects = scala.collection.mutable.ArrayBuffer.empty[String]
+        var index = startIndex + 1
+        var done = false
+        while (!done && index < json.length) {
+          index = skipWhitespace(json, index)
+          if (index < json.length && json.charAt(index) == ']') {
+            done = true
+            index += 1
+          } else if (index < json.length && json.charAt(index) == '{') {
+            val nextIndex = skipJsonValue(json, index)
+            if (nextIndex < 0) {
+              return None
+            }
+            objects += json.substring(index, nextIndex)
+            index = skipWhitespace(json, nextIndex)
+            if (index < json.length && json.charAt(index) == ',') {
+              index += 1
+            } else if (index < json.length && json.charAt(index) == ']') {
+              done = true
+              index += 1
+            }
+          } else {
+            return None
+          }
+        }
+        if (done) Some(objects.toSeq) else None
+      }
+    }
+
   def escapeJson(value: String): String = {
     val builder = new StringBuilder
     value.foreach {
