@@ -40,3 +40,4 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 - ruleset과 탐지 제약: [rules-and-detection.md](rules-and-detection.md)
 - 결과/오류 리포트: [reports-and-errors.md](reports-and-errors.md)
 - false positive 검토 워크플로우: [review-workflow.md](review-workflow.md)
+- 서버 없는 오프라인 리뷰와 누적 collector 설계: [offline-review-collector.md](offline-review-collector.md)
