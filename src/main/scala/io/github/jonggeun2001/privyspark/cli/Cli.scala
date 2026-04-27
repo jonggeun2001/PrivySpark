@@ -23,7 +23,8 @@ final case class CliConfig(
   ignoreFile: Option[String] = None,
   allowlist: Option[String] = None,
   suppressions: Seq[String] = Seq.empty,
-  suppressionFile: Option[String] = None
+  suppressionFile: Option[String] = None,
+  disableHiveTableLookup: Boolean = false
 ) {
   def effectiveOutputFormats: Seq[String] = OutputFormats.normalizeAll(outputFormats)
 }
@@ -185,7 +186,11 @@ object Cli {
           if (Option(value).exists(_.trim.nonEmpty)) success
           else failure("suppression-file must not be blank")
         }
-        .text("줄 단위 suppression 파일 경로")
+        .text("줄 단위 suppression 파일 경로"),
+      opt[Unit]("disable-hive-table-lookup")
+        .optional()
+        .action((_, config) => config.copy(disableHiveTableLookup = true))
+        .text("Hive metastore 테이블 LOCATION 매핑을 비활성화")
     )
   }
 

@@ -1,6 +1,7 @@
 package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
+import io.github.jonggeun2001.privyspark.hive.HiveTableLookupIndex
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
@@ -8,6 +9,7 @@ import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion.supportsBatchScan
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 import scala.util.control.NonFatal
 
@@ -28,7 +30,8 @@ private[privyspark] object GroupScanCoordinator {
     allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     retainPayloads: Boolean = true,
-    csvHeadCache: CsvHeadCache = new CsvHeadCache()
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] = {
     if (groups.isEmpty) {
       return Seq.empty
@@ -67,7 +70,8 @@ private[privyspark] object GroupScanCoordinator {
             allowlistMatcher,
             allowlistInputRoot,
             progressRun,
-            csvHeadCache
+            csvHeadCache,
+            hiveLookup = hiveLookup
           )
         val (groupResults, groupErrors) = progressRun match {
           case Some(run) =>
@@ -116,7 +120,8 @@ private[privyspark] object GroupScanCoordinator {
     allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
-    selectedSourceKeys: Option[Seq[String]] = None
+    selectedSourceKeys: Option[Seq[String]] = None,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     DriverLogger.debug(
       "group_scan_start",
@@ -147,7 +152,8 @@ private[privyspark] object GroupScanCoordinator {
         allowlistMatcher,
         allowlistInputRoot,
         progressRun,
-        csvHeadCache
+        csvHeadCache,
+        hiveLookup
       )
       DriverLogger.debug(
         "group_scan_complete",
@@ -179,7 +185,8 @@ private[privyspark] object GroupScanCoordinator {
         csvHeadCache,
         fileSampleRatio,
         fileSampleMinFiles,
-        selectedSourceKeys = Some(effectiveSelectedSourceKeys)
+        selectedSourceKeys = Some(effectiveSelectedSourceKeys),
+        hiveLookup = hiveLookup
       )
       DriverLogger.debug(
         "group_scan_complete",
@@ -210,7 +217,8 @@ private[privyspark] object GroupScanCoordinator {
         allowlistMatcher,
         allowlistInputRoot,
         selectedSourceKeys = Some(effectiveSelectedSourceKeys),
-        progressRun = progressRun
+        progressRun = progressRun,
+        hiveLookup = hiveLookup
       )
       progressRun.foreach { run =>
         persistProgressRecords(
@@ -275,7 +283,8 @@ private[privyspark] object GroupScanCoordinator {
             allowlistMatcher,
             allowlistInputRoot,
             progressRun,
-            csvHeadCache
+            csvHeadCache,
+            hiveLookup
           )
 
           DriverLogger.debug(
@@ -304,7 +313,8 @@ private[privyspark] object GroupScanCoordinator {
             csvHeadCache,
             fileSampleRatio,
             fileSampleMinFiles,
-            selectedSourceKeys = Some(effectiveSelectedSourceKeys)
+            selectedSourceKeys = Some(effectiveSelectedSourceKeys),
+            hiveLookup = hiveLookup
           )
           DriverLogger.debug(
             "group_scan_complete",
@@ -335,7 +345,8 @@ private[privyspark] object GroupScanCoordinator {
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
-    selectedSourceKeys: Option[Seq[String]] = None
+    selectedSourceKeys: Option[Seq[String]] = None,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     GroupFileScanner.scanGroupByFile(
       spark,
@@ -352,7 +363,8 @@ private[privyspark] object GroupScanCoordinator {
       csvHeadCache,
       fileSampleRatio,
       fileSampleMinFiles,
-      selectedSourceKeys
+      selectedSourceKeys,
+      hiveLookup
     )
   }
 
@@ -369,7 +381,8 @@ private[privyspark] object GroupScanCoordinator {
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
     allowlistInputRoot: Option[String] = None,
     selectedSourceKeys: Option[Seq[String]] = None,
-    progressRun: Option[ProgressRun] = None
+    progressRun: Option[ProgressRun] = None,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): Seq[ScanResult] = {
     GroupBatchScanner.scanGroupBatch(
       spark,
@@ -384,7 +397,8 @@ private[privyspark] object GroupScanCoordinator {
       allowlistMatcher,
       allowlistInputRoot,
       selectedSourceKeys,
-      progressRun
+      progressRun,
+      hiveLookup
     )
   }
 }

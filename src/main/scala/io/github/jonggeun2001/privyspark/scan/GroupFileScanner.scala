@@ -1,6 +1,7 @@
 package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
+import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupIndex}
 import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
@@ -8,6 +9,7 @@ import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewScopeFi
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{executeInParallel, resolveFileParallelism, resolveParallelism}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveDirectoryIdentifier, resolveLogicalIdentifier, resolvePhysicalPath}
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 
 import scala.collection.mutable.ArrayBuffer
@@ -28,7 +30,8 @@ private[privyspark] object GroupFileScanner {
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
-    selectedSourceKeys: Option[Seq[String]] = None
+    selectedSourceKeys: Option[Seq[String]] = None,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     DriverLogger.warn(
       "group_scan_fallback_execute",
@@ -66,6 +69,7 @@ private[privyspark] object GroupFileScanner {
       () => {
         val physicalPath = resolvePhysicalPath(group, sourceKey)
         val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
+        val fileHiveTableFqn = hiveTableFqn(hiveLookup, physicalPath)
         DriverLogger.debug("group_scan_fallback_file_start", "file" -> physicalPath, "directory" -> group.directoryPath)
         def scanFileMetrics(): Either[ScanError, FileScanMetrics] =
           if (group.useDirectoryIdentifier) {
@@ -114,7 +118,8 @@ private[privyspark] object GroupFileScanner {
                   provisionalMetrics.matchCounts,
                   provisionalMetrics.sampleValues,
                   provisionalMetrics.fileSize,
-                  provisionalMetrics.fileMtimeEpochMs
+                  provisionalMetrics.fileMtimeEpochMs,
+                  hiveTableFqn = fileHiveTableFqn
                 )
                 SourceKeyMetrics.scanSourceKeyUsingSnapshot(
                   spark,
@@ -136,7 +141,8 @@ private[privyspark] object GroupFileScanner {
                     snapshotMetrics.matchCounts,
                     snapshotMetrics.sampleValues,
                     snapshotMetrics.fileSize,
-                    snapshotMetrics.fileMtimeEpochMs
+                    snapshotMetrics.fileMtimeEpochMs,
+                    hiveTableFqn = fileHiveTableFqn
                   )
                   if (ScanResultBuilder.comparableResultPayloads(provisionalResults) == ScanResultBuilder.comparableResultPayloads(snapshotResults)) {
                     Right(snapshotMetrics)
@@ -196,6 +202,7 @@ private[privyspark] object GroupFileScanner {
                     fileMetrics.sampleValues,
                     fileMetrics.fileSize,
                     fileMetrics.fileMtimeEpochMs,
+                    hiveTableFqn = fileHiveTableFqn,
                     reviewScopeFileFingerprints = ReviewSnapshotLog.encodeRecordedFingerprint(fileMetrics.recordedFingerprint)
                   )
                 )
@@ -239,6 +246,7 @@ private[privyspark] object GroupFileScanner {
     }
 
     val fallbackResults = if (group.useDirectoryIdentifier && fallbackErrors.isEmpty) {
+      val directoryHiveTableFqn = hiveTableFqn(hiveLookup, group.directoryPath)
       val reviewScopeFileIdentifiers = successfulFileMetrics.map(_.fileIdentifier)
       val reviewScopeFileFingerprints =
         if (successfulFileMetrics.forall(_.recordedFingerprint.nonEmpty)) {
@@ -279,8 +287,9 @@ private[privyspark] object GroupFileScanner {
           .toMap,
         successfulFileMetrics.map(_.fileSize).sum,
         successfulFileMetrics.map(_.fileMtimeEpochMs).foldLeft(0L)(math.max),
-        reviewScopeFileIdentifiers,
-        reviewScopeFileFingerprints
+        hiveTableFqn = directoryHiveTableFqn,
+        reviewScopeFileIdentifiers = reviewScopeFileIdentifiers,
+        reviewScopeFileFingerprints = reviewScopeFileFingerprints
       )
     } else {
       if (group.useDirectoryIdentifier && fallbackErrors.nonEmpty) {
@@ -301,6 +310,7 @@ private[privyspark] object GroupFileScanner {
         )
       }
       successfulFileMetrics.flatMap { fileMetrics =>
+        val fileHiveTableFqn = hiveTableFqn(hiveLookup, physicalPathForFileIdentifier(group, datasetPath, fileMetrics.fileIdentifier))
         ScanResultBuilder.buildScanResults(
           datasetPath,
           fileMetrics.scanTimestamp,
@@ -311,6 +321,7 @@ private[privyspark] object GroupFileScanner {
           fileMetrics.sampleValues,
           fileMetrics.fileSize,
           fileMetrics.fileMtimeEpochMs,
+          hiveTableFqn = fileHiveTableFqn,
           reviewScopeFileFingerprints = ReviewSnapshotLog.encodeRecordedFingerprint(fileMetrics.recordedFingerprint)
         )
       }
@@ -346,4 +357,13 @@ private[privyspark] object GroupFileScanner {
     )
     (filteredFallbackResults.toSeq, fallbackErrors.toSeq)
   }
+
+  private def hiveTableFqn(hiveLookup: Option[Broadcast[HiveTableLookupIndex]], rawPath: String): String =
+    hiveLookup.map(_.value.lookup(HiveTableLookup.stripCompositeIdentifier(rawPath))).getOrElse("")
+
+  private def physicalPathForFileIdentifier(group: ScanGroup, datasetPath: String, fileIdentifier: String): String =
+    group.filePaths.find(sourceKey => resolveLogicalIdentifier(group, datasetPath, sourceKey) == fileIdentifier) match {
+      case Some(sourceKey) => resolvePhysicalPath(group, sourceKey)
+      case None => fileIdentifier
+    }
 }

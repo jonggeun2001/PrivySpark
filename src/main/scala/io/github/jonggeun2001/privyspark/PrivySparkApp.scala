@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.cli.{Cli, CliCommand, CliConfig, PathVa
 import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, RulesetLoader, SuppressionSet}
 import io.github.jonggeun2001.privyspark.format.ExcelReadConfig
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
+import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupIndex}
 import io.github.jonggeun2001.privyspark.model.{ProgressRun, ScanReadOptions, Suppression}
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager._
@@ -38,7 +39,7 @@ object PrivySparkApp {
 
   private[privyspark] def runMain(
     args: Array[String],
-    createSparkSession: () => SparkSession = () => SparkSession.builder().appName("PrivySpark").getOrCreate(),
+    createSparkSession: () => SparkSession = () => buildDefaultSparkSession(),
     exitWith: Int => Unit = code => System.exit(code),
     runScanCommand: (SparkSession, CliConfig) => Unit = runScan,
     runReviewApplyCommand: (SparkSession, ReviewApplyCliConfig) => Unit = ReviewApplyCommand.run
@@ -128,6 +129,29 @@ object PrivySparkApp {
     )
   }
 
+  private[privyspark] def buildDefaultSparkSession(): SparkSession = {
+    try {
+      val session = SparkSession.builder().appName("PrivySpark").enableHiveSupport().getOrCreate()
+      DriverLogger.info("hive_enabled")
+      session
+    } catch {
+      case e @ (_: NoClassDefFoundError | _: ClassNotFoundException) =>
+        DriverLogger.warn(
+          "hive_disabled_no_class",
+          "exception" -> e.getClass.getSimpleName,
+          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+        )
+        SparkSession.builder().appName("PrivySpark").getOrCreate()
+      case NonFatal(e) =>
+        DriverLogger.warn(
+          "hive_disabled_metastore_init_failed",
+          "exception" -> e.getClass.getSimpleName,
+          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+        )
+        SparkSession.builder().appName("PrivySpark").getOrCreate()
+    }
+  }
+
   private def runScan(spark: SparkSession, config: CliConfig): Unit = {
     val (preScanParallelism, groupParallelism, fileParallelism) =
       resolveCliParallelism(config.preScanParallelism, config.groupParallelism, config.fileParallelism)
@@ -172,6 +196,7 @@ object PrivySparkApp {
       "allowlist_entries" -> allowlistMatcher.size,
       "suppressions" -> config.suppressions.size,
       "suppression_file" -> config.suppressionFile.getOrElse("none"),
+      "disable_hive_table_lookup" -> config.disableHiveTableLookup,
       "driver_log_level" -> DriverLogger.currentLogLevel.label.toLowerCase
     )
 
@@ -185,6 +210,13 @@ object PrivySparkApp {
     val cliSuppressions = parsedCliSuppressions.map(_.suppression)
     val suppressions = SuppressionSet.from(bundle.suppressions).merge(SuppressionSet.from(cliSuppressions))
     val rules = bundle.rules
+    val hiveLookupBroadcast =
+      if (config.disableHiveTableLookup) {
+        DriverLogger.info("hive_lookup_disabled")
+        spark.sparkContext.broadcast(HiveTableLookupIndex.Empty)
+      } else {
+        HiveTableLookup.buildAndBroadcast(spark)
+      }
     DriverLogger.debug(
       "ruleset_loaded",
       "rules" -> rules.size,
@@ -260,7 +292,8 @@ object PrivySparkApp {
         Some(config.inputPath),
         Some(preparedProgressRun),
         retainPayloads = false,
-        csvHeadCache = csvHeadCache
+        csvHeadCache = csvHeadCache,
+        hiveLookup = Some(hiveLookupBroadcast)
       )
 
       DriverLogger.debug(

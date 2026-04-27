@@ -2,12 +2,14 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
+import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupIndex}
 import io.github.jonggeun2001.privyspark.format.CsvInference.{readSource, resolveFileIdentifierColumn}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers._
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{col, input_file_name}
 
@@ -25,7 +27,8 @@ private[privyspark] object GroupBatchScanner {
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
     allowlistInputRoot: Option[String] = None,
     selectedSourceKeys: Option[Seq[String]] = None,
-    progressRun: Option[ProgressRun] = None
+    progressRun: Option[ProgressRun] = None,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): Seq[ScanResult] = {
     require(!group.useDirectoryIdentifier, "scanGroupBatch does not support directory identifiers; use scanGroupByFile")
     DriverLogger.debug(
@@ -115,6 +118,7 @@ private[privyspark] object GroupBatchScanner {
         val provisionalResults = matchCountsByFile.flatMap { matchCount =>
           sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
             val sourceKey = resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier)
+            val fqn = hiveTableFqn(hiveLookup, matchCount.fileIdentifier)
             ScanResultBuilder.buildScanResults(
               datasetPath,
               groupScanTimestamp,
@@ -127,7 +131,8 @@ private[privyspark] object GroupBatchScanner {
                 .map(value => Map(matchCount.metricAlias -> value))
                 .getOrElse(Map.empty),
               sourceKey.flatMap(group.fileSizesByKey.get).getOrElse(0L),
-              sourceKey.flatMap(group.fileMtimesByKey.get).getOrElse(0L)
+              sourceKey.flatMap(group.fileMtimesByKey.get).getOrElse(0L),
+              hiveTableFqn = fqn
             ).headOption
           }
         }
@@ -143,7 +148,8 @@ private[privyspark] object GroupBatchScanner {
           batchFileIdentifierValuesBySourceKey,
           columnName,
           selectedFileCount = effectiveSelectedSourceKeys.size,
-          progressRun = progressRun
+          progressRun = progressRun,
+          hiveLookup = hiveLookup
         )
         if (!hasDuplicateSelectedSourceKeys && ScanResultBuilder.comparableResultPayloads(provisionalResults) != ScanResultBuilder.comparableResultPayloads(snapshotResults)) {
           throw new IllegalStateException(s"Review snapshot changed during batch rescan: ${group.directoryPath}")
@@ -165,4 +171,7 @@ private[privyspark] object GroupBatchScanner {
       }
     }
   }
+
+  private def hiveTableFqn(hiveLookup: Option[Broadcast[HiveTableLookupIndex]], rawPath: String): String =
+    hiveLookup.map(_.value.lookup(HiveTableLookup.stripCompositeIdentifier(rawPath))).getOrElse("")
 }

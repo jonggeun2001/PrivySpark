@@ -25,6 +25,7 @@
 - `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
 - `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
 - `--suppression-file <PATH>`: 줄 단위 suppression 파일 경로, `#` 주석과 빈 줄 무시
+- `--disable-hive-table-lookup`: Hive Catalog table `LOCATION` 기반 `hive_table_fqn` 매핑을 비활성화
 
 ## `review apply` CLI 인자
 - `--scan-results <ABS_PATH_OR_URI>`: 담당자가 편집한 `scan_results` 입력 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
@@ -51,6 +52,15 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - `--suppress`는 `column:pii_type` 형식만 허용합니다.
 - `--suppression-file`은 Hadoop `FileSystem`으로 읽습니다. YARN cluster에서 client 로컬 파일을 쓰려면 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 먼저 배포한 뒤 alias 경로를 `--suppression-file`에 넘겨야 합니다.
 - CLI suppression은 ruleset YAML의 `suppressions:`와 union으로 합쳐집니다.
+
+## Hive table lookup
+- 기본 동작은 자동 감지입니다. Spark runtime에 `spark-hive`가 제공되고 `hive-site.xml`이 driver classpath 또는 Spark conf 경로에 있으면 `enableHiveSupport()`로 Hive Catalog를 사용합니다.
+- 실행 초기에 driver가 Hive database/table 목록을 1회 열거하고 table-level `LOCATION` prefix 인덱스를 broadcast 합니다. 결과 row의 물리 입력 경로가 해당 prefix 하위이면 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다.
+- `spark-hive` 클래스가 없으면 `hive_disabled_no_class` warning을 1회 남기고 빈 매핑으로 계속 진행합니다.
+- HiveSession 생성 또는 metastore enumeration이 실패하면 `hive_disabled_metastore_init_failed` warning을 남기고 빈 매핑으로 계속 진행합니다. 정상 활성화 시 `hive_enabled`, 인덱스 준비 시 `hive_lookup_ready size=<N>` info 로그가 남습니다.
+- 운영자가 Hive 장애와 무관하게 스캔을 진행하려면 `--disable-hive-table-lookup`을 사용합니다. 이 경우 enumeration을 수행하지 않고 `hive_table_fqn`은 모두 `""`입니다.
+- archive entry와 Excel sheet는 `<archive>!<entry>`, `<workbook>#<sheet>`에서 host archive/workbook path만 lookup 합니다.
+- partition별 `LOCATION` override는 현재 지원하지 않습니다. table-level `LOCATION`만 사용합니다.
 
 ## 병렬도
 - CLI 값을 주면 해당 값이 앱 로직에 직접 전달됩니다.

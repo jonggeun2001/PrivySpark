@@ -1,8 +1,10 @@
 package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
+import io.github.jonggeun2001.privyspark.hive.HiveTableLookupIndex
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 
 import scala.util.Random
@@ -24,7 +26,8 @@ private[privyspark] object GroupScanner {
     allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     retainPayloads: Boolean = true,
-    csvHeadCache: CsvHeadCache = new CsvHeadCache()
+    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] =
     GroupScanCoordinator.scanGroups(
       spark,
@@ -42,7 +45,8 @@ private[privyspark] object GroupScanner {
       allowlistInputRoot,
       progressRun,
       retainPayloads,
-      csvHeadCache
+      csvHeadCache,
+      hiveLookup
     )
 
   def scanGroup(
@@ -60,7 +64,8 @@ private[privyspark] object GroupScanner {
     allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
-    selectedSourceKeys: Option[Seq[String]] = None
+    selectedSourceKeys: Option[Seq[String]] = None,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): (Seq[ScanResult], Seq[ScanError]) =
     GroupScanCoordinator.scanGroup(
       spark,
@@ -77,7 +82,8 @@ private[privyspark] object GroupScanner {
       allowlistInputRoot,
       progressRun,
       csvHeadCache,
-      selectedSourceKeys
+      selectedSourceKeys,
+      hiveLookup
     )
 
   def scanGroupByFile(
@@ -95,7 +101,8 @@ private[privyspark] object GroupScanner {
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     fileSampleRatio: Option[Double] = None,
     fileSampleMinFiles: Int = 10,
-    selectedSourceKeys: Option[Seq[String]] = None
+    selectedSourceKeys: Option[Seq[String]] = None,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): (Seq[ScanResult], Seq[ScanError]) =
     GroupScanCoordinator.scanGroupByFile(
       spark,
@@ -112,7 +119,8 @@ private[privyspark] object GroupScanner {
       csvHeadCache,
       fileSampleRatio,
       fileSampleMinFiles,
-      selectedSourceKeys
+      selectedSourceKeys,
+      hiveLookup
     )
 
   def scanGroupBatch(
@@ -127,7 +135,8 @@ private[privyspark] object GroupScanner {
     suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
     allowlistInputRoot: Option[String] = None,
-    selectedSourceKeys: Option[Seq[String]] = None
+    selectedSourceKeys: Option[Seq[String]] = None,
+    hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): Seq[ScanResult] =
     GroupScanCoordinator.scanGroupBatch(
       spark,
@@ -141,7 +150,8 @@ private[privyspark] object GroupScanner {
       suppressions,
       allowlistMatcher,
       allowlistInputRoot,
-      selectedSourceKeys
+      selectedSourceKeys,
+      hiveLookup = hiveLookup
     )
 
   def selectSampledFileKeys(fileKeys: Seq[String], fileSampleRatio: Double): Seq[String] = {

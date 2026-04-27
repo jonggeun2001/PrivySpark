@@ -31,10 +31,11 @@ class CliSpec extends AnyFunSuite {
     assert(config.allowlist.isEmpty)
     assert(config.suppressions.isEmpty)
     assert(config.suppressionFile.isEmpty)
+    assert(!config.disableHiveTableLookup)
     assert(config.effectiveOutputFormats == Seq("parquet"))
   }
 
-  test("parses optional scan ruleset, sampling, parallelism, ignore options, allowlist, and output formats") {
+  test("parses optional scan ruleset, sampling, parallelism, Hive lookup, ignore options, allowlist, and output formats") {
     val parsed = Cli.parse(
       Array(
         "--path",
@@ -73,6 +74,7 @@ class CliSpec extends AnyFunSuite {
         "/etc/privyspark/allowlist.jsonl",
         "--ignore-file",
         "/etc/privyspark/ignore.txt",
+        "--disable-hive-table-lookup",
         "--suppress",
         "prdctcd:driver_license_number",
         "--suppress",
@@ -99,6 +101,7 @@ class CliSpec extends AnyFunSuite {
     assert(config.ignorePatterns == Seq("_SUCCESS", "backup/**"))
     assert(config.allowlist.contains("/etc/privyspark/allowlist.jsonl"))
     assert(config.ignoreFile.contains("/etc/privyspark/ignore.txt"))
+    assert(config.disableHiveTableLookup)
     assert(config.suppressions == Seq("prdctcd:driver_license_number", "foo:email", "ns:email:email"))
     assert(config.suppressionFile.contains("/etc/privyspark/suppressions.txt"))
   }
