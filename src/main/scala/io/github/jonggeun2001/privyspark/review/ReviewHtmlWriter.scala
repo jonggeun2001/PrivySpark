@@ -43,7 +43,7 @@ private[privyspark] object ReviewHtmlWriter {
   ): Unit = {
     val normalizedSampleMode = normalizeSampleMode(sampleMode).getOrElse(DefaultSampleMode)
     val findings = ReviewFindingBuilder.fromScanResultsIterator(
-      ScanResultsReader.iterateScanResults(resultDf),
+      ScanResultsReader.iterateScanResults(resultDf, ordered = true),
       ReviewFindingBuilder.DefaultMaxEvidenceSamples
     )
     writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode)

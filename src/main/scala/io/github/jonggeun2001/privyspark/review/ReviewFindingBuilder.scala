@@ -32,6 +32,8 @@ private[privyspark] final case class ReviewFinding(
   confidence: Double,
   findingKey: String,
   findingHash: String,
+  fingerprintComplete: Boolean,
+  hasMultipleFileEvidence: Boolean,
   evidence: Seq[ReviewEvidence]
 )
 
@@ -57,6 +59,14 @@ private[privyspark] object ReviewFindingBuilder {
 
   def scanResultsFingerprint(findings: Seq[ReviewFinding]): String =
     sha256(findings.map(finding => s"${finding.findingKey}|${finding.findingHash}").sorted.mkString("|"))
+
+  def findingKeyForResult(result: ScanResult): String = {
+    val (hiveDatabase, hiveTable) = splitHiveTableFqn(result.hive_table_fqn)
+    findingKeyForFields(result.dataset_path, hiveDatabase, hiveTable, result.column_name, result.pii_type)
+  }
+
+  def evidenceFromScanResult(result: ScanResult): Seq[ReviewEvidence] =
+    resultToEvidence(result).sortBy(e => (e.fileIdentifier, e.fileChecksum))
 
   def normalizeScanPath(scanPath: String): String =
     Option(scanPath).map(_.trim.stripSuffix("/")).getOrElse("")
@@ -117,20 +127,23 @@ private[privyspark] object ReviewFindingBuilder {
   private final class ReviewFindingAccumulator(groupKey: ReviewFindingGroupKey, sampleLimit: Int) {
     private val (hiveDatabase, hiveTable) = splitHiveTableFqn(groupKey.hiveTableFqn)
     private val evidenceSamples = mutable.ArrayBuffer.empty[ReviewEvidence]
-    private val evidenceHashParts = mutable.ArrayBuffer.empty[String]
+    private val evidenceDigest = MessageDigest.getInstance("SHA-256")
     private var matchCount = 0L
     private var sampledRowCount = 0L
     private var matchRatio = 0.0
     private var nonEmptyMatchRatio = 0.0
     private var confidence = 0.0
+    private var fingerprintComplete = true
+    private var firstFileIdentifier: Option[String] = None
+    private var hasMultipleFileEvidence = false
 
-    private val findingKey = sha256(Seq(
-      normalizeScanPath(groupKey.scanPath),
+    private val findingKey = findingKeyForFields(
+      groupKey.scanPath,
       hiveDatabase,
       hiveTable,
       groupKey.columnName,
       groupKey.piiType
-    ).mkString("|"))
+    )
 
     def add(result: ScanResult): Unit = {
       matchCount += result.match_count
@@ -139,14 +152,18 @@ private[privyspark] object ReviewFindingBuilder {
       nonEmptyMatchRatio = math.max(nonEmptyMatchRatio, result.non_empty_match_ratio)
       confidence = math.max(confidence, result.confidence)
 
-      resultToEvidence(result).foreach { evidence =>
-        evidenceHashParts += Seq(
-          evidence.fileIdentifier,
-          evidence.fileSize,
-          evidence.fileMtimeEpochMs,
-          evidence.fileChecksumAlgo,
-          evidence.fileChecksum
-        ).mkString("|")
+      evidenceFromScanResult(result).foreach { evidence =>
+        updateDigest(evidenceDigest, evidenceHashPart(result, evidence))
+        if (evidence.fileChecksum.trim.isEmpty) {
+          fingerprintComplete = false
+        }
+        firstFileIdentifier match {
+          case Some(first) if first != evidence.fileIdentifier =>
+            hasMultipleFileEvidence = true
+          case None =>
+            firstFileIdentifier = Some(evidence.fileIdentifier)
+          case _ =>
+        }
         if (evidenceSamples.size < sampleLimit) {
           evidenceSamples += evidence
         }
@@ -154,7 +171,7 @@ private[privyspark] object ReviewFindingBuilder {
     }
 
     def toFinding: ReviewFinding = {
-      val findingHash = sha256((Seq(findingKey) ++ evidenceHashParts.sorted).mkString("|"))
+      val findingHash = sha256(s"$findingKey|${bytesToHex(evidenceDigest.digest())}")
       ReviewFinding(
         scanPath = groupKey.scanPath,
         hiveDatabase = hiveDatabase,
@@ -169,8 +186,52 @@ private[privyspark] object ReviewFindingBuilder {
         confidence = confidence,
         findingKey = findingKey,
         findingHash = findingHash,
+        fingerprintComplete = fingerprintComplete,
+        hasMultipleFileEvidence = hasMultipleFileEvidence,
         evidence = evidenceSamples.toSeq.sortBy(e => (e.fileIdentifier, e.fileChecksum))
       )
     }
   }
+
+  private def evidenceHashPart(result: ScanResult, evidence: ReviewEvidence): Seq[String] = Seq(
+    result.scan_timestamp,
+    evidence.fileIdentifier,
+    evidence.fileSize.toString,
+    evidence.fileMtimeEpochMs.toString,
+    evidence.fileChecksumAlgo,
+    evidence.fileChecksum,
+    result.match_count.toString,
+    result.sampled_row_count.toString,
+    result.match_ratio.toString,
+    result.non_empty_match_ratio.toString,
+    result.confidence.toString
+  )
+
+  private def findingKeyForFields(
+    scanPath: String,
+    hiveDatabase: String,
+    hiveTable: String,
+    columnName: String,
+    piiType: String
+  ): String =
+    sha256(Seq(
+      normalizeScanPath(scanPath),
+      hiveDatabase,
+      hiveTable,
+      columnName,
+      piiType
+    ).mkString("|"))
+
+  private def updateDigest(digest: MessageDigest, values: Seq[String]): Unit = {
+    values.foreach { value =>
+      val bytes = Option(value).getOrElse("").getBytes(StandardCharsets.UTF_8)
+      digest.update(bytes.length.toString.getBytes(StandardCharsets.UTF_8))
+      digest.update(0.toByte)
+      digest.update(bytes)
+      digest.update(0.toByte)
+    }
+  }
+
+  private def bytesToHex(bytes: Array[Byte]): String =
+    bytes.map(byte => "%02x".format(byte & 0xff)).mkString
 }

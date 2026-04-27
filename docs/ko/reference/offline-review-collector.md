@@ -106,11 +106,11 @@ finding_key = sha256(
 ```text
 finding_hash = sha256(
   finding_key + "|" +
-  sorted(evidence file_identifier, file_size, file_mtime_epoch_ms, checksum)
+  streaming_digest(sorted evidence file_identifier, file_size, file_mtime_epoch_ms, checksum, scan_timestamp, match metrics)
 )
 ```
 
-`finding_hash`는 같은 테이블/컬럼/PII 타입이라도 현재 검출 scope가 바뀌었는지 확인하는 값입니다. response JSON의 `finding_hash`가 현재 `scan_results`에서 재계산한 값과 다르면 collector는 해당 응답을 reject합니다.
+`finding_hash`는 같은 테이블/컬럼/PII 타입이라도 현재 검출 scope나 검출량/비율이 바뀌었는지 확인하는 값입니다. response JSON의 `finding_hash`가 현재 `scan_results`에서 재계산한 값과 다르면 collector는 해당 응답을 reject합니다.
 
 `scan_results_fingerprint`는 HTML이 어떤 scan result에서 생성됐는지 확인하는 run-level fingerprint입니다.
 

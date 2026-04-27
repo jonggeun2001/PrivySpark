@@ -66,8 +66,8 @@ private[privyspark] object ReviewCollectCommand {
   def run(spark: SparkSession, config: ReviewCollectCliConfig): Unit = {
     val conf = spark.sparkContext.hadoopConfiguration
     val findings = ReviewFindingBuilder.fromScanResultsIterator(
-      ScanResultsReader.iterateScanResults(ScanResultsReader.read(spark, config.scanResultsPath)),
-      Int.MaxValue
+      ScanResultsReader.iterateScanResults(ScanResultsReader.read(spark, config.scanResultsPath), ordered = true),
+      ReviewFindingBuilder.DefaultMaxEvidenceSamples
     )
     val findingsByKey = findings.map(finding => finding.findingKey -> finding).toMap
     val expectedScanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
@@ -117,18 +117,13 @@ private[privyspark] object ReviewCollectCommand {
     val existingExact = if (pathExists(conf, existingAllowlistPath)) AllowlistMatcher.loadEntries(conf, existingAllowlistPath) else Seq.empty
     val existingPatterns = if (pathExists(conf, existingAllowlistPath)) AllowlistMatcher.loadPatternEntries(conf, existingAllowlistPath) else Seq.empty
     val latestFindingKeys = latestAccepted.map(_.finding.findingKey).toSet
-    val affectedExactKeys = latestAccepted.flatMap { response =>
-      response.finding.evidence.map(evidence =>
-        AllowlistKey(response.finding.scanPath, evidence.fileIdentifier, response.finding.columnName, response.finding.piiType)
-      )
-    }.toSet
+    val exactScope = collectExactScope(spark, config, latestAccepted)
+    val affectedExactKeys = exactScope.affectedKeys
     val retainedExact = existingExact.filterNot(entry =>
       latestFindingKeys.contains(entry.sourceRunId) || affectedExactKeys.contains(entry.key)
     )
     val retainedPatterns = existingPatterns.filterNot(entry => latestFindingKeys.contains(entry.sourceFindingKey))
-    val exactEntries = (retainedExact ++ latestAccepted.filter(_.item.decision == ReviewStatus.FalsePositive)
-      .filter(_.item.allowlistScope == "exact")
-      .flatMap(toExactAllowlistEntries)).groupBy(_.key).map(_._2.last).toSeq
+    val exactEntries = (retainedExact ++ exactScope.entries).groupBy(_.key).map(_._2.last).toSeq
       .sortBy(entry => (entry.datasetPath, entry.fileIdentifier, entry.columnName, entry.piiType))
     val patternEntries = (retainedPatterns ++ latestAccepted.filter(_.item.decision == ReviewStatus.FalsePositive)
       .filter(_.item.allowlistScope == "pattern")
@@ -176,7 +171,7 @@ private[privyspark] object ReviewCollectCommand {
             } else if (item.allowlistScope == "pattern") {
               validatePatternItem(item, finding)
             } else if (item.allowlistScope == "exact") {
-              if (finding.evidence.exists(_.fileChecksum.trim.isEmpty)) {
+              if (!finding.fingerprintComplete) {
                 Some(s"exact allowlist requires fingerprint metadata: ${item.findingKey}")
               } else {
                 None
@@ -207,30 +202,60 @@ private[privyspark] object ReviewCollectCommand {
       Some(s"at least one pattern field is required: ${item.findingKey}")
     } else if (item.piiTypePattern.trim == "*") {
       Some(s"pii_type=* is not allowed: ${item.findingKey}")
-    } else if (item.fileIdentifierPattern.trim.isEmpty && finding.evidence.map(_.fileIdentifier).distinct.size > 1) {
+    } else if (item.fileIdentifierPattern.trim.isEmpty && finding.hasMultipleFileEvidence) {
       Some(s"file_identifier_pattern is required for multi-file findings: ${item.findingKey}")
     } else {
       None
     }
   }
 
-  private def toExactAllowlistEntries(response: AcceptedResponse): Seq[AllowlistEntry] =
-    response.finding.evidence.map { evidence =>
-      AllowlistEntry(
-        datasetPath = response.finding.scanPath,
-        fileIdentifier = evidence.fileIdentifier,
-        columnName = response.finding.columnName,
-        piiType = response.finding.piiType,
-        reason = response.item.falsePositiveReason,
-        reviewer = response.responder,
-        reviewedAt = response.respondedAt,
-        sourceRunId = response.finding.findingKey,
-        fileSize = evidence.fileSize,
-        fileMtimeEpochMs = evidence.fileMtimeEpochMs,
-        fileChecksumAlgo = evidence.fileChecksumAlgo,
-        fileChecksum = evidence.fileChecksum
-      )
+  private final case class ExactScope(affectedKeys: Set[AllowlistKey], entries: Seq[AllowlistEntry])
+
+  private def collectExactScope(
+    spark: SparkSession,
+    config: ReviewCollectCliConfig,
+    latestAccepted: Seq[AcceptedResponse]
+  ): ExactScope = {
+    val latestFindingKeys = latestAccepted.map(_.finding.findingKey).toSet
+    val exactFalsePositiveByKey = latestAccepted
+      .filter(response => response.item.decision == ReviewStatus.FalsePositive && response.item.allowlistScope == "exact")
+      .map(response => response.finding.findingKey -> response)
+      .toMap
+
+    if (latestFindingKeys.isEmpty) {
+      ExactScope(Set.empty, Seq.empty)
+    } else {
+      val affectedKeys = scala.collection.mutable.Set.empty[AllowlistKey]
+      val entries = ArrayBuffer.empty[AllowlistEntry]
+      ScanResultsReader
+        .iterateScanResults(ScanResultsReader.read(spark, config.scanResultsPath), ordered = true)
+        .foreach { result =>
+          val findingKey = ReviewFindingBuilder.findingKeyForResult(result)
+          if (latestFindingKeys.contains(findingKey)) {
+            ReviewFindingBuilder.evidenceFromScanResult(result).foreach { evidence =>
+              affectedKeys += AllowlistKey(result.dataset_path, evidence.fileIdentifier, result.column_name, result.pii_type)
+              exactFalsePositiveByKey.get(findingKey).foreach { response =>
+                entries += AllowlistEntry(
+                  datasetPath = result.dataset_path,
+                  fileIdentifier = evidence.fileIdentifier,
+                  columnName = result.column_name,
+                  piiType = result.pii_type,
+                  reason = response.item.falsePositiveReason,
+                  reviewer = response.responder,
+                  reviewedAt = response.respondedAt,
+                  sourceRunId = findingKey,
+                  fileSize = evidence.fileSize,
+                  fileMtimeEpochMs = evidence.fileMtimeEpochMs,
+                  fileChecksumAlgo = evidence.fileChecksumAlgo,
+                  fileChecksum = evidence.fileChecksum
+                )
+              }
+            }
+          }
+        }
+      ExactScope(affectedKeys.toSet, entries.toSeq)
     }
+  }
 
   private def toPatternAllowlistEntry(response: AcceptedResponse): PatternAllowlistEntry = {
     val filePattern = response.item.fileIdentifierPattern.trim match {

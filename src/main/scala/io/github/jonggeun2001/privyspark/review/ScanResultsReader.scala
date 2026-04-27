@@ -5,6 +5,7 @@ import io.github.jonggeun2001.privyspark.format.CsvInference.{XlsxFormat, readSo
 import io.github.jonggeun2001.privyspark.model.{ScanReadOptions, ScanResult}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.sql.functions.col
 
 import scala.collection.JavaConverters._
 import scala.util.Try
@@ -29,7 +30,7 @@ private[privyspark] object ScanResultsReader {
     iterateScanResults(df).toSeq
   }
 
-  def iterateScanResults(df: DataFrame): Iterator[ScanResult] = {
+  def iterateScanResults(df: DataFrame, ordered: Boolean = false): Iterator[ScanResult] = {
     val normalizedColumns = df.columns.map(columnName => columnName.toLowerCase -> columnName).toMap
     val requiredColumns = Seq(
       "dataset_path",
@@ -51,7 +52,29 @@ private[privyspark] object ScanResultsReader {
       require(normalizedColumns.contains(columnName), s"scan_results is missing required column: $columnName")
     }
 
-    df.toLocalIterator().asScala.map(row => toScanResult(row, normalizedColumns))
+    val sourceDf =
+      if (ordered) {
+        val sortColumns = Seq(
+          "dataset_path",
+          "hive_table_fqn",
+          "column_name",
+          "pii_type",
+          "file_identifier",
+          "scan_timestamp",
+          "file_size",
+          "file_mtime_epoch_ms",
+          "match_count",
+          "sampled_row_count",
+          "match_ratio",
+          "non_empty_match_ratio",
+          "confidence"
+        ).flatMap(normalizedColumns.get)
+        if (sortColumns.nonEmpty) df.sort(sortColumns.map(name => col(name)): _*) else df
+      } else {
+        df
+      }
+
+    sourceDf.toLocalIterator().asScala.map(row => toScanResult(row, normalizedColumns))
   }
 
   def resolveScanResultsFormat(
