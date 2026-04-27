@@ -25,6 +25,7 @@
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
 - `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
+- `--disable-hive-table-lookup`: disable `hive_table_fqn` mapping from Hive Catalog table `LOCATION` prefixes
 
 ## `review apply` CLI Arguments
 - `--scan-results <ABS_PATH_OR_URI>`: edited `scan_results` input path. `csv`, `parquet`, and `xlsx` (`scan_results` sheet) are supported.
@@ -51,6 +52,15 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 - `--suppress` only accepts the `column:pii_type` format.
 - `--suppression-file` is read through Hadoop `FileSystem`. In YARN cluster mode, distribute client-local files first with `--files` or `PRIVYSPARK_SPARK_FILES`, then reference the distributed alias.
 - CLI suppressions are union-merged with ruleset YAML `suppressions:`.
+
+## Hive Table Lookup
+- Hive integration is auto-detected. When the Spark runtime provides `spark-hive` and `hive-site.xml` is available on the driver classpath or Spark configuration path, PrivySpark creates the default session with `enableHiveSupport()`.
+- At scan startup, the driver enumerates Hive databases/tables once and broadcasts a table-level `LOCATION` prefix index. If a result row's physical input path falls under a table prefix, `scan_results.hive_table_fqn` is filled with `db.table`.
+- If `spark-hive` classes are unavailable, PrivySpark logs `hive_disabled_no_class` once and continues with an empty mapping.
+- If HiveSession creation or metastore enumeration fails, PrivySpark logs `hive_disabled_metastore_init_failed` and continues with an empty mapping. Successful activation logs `hive_enabled`, and index creation logs `hive_lookup_ready size=<N>`.
+- Use `--disable-hive-table-lookup` when operators want the scan to avoid metastore access regardless of Hive availability. In that mode enumeration is skipped and `hive_table_fqn` is always `""`.
+- Archive entries and Excel sheets are looked up by the host archive/workbook path after stripping `<archive>!<entry>` and `<workbook>#<sheet>` suffixes.
+- Partition-level `LOCATION` overrides are not supported yet. PrivySpark uses only table-level `LOCATION`.
 
 ## Parallelism
 - CLI values are passed directly into application logic.
