@@ -1,4 +1,4 @@
-# 오프라인 리뷰와 누적 Collector 설계
+# 오프라인 리뷰와 누적 Collector
 
 ## 목적
 이 문서는 서버를 새로 구동하지 않고 개인정보 검출 결과를 담당자에게 검토받는 흐름을 정의합니다.
@@ -76,7 +76,7 @@ privyspark scan \
   --review-state-root <review-state-root>
 ```
 
-`--review-state-root`를 받은 scan은 내부적으로 `<review-state-root>/current/allowlist.jsonl`을 적용합니다. `action_plan.jsonl`은 suppress에 쓰지 않고 다음 review HTML 또는 reconcile 상태 계산에 사용합니다.
+`--review-state-root`를 받은 scan은 내부적으로 `<review-state-root>/current/allowlist.jsonl`을 적용하고, `<scan-output>/review/review.html`을 추가 생성합니다. `action_plan.jsonl`은 suppress에 쓰지 않고 collector의 `finding_status.jsonl` 계산에 사용합니다.
 
 ## 식별자 정책
 사람이 관리하는 별도 campaign/task ID를 만들지 않습니다.
@@ -106,11 +106,11 @@ finding_key = sha256(
 ```text
 finding_hash = sha256(
   finding_key + "|" +
-  sorted(evidence file_identifier, file_size, file_mtime_epoch_ms, checksum)
+  streaming_digest(sorted evidence file_identifier, file_size, file_mtime_epoch_ms, checksum, scan_timestamp, match metrics)
 )
 ```
 
-`finding_hash`는 같은 테이블/컬럼/PII 타입이라도 현재 검출 scope가 바뀌었는지 확인하는 값입니다. response JSON의 `finding_hash`가 현재 `scan_results`에서 재계산한 값과 다르면 collector는 해당 응답을 reject합니다.
+`finding_hash`는 같은 테이블/컬럼/PII 타입이라도 현재 검출 scope나 검출량/비율이 바뀌었는지 확인하는 값입니다. response JSON의 `finding_hash`가 현재 `scan_results`에서 재계산한 값과 다르면 collector는 해당 응답을 reject합니다.
 
 `scan_results_fingerprint`는 HTML이 어떤 scan result에서 생성됐는지 확인하는 run-level fingerprint입니다.
 
@@ -135,7 +135,7 @@ HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을
 오탐 입력 필수값:
 - 오탐 사유
 - allowlist scope: `exact` 또는 `pattern`
-- `pattern`인 경우 pattern 값과 만료일
+- `pattern`인 경우 `file_identifier_pattern`, `column_name_pattern`, `pii_type_pattern` 중 하나 이상과 만료일
 
 정탐 입력 필수값:
 - 조치 계획
@@ -265,11 +265,13 @@ reject 사유 예시:
 - JSON 파싱 실패
 - 알 수 없는 `schema_version`
 - `responses`가 비어 있음
+- `responder`가 비어 있음
+- `responded_at`이 ISO-8601 instant가 아님
 - 현재 scan result에 없는 `finding_key`
 - `scan_results_fingerprint` mismatch
 - `finding_hash` mismatch
 - `false_positive`인데 `false_positive_reason`이 비어 있음
-- `true_positive`인데 `action_plan` 또는 `action_due_date`가 비어 있음
+- `true_positive`인데 `action_plan` 또는 `action_due_date`가 비어 있거나 `action_due_date`가 `YYYY-MM-DD`가 아님
 - `pattern` allowlist인데 `expires_at`이 비어 있음
 - `pattern` allowlist인데 pattern 필드가 모두 비어 있음
 - 금지된 wildcard 사용
@@ -300,9 +302,9 @@ reject 사유 예시:
 {
   "entry_type": "pattern",
   "dataset_path": "hdfs:///warehouse/project_db.db",
-  "file_identifier": "project_db/customer/*",
-  "column_name": "temp_*",
-  "pii_type": "driver_license_number",
+  "file_identifier_pattern": "project_db/customer/*",
+  "column_name_pattern": "temp_*",
+  "pii_type_pattern": "driver_license_number",
   "reason": "temp_* 컬럼은 내부 테스트 식별자",
   "reviewer": "owner@example.com",
   "reviewed_at": "2026-04-27T10:00:00Z",
@@ -312,7 +314,7 @@ reject 사유 예시:
 ```
 
 Wildcard 정책:
-- `file_identifier`, `column_name`, `pii_type`에 `*`를 허용합니다.
+- `file_identifier_pattern`, `column_name_pattern`, `pii_type_pattern`에 `*`를 허용합니다.
 - `dataset_path=*`는 금지합니다.
 - `pii_type=*`는 기본 금지합니다. 필요하면 별도 운영자 승인 정책을 둡니다.
 - pattern allowlist는 fingerprint 검증을 하지 못하므로 `reason`, `reviewer`, `expires_at`을 필수로 둡니다.
@@ -329,6 +331,7 @@ action_plan.jsonl
 - scan_path
 - hive_database
 - hive_table
+- hive_table_fqn
 - column_name
 - pii_type
 - action_plan
@@ -340,7 +343,7 @@ action_plan.jsonl
 
 다음 스캔에서 같은 `finding_key`가 다시 검출되면 기존 action plan과 연결합니다.
 
-상태 계산:
+collector가 쓰는 `finding_status.jsonl`의 상태 계산:
 - 다시 검출됨 + 예정일 전: `remediation_planned`
 - 다시 검출됨 + 예정일 초과: `overdue`
 - 더 이상 검출되지 않음: `remediated_candidate`
@@ -361,9 +364,8 @@ privyspark scan \
 scan은 `<review-state-root>/current/allowlist.jsonl`을 읽어 오탐을 suppress합니다.
 
 정탐 action plan은 다음 용도로 사용합니다.
-- `review.html`에서 기존 조치계획 표시
-- 예정일 초과 finding 표시
-- 더 이상 검출되지 않은 finding을 `remediated_candidate`로 표시
+- collector의 `finding_status.jsonl`에서 예정일 초과 finding 표시
+- 다음 collector 실행에서 더 이상 검출되지 않은 finding을 `remediated_candidate`로 표시
 
 ## 운영 절차
 1. 스캔을 실행합니다.

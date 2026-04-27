@@ -22,6 +22,8 @@ final case class CliConfig(
   ignorePatterns: Seq[String] = Seq.empty,
   ignoreFile: Option[String] = None,
   allowlist: Option[String] = None,
+  reviewStateRoot: Option[String] = None,
+  reviewSampleMode: String = "masked",
   suppressions: Seq[String] = Seq.empty,
   suppressionFile: Option[String] = None,
   disableHiveTableLookup: Boolean = false
@@ -37,11 +39,17 @@ final case class ReviewApplyCliConfig(
   dryRun: Boolean = false
 )
 
+final case class ReviewCollectCliConfig(
+  scanResultsPath: String = "",
+  reviewStateRoot: String = ""
+)
+
 sealed trait CliCommand
 
 object CliCommand {
   final case class Scan(config: CliConfig) extends CliCommand
   final case class ReviewApply(config: ReviewApplyCliConfig) extends CliCommand
+  final case class ReviewCollect(config: ReviewCollectCliConfig) extends CliCommand
 }
 
 private[privyspark] final case class CliParseResult(command: Option[CliCommand], errors: Seq[String])
@@ -49,6 +57,7 @@ private[privyspark] final case class CliParseResult(command: Option[CliCommand],
 object Cli {
   private val scanBuilder = OParser.builder[CliConfig]
   private val reviewApplyBuilder = OParser.builder[ReviewApplyCliConfig]
+  private val reviewCollectBuilder = OParser.builder[ReviewCollectCliConfig]
 
   private object QuietParserSetup extends DefaultOParserSetup {
     override def showUsageOnError: Option[Boolean] = Some(false)
@@ -173,6 +182,19 @@ object Cli {
         .optional()
         .action((value, config) => config.copy(allowlist = Some(value)))
         .text("false positive suppression allowlist JSONL 경로"),
+      opt[String]("review-state-root")
+        .optional()
+        .action((value, config) => config.copy(reviewStateRoot = Some(value)))
+        .text("누적 offline review state root 경로"),
+      opt[String]("review-sample-mode")
+        .optional()
+        .action((value, config) => config.copy(reviewSampleMode = value.trim.toLowerCase))
+        .validate { value =>
+          val normalized = Option(value).map(_.trim.toLowerCase).getOrElse("")
+          if (Set("raw", "masked", "none").contains(normalized)) success
+          else failure("review-sample-mode must be one of: raw, masked, none")
+        }
+        .text("review.html 샘플 표시 방식(raw, masked, none)"),
       opt[String]("suppress")
         .unbounded()
         .optional()
@@ -223,14 +245,33 @@ object Cli {
     )
   }
 
+  private val reviewCollectParser = {
+    import reviewCollectBuilder._
+
+    OParser.sequence(
+      programName("privyspark review collect"),
+      head("PrivySpark", "0.1.0"),
+      opt[String]("scan-results")
+        .required()
+        .action((value, config) => config.copy(scanResultsPath = value))
+        .text("현재 scan_results 입력 경로"),
+      opt[String]("review-state-root")
+        .required()
+        .action((value, config) => config.copy(reviewStateRoot = value))
+        .text("누적 offline review state root 경로")
+    )
+  }
+
   def parse(args: Array[String]): Option[CliCommand] = parseWithErrors(args).command
 
   private[privyspark] def parseWithErrors(args: Array[String]): CliParseResult = {
     args.toList match {
       case "review" :: "apply" :: tail =>
         parseReviewApply(tail)
+      case "review" :: "collect" :: tail =>
+        parseReviewCollect(tail)
       case "review" :: _ =>
-        CliParseResult(None, Seq("review subcommand must be one of: apply"))
+        CliParseResult(None, Seq("review subcommand must be one of: apply, collect"))
       case "scan" :: tail =>
         parseScan(tail)
       case _ =>
@@ -246,6 +287,11 @@ object Cli {
   private def parseReviewApply(args: Seq[String]): CliParseResult = {
     val (config, effects) = OParser.runParser(reviewApplyParser, args, ReviewApplyCliConfig(), QuietParserSetup)
     CliParseResult(config.map(CliCommand.ReviewApply), collectErrors(effects))
+  }
+
+  private def parseReviewCollect(args: Seq[String]): CliParseResult = {
+    val (config, effects) = OParser.runParser(reviewCollectParser, args, ReviewCollectCliConfig(), QuietParserSetup)
+    CliParseResult(config.map(CliCommand.ReviewCollect), collectErrors(effects))
   }
 
   private def collectErrors(effects: Seq[OEffect]): Seq[String] = {

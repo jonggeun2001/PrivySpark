@@ -1,7 +1,7 @@
 # 실행과 운영
 
 ## 실행 모델
-- 공개 명령은 `privyspark scan`, `privyspark review apply`입니다.
+- 공개 명령은 `privyspark scan`, `privyspark review apply`, `privyspark review collect`입니다.
 - 입력/출력 경로는 절대경로 또는 URI만 허용합니다.
 - 입력 파일명에 공백과 Spark glob 특수문자(`*`, `?`, `[`, `]`, `{`, `}`)가 포함되어도 실제 파일명으로 처리합니다. glob 문법은 `--ignore`, `--ignore-file` 패턴에만 적용됩니다.
 - Spark on YARN cluster 실행을 기본 전제로 합니다.
@@ -23,6 +23,8 @@
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
 - `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
+- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. `<review-state-root>/current/allowlist.jsonl`을 적용하고 `<output>/review/review.html`을 생성
+- `--review-sample-mode <raw|masked|none>`: `review.html` 검출 샘플 표시 방식, 기본 `masked`
 - `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
 - `--suppression-file <PATH>`: 줄 단위 suppression 파일 경로, `#` 주석과 빈 줄 무시
 - `--disable-hive-table-lookup`: Hive Catalog table `LOCATION` 기반 `hive_table_fqn` 매핑을 비활성화
@@ -33,6 +35,12 @@
 - `--allowlist <ABS_PATH_OR_URI>`: 생성 또는 갱신할 allowlist JSONL 경로
 - `--reviewer <STRING>`: 검토자 식별자
 - `--dry-run`: 실제 파일 기록 없이 반영 예정 엔트리 수만 계산
+
+## `review collect` CLI 인자
+- `--scan-results <ABS_PATH_OR_URI>`: 현재 스캔의 `scan_results` 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
+- `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
+
+`review collect`는 `<review-state-root>/inbox/*.json`을 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 다음 스캔은 같은 `--review-state-root`를 지정해 누적 오탐 allowlist를 반영합니다.
 
 ## Ignore 패턴
 - `/`가 없는 패턴은 basename 기준으로 매칭합니다. 예: `_SUCCESS`, `*.crc`

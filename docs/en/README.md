@@ -13,6 +13,7 @@ This directory contains the public English documentation for PrivySpark. The Kor
 - [reference/rules-and-detection.md](reference/rules-and-detection.md): rulesets, `match_type`, built-in detection constraints, aggregation
 - [reference/reports-and-errors.md](reference/reports-and-errors.md): result reports, error reports, sample-value storage policy
 - [reference/review-workflow.md](reference/review-workflow.md): false-positive review, allowlist creation, and re-scan suppression
+- Korean reference [../ko/reference/offline-review-collector.md](../ko/reference/offline-review-collector.md): serverless owner review, response JSON collection, and cumulative review state
 
 ## Architecture
 - [architecture/overview.md](architecture/overview.md): component map, processing flow, operational invariants

@@ -4,7 +4,6 @@ import io.github.jonggeun2001.privyspark.cli.ReviewApplyCliConfig
 import io.github.jonggeun2001.privyspark.format.ByteProbe.detectPhysicalFormat
 import io.github.jonggeun2001.privyspark.format.CsvInference.{XlsxFormat, readSource}
 import io.github.jonggeun2001.privyspark.model.ScanReadOptions
-import io.github.jonggeun2001.privyspark.report.JsonCodec.jsonString
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
@@ -226,7 +225,7 @@ object ReviewApplyCommand {
 
     try {
       entries.foreach { entry =>
-        writer.write(allowlistEntryToJson(entry))
+        writer.write(AllowlistJson.exactEntryToJson(entry))
         writer.newLine()
       }
     } finally {
@@ -350,7 +349,4 @@ object ReviewApplyCommand {
       s"Scan result metadata is stale for ${decision.fileIdentifier}; rerun scan before review apply"
     )
   }
-
-  private def allowlistEntryToJson(entry: AllowlistEntry): String =
-    s"""{"dataset_path":${jsonString(entry.datasetPath)},"file_identifier":${jsonString(entry.fileIdentifier)},"column_name":${jsonString(entry.columnName)},"pii_type":${jsonString(entry.piiType)},"reason":${jsonString(entry.reason)},"reviewer":${jsonString(entry.reviewer)},"reviewed_at":${jsonString(entry.reviewedAt)},"source_run_id":${jsonString(entry.sourceRunId)},"file_size":${entry.fileSize},"file_mtime_epoch_ms":${entry.fileMtimeEpochMs},"file_checksum_algo":${jsonString(entry.fileChecksumAlgo)},"file_checksum":${jsonString(entry.fileChecksum)}}"""
 }

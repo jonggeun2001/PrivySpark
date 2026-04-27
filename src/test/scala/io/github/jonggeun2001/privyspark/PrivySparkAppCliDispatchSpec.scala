@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.cli.{CliConfig, ReviewApplyCliConfig}
+import io.github.jonggeun2001.privyspark.cli.{CliConfig, ReviewApplyCliConfig, ReviewCollectCliConfig}
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
@@ -33,6 +33,7 @@ class PrivySparkAppCliDispatchSpec extends AnyFunSuite with BeforeAndAfterAll {
   test("runMain dispatches review apply without requiring scan path arguments") {
     val executedScan = new AtomicReference[Option[CliConfig]](None)
     val executedReview = new AtomicReference[Option[ReviewApplyCliConfig]](None)
+    val executedCollect = new AtomicReference[Option[ReviewCollectCliConfig]](None)
 
     PrivySparkApp.runMain(
       Array(
@@ -50,11 +51,39 @@ class PrivySparkAppCliDispatchSpec extends AnyFunSuite with BeforeAndAfterAll {
       createSparkSession = () => testSpark,
       exitWith = _ => (),
       runScanCommand = (_, config) => executedScan.set(Some(config)),
-      runReviewApplyCommand = (_, config) => executedReview.set(Some(config))
+      runReviewApplyCommand = (_, config) => executedReview.set(Some(config)),
+      runReviewCollectCommand = (_, config) => executedCollect.set(Some(config))
     )
 
     assert(executedScan.get().isEmpty)
     assert(executedReview.get().nonEmpty)
+    assert(executedCollect.get().isEmpty)
     assert(executedReview.get().exists(_.reviewer == "reviewer@example.com"))
+  }
+
+  test("runMain dispatches review collect without requiring scan path arguments") {
+    val executedScan = new AtomicReference[Option[CliConfig]](None)
+    val executedReview = new AtomicReference[Option[ReviewApplyCliConfig]](None)
+    val executedCollect = new AtomicReference[Option[ReviewCollectCliConfig]](None)
+
+    PrivySparkApp.runMain(
+      Array(
+        "review",
+        "collect",
+        "--scan-results",
+        "/data/output/parquet/scan_results",
+        "--review-state-root",
+        "/data/review-state"
+      ),
+      createSparkSession = () => testSpark,
+      exitWith = _ => (),
+      runScanCommand = (_, config) => executedScan.set(Some(config)),
+      runReviewApplyCommand = (_, config) => executedReview.set(Some(config)),
+      runReviewCollectCommand = (_, config) => executedCollect.set(Some(config))
+    )
+
+    assert(executedScan.get().isEmpty)
+    assert(executedReview.get().isEmpty)
+    assert(executedCollect.get().exists(_.reviewStateRoot == "/data/review-state"))
   }
 }

@@ -24,6 +24,27 @@ final case class AllowlistEntry(
   def key: AllowlistKey = AllowlistKey(datasetPath, fileIdentifier, columnName, piiType)
 }
 
+final case class PatternAllowlistKey(
+  datasetPath: String,
+  fileIdentifierPattern: String,
+  columnNamePattern: String,
+  piiTypePattern: String
+)
+
+final case class PatternAllowlistEntry(
+  datasetPath: String,
+  fileIdentifierPattern: String,
+  columnNamePattern: String,
+  piiTypePattern: String,
+  reason: String,
+  reviewer: String,
+  reviewedAt: String,
+  expiresAt: String,
+  sourceFindingKey: String
+) {
+  def key: PatternAllowlistKey = PatternAllowlistKey(datasetPath, fileIdentifierPattern, columnNamePattern, piiTypePattern)
+}
+
 final case class ResolvedFileFingerprint(
   fileIdentifier: String,
   physicalPath: String,

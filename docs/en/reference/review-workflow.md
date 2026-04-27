@@ -5,6 +5,8 @@
 - The review key is `(file_identifier, column_name, pii_type)`.
 - If file metadata or checksum changes, the previous false-positive decision is automatically invalidated.
 
+This page describes the single-file workflow where operators edit `scan_results` directly and run `review apply` to build an exact allowlist. For serverless owner review through `review.html` and cumulative response JSON collection, use the Korean reference [offline-review-collector.md](../../ko/reference/offline-review-collector.md).
+
 ## 1. Initial Scan
 ```bash
 privyspark scan \
