@@ -114,16 +114,27 @@ private[privyspark] object ReviewCollectCommand {
     val existingAllowlistPath = s"$currentPath/allowlist.jsonl"
     val existingExact = if (pathExists(conf, existingAllowlistPath)) AllowlistMatcher.loadEntries(conf, existingAllowlistPath) else Seq.empty
     val existingPatterns = if (pathExists(conf, existingAllowlistPath)) AllowlistMatcher.loadPatternEntries(conf, existingAllowlistPath) else Seq.empty
-    val exactEntries = (existingExact ++ latestAccepted.filter(_.item.decision == ReviewStatus.FalsePositive)
+    val latestFindingKeys = latestAccepted.map(_.finding.findingKey).toSet
+    val affectedExactKeys = latestAccepted.flatMap { response =>
+      response.finding.evidence.map(evidence =>
+        AllowlistKey(response.finding.scanPath, evidence.fileIdentifier, response.finding.columnName, response.finding.piiType)
+      )
+    }.toSet
+    val retainedExact = existingExact.filterNot(entry =>
+      latestFindingKeys.contains(entry.sourceRunId) || affectedExactKeys.contains(entry.key)
+    )
+    val retainedPatterns = existingPatterns.filterNot(entry => latestFindingKeys.contains(entry.sourceFindingKey))
+    val exactEntries = (retainedExact ++ latestAccepted.filter(_.item.decision == ReviewStatus.FalsePositive)
       .filter(_.item.allowlistScope == "exact")
       .flatMap(toExactAllowlistEntries)).groupBy(_.key).map(_._2.last).toSeq
       .sortBy(entry => (entry.datasetPath, entry.fileIdentifier, entry.columnName, entry.piiType))
-    val patternEntries = (existingPatterns ++ latestAccepted.filter(_.item.decision == ReviewStatus.FalsePositive)
+    val patternEntries = (retainedPatterns ++ latestAccepted.filter(_.item.decision == ReviewStatus.FalsePositive)
       .filter(_.item.allowlistScope == "pattern")
       .map(toPatternAllowlistEntry)).groupBy(_.key).map(_._2.last).toSeq
       .sortBy(entry => (entry.datasetPath, entry.fileIdentifierPattern, entry.columnNamePattern, entry.piiTypePattern))
     val existingActionPlans = loadActionPlans(conf, s"$currentPath/action_plan.jsonl")
-    val actionPlans = (existingActionPlans ++ latestAccepted.filter(_.item.decision == ReviewStatus.TruePositive)
+    val retainedActionPlans = existingActionPlans.filterNot(plan => latestFindingKeys.contains(plan.findingKey))
+    val actionPlans = (retainedActionPlans ++ latestAccepted.filter(_.item.decision == ReviewStatus.TruePositive)
       .map(toActionPlan)
     ).groupBy(_.findingKey)
       .map(_._2.maxBy(_.respondedAt))
@@ -360,15 +371,46 @@ private[privyspark] object ReviewCollectCommand {
     val source = new Path(sourcePath)
     val destination = new Path(destinationPath)
     val fs = destination.getFileSystem(conf)
-    if (fs.exists(destination)) {
-      fs.delete(destination, true)
+    if (!fs.exists(source)) {
+      throw new IllegalStateException(s"Replacement source does not exist: $sourcePath")
     }
     val parent = destination.getParent
     if (parent != null) {
       fs.mkdirs(parent)
     }
-    if (!fs.rename(source, destination)) {
-      throw new IllegalStateException(s"Failed to replace review state: $destinationPath")
+
+    if (!fs.exists(destination)) {
+      if (!fs.rename(source, destination)) {
+        throw new IllegalStateException(s"Failed to replace review state: $destinationPath")
+      }
+      return
+    }
+
+    fs.mkdirs(destination)
+    fs.listStatus(source)
+      .filter(_.isFile)
+      .sortBy(_.getPath.getName)
+      .foreach(status => replaceFile(fs, status.getPath, new Path(destination, status.getPath.getName)))
+    fs.delete(source, true)
+  }
+
+  private def replaceFile(fs: org.apache.hadoop.fs.FileSystem, source: Path, destination: Path): Unit = {
+    val backup = new Path(s"${destination.toString}.bak")
+    if (fs.exists(backup) && !fs.delete(backup, false)) {
+      throw new IllegalStateException(s"Stale backup cleanup failed: ${backup.toString}")
+    }
+    if (fs.exists(destination) && !fs.rename(destination, backup)) {
+      throw new IllegalStateException(s"Existing file backup failed: ${destination.toString}")
+    }
+    if (fs.rename(source, destination)) {
+      if (fs.exists(backup) && !fs.delete(backup, false)) {
+        DriverLogger.warn("review_state_backup_cleanup_failed", "backup" -> backup.toString)
+      }
+    } else {
+      if (!fs.exists(destination) && fs.exists(backup) && !fs.rename(backup, destination)) {
+        throw new IllegalStateException(s"Review state restore failed: ${destination.toString}")
+      }
+      throw new IllegalStateException(s"Failed to replace review state file: ${destination.toString}")
     }
   }
 

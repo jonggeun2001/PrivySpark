@@ -104,6 +104,22 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(findingStatus.contains("false_positive"))
     assert(ledger.contains(emailFinding.findingKey))
     assert(!Files.exists(rejected) || read(rejected).trim.isEmpty)
+
+    val updatedEmailResponseJson =
+      s"""{"schema_version":1,"scan_path":"/data/project","scan_results_fingerprint":"$scanFingerprint","responder":"owner@example.com","responded_at":"2026-04-28T10:00:00Z","responses":[{"finding_key":"${emailFinding.findingKey}","finding_hash":"${emailFinding.findingHash}","decision":"true_positive","false_positive_reason":null,"allowlist_scope":null,"file_identifier_pattern":null,"column_name_pattern":null,"pii_type_pattern":null,"expires_at":null,"action_plan":"mask email","action_due_date":"2999-12-31"}]}"""
+    Files.write(stateRoot.resolve("inbox/email-true-positive.json"), updatedEmailResponseJson.getBytes(StandardCharsets.UTF_8))
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(scanResultsPath.toString, stateRoot.toString)
+    )
+
+    val updatedAllowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val updatedActionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+
+    assert(!updatedAllowlist.contains("dummy email"))
+    assert(!updatedAllowlist.contains("\"pii_type\":\"email\""))
+    assert(updatedActionPlan.contains("mask email"))
   }
 
   private def scanResult(
