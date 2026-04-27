@@ -11,6 +11,7 @@ APP_JAR="${PRIVYSPARK_APP_JAR:-${DEFAULT_JAR}}"
 MAIN_CLASS="io.github.jonggeun2001.privyspark.PrivySparkApp"
 SPARK_FILES="${PRIVYSPARK_SPARK_FILES:-config/rules/default.yaml#default-rules.yaml}"
 PACKAGES="${PRIVYSPARK_PACKAGES:-}"
+JARS="${PRIVYSPARK_JARS:-}"
 DEBUG_ARGS=()
 
 if [[ -n "${PRIVYSPARK_DEBUG:-}" ]]; then
@@ -28,11 +29,17 @@ if [[ -n "${PACKAGES}" ]]; then
   PACKAGE_ARGS=(--packages "${PACKAGES}")
 fi
 
+JAR_ARGS=()
+if [[ -n "${JARS}" ]]; then
+  JAR_ARGS=(--jars "${JARS}")
+fi
+
 spark-submit \
   --class "${MAIN_CLASS}" \
   --master yarn \
   --deploy-mode cluster \
   "${PACKAGE_ARGS[@]}" \
+  "${JAR_ARGS[@]}" \
   "${DEBUG_ARGS[@]}" \
   --files "${SPARK_FILES}" \
   "${APP_JAR}" \
