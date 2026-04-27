@@ -33,11 +33,13 @@ class CliSpec extends AnyFunSuite {
     assert(config.reviewSampleMode == "masked")
     assert(config.suppressions.isEmpty)
     assert(config.suppressionFile.isEmpty)
-    assert(!config.disableHiveTableLookup)
+    assert(config.hiveMetastoreJdbcUrl.isEmpty)
+    assert(config.hiveMetastoreUser.isEmpty)
+    assert(config.hiveMetastorePasswordFile.isEmpty)
     assert(config.effectiveOutputFormats == Seq("parquet"))
   }
 
-  test("parses optional scan ruleset, sampling, parallelism, Hive lookup, ignore options, allowlist, and output formats") {
+  test("parses optional scan ruleset, sampling, parallelism, Hive JDBC lookup, ignore options, allowlist, and output formats") {
     val parsed = Cli.parse(
       Array(
         "--path",
@@ -80,7 +82,12 @@ class CliSpec extends AnyFunSuite {
         "raw",
         "--ignore-file",
         "/etc/privyspark/ignore.txt",
-        "--disable-hive-table-lookup",
+        "--hive-metastore-jdbc-url",
+        "jdbc:mariadb://hms-db.internal:3306/metastore",
+        "--hive-metastore-user",
+        "privyspark_ro",
+        "--hive-metastore-password-file",
+        "hdfs:///etc/secrets/metastore.pw",
         "--suppress",
         "prdctcd:driver_license_number",
         "--suppress",
@@ -109,9 +116,41 @@ class CliSpec extends AnyFunSuite {
     assert(config.reviewStateRoot.contains("/var/lib/privyspark/review-state"))
     assert(config.reviewSampleMode == "raw")
     assert(config.ignoreFile.contains("/etc/privyspark/ignore.txt"))
-    assert(config.disableHiveTableLookup)
+    assert(config.hiveMetastoreJdbcUrl.contains("jdbc:mariadb://hms-db.internal:3306/metastore"))
+    assert(config.hiveMetastoreUser.contains("privyspark_ro"))
+    assert(config.hiveMetastorePasswordFile.contains("hdfs:///etc/secrets/metastore.pw"))
     assert(config.suppressions == Seq("prdctcd:driver_license_number", "foo:email", "ns:email:email"))
     assert(config.suppressionFile.contains("/etc/privyspark/suppressions.txt"))
+  }
+
+  test("rejects partial Hive JDBC lookup options") {
+    val onlyUrl = Cli.parseWithErrors(
+      Array(
+        "--path",
+        "/data/input",
+        "--output",
+        "/data/output",
+        "--hive-metastore-jdbc-url",
+        "jdbc:mariadb://hms-db.internal:3306/metastore"
+      )
+    )
+    val missingPasswordFile = Cli.parseWithErrors(
+      Array(
+        "--path",
+        "/data/input",
+        "--output",
+        "/data/output",
+        "--hive-metastore-jdbc-url",
+        "jdbc:mariadb://hms-db.internal:3306/metastore",
+        "--hive-metastore-user",
+        "privyspark_ro"
+      )
+    )
+
+    assert(onlyUrl.command.isEmpty)
+    assert(onlyUrl.errors.exists(_.contains("hive metastore lookup requires all of")))
+    assert(missingPasswordFile.command.isEmpty)
+    assert(missingPasswordFile.errors.exists(_.contains("hive metastore lookup requires all of")))
   }
 
   test("rejects invalid sampling, parallelism, and output format values") {

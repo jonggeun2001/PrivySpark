@@ -27,7 +27,9 @@
 - `--review-sample-mode <raw|masked|none>`: sample display mode for `review.html`, default `masked`
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
 - `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
-- `--disable-hive-table-lookup`: disable `hive_table_fqn` mapping from Hive Catalog table `LOCATION` prefixes
+- `--hive-metastore-jdbc-url <JDBC_URL>`: Hive Metastore underlying MariaDB JDBC URL, for example `jdbc:mariadb://hms-db.internal:3306/metastore`
+- `--hive-metastore-user <USER>`: metastore read-only user
+- `--hive-metastore-password-file <ABS_PATH_OR_URI>`: file whose first line contains the password. `hdfs://`, `s3a://`, `file://`, and absolute paths are supported
 
 ## `review apply` CLI Arguments
 - `--scan-results <ABS_PATH_OR_URI>`: edited `scan_results` input path. `csv`, `parquet`, and `xlsx` (`scan_results` sheet) are supported.
@@ -62,11 +64,11 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 - CLI suppressions are union-merged with ruleset YAML `suppressions:`.
 
 ## Hive Table Lookup
-- Hive integration is auto-detected. When the Spark runtime provides `spark-hive` and `hive-site.xml` is available on the driver classpath or Spark configuration path, PrivySpark creates the default session with `enableHiveSupport()`.
-- At scan startup, the driver enumerates Hive databases/tables once and broadcasts a table-level `LOCATION` prefix index. If a result row's physical input path falls under a table prefix, `scan_results.hive_table_fqn` is filled with `db.table`.
-- If `spark-hive` classes are unavailable, PrivySpark logs `hive_disabled_no_class` once and continues with an empty mapping.
-- If HiveSession creation or metastore enumeration fails, PrivySpark logs `hive_disabled_metastore_init_failed` and continues with an empty mapping. Successful activation logs `hive_enabled`, and index creation logs `hive_lookup_ready size=<N>`.
-- Use `--disable-hive-table-lookup` when operators want the scan to avoid metastore access regardless of Hive availability. In that mode enumeration is skipped and `hive_table_fqn` is always `""`.
+- Hive table lookup is enabled only when `--hive-metastore-jdbc-url`, `--hive-metastore-user`, and `--hive-metastore-password-file` are all provided. Supplying only one or two options is a CLI error. Supplying none logs `hive_lookup_inactive`, and `hive_table_fqn` remains `""`.
+- When enabled, the driver queries Hive Metastore `DBS`/`TBLS`/`SDS` once through MariaDB JDBC and broadcasts a table-level `LOCATION` prefix index. If a result row's physical input path falls under a table prefix, `scan_results.hive_table_fqn` is filled with `db.table`.
+- The password file is read through Hadoop `FileSystem`. Shared URIs such as `hdfs://` do not require extra YARN `--files` distribution. Client-local files must still be distributed first with `--files` or `PRIVYSPARK_SPARK_FILES`, then referenced by the distributed alias.
+- PrivySpark uses the MariaDB driver packaged in the Shadow JAR. If the URL does not define timeouts, defaults are `connectTimeout=5000` and `socketTimeout=30000`.
+- If JDBC connection, password-file reading, or metastore query fails, PrivySpark logs `hive_lookup_disabled` and continues with an empty mapping. Successful index creation logs `hive_lookup_ready size=<N>`.
 - Archive entries and Excel sheets are looked up by the host archive/workbook path after stripping `<archive>!<entry>` and `<workbook>#<sheet>` suffixes.
 - Partition-level `LOCATION` overrides are not supported yet. PrivySpark uses only table-level `LOCATION`.
 
