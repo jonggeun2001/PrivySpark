@@ -433,18 +433,21 @@ private[privyspark] object ReviewCollectCommand {
 
   private def replaceFile(fs: org.apache.hadoop.fs.FileSystem, source: Path, destination: Path): Unit = {
     val backup = new Path(s"${destination.toString}.bak")
-    if (fs.exists(backup) && !fs.delete(backup, false)) {
-      throw new IllegalStateException(s"Stale backup cleanup failed: ${backup.toString}")
-    }
-    if (fs.exists(destination) && !fs.rename(destination, backup)) {
-      throw new IllegalStateException(s"Existing file backup failed: ${destination.toString}")
+    val primaryExists = fs.exists(destination)
+    if (primaryExists) {
+      if (fs.exists(backup) && !fs.delete(backup, false)) {
+        throw new IllegalStateException(s"Stale backup cleanup failed: ${backup.toString}")
+      }
+      if (!fs.rename(destination, backup)) {
+        throw new IllegalStateException(s"Existing file backup failed: ${destination.toString}")
+      }
     }
     if (fs.rename(source, destination)) {
       if (fs.exists(backup) && !fs.delete(backup, false)) {
         DriverLogger.warn("review_state_backup_cleanup_failed", "backup" -> backup.toString)
       }
     } else {
-      if (!fs.exists(destination) && fs.exists(backup) && !fs.rename(backup, destination)) {
+      if (primaryExists && !fs.exists(destination) && fs.exists(backup) && !fs.rename(backup, destination)) {
         throw new IllegalStateException(s"Review state restore failed: ${destination.toString}")
       }
       throw new IllegalStateException(s"Failed to replace review state file: ${destination.toString}")
