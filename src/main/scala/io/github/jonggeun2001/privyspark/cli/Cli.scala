@@ -26,7 +26,9 @@ final case class CliConfig(
   reviewSampleMode: String = "masked",
   suppressions: Seq[String] = Seq.empty,
   suppressionFile: Option[String] = None,
-  disableHiveTableLookup: Boolean = false
+  hiveMetastoreJdbcUrl: Option[String] = None,
+  hiveMetastoreUser: Option[String] = None,
+  hiveMetastorePasswordFile: Option[String] = None
 ) {
   def effectiveOutputFormats: Seq[String] = OutputFormats.normalizeAll(outputFormats)
 }
@@ -209,10 +211,35 @@ object Cli {
           else failure("suppression-file must not be blank")
         }
         .text("줄 단위 suppression 파일 경로"),
-      opt[Unit]("disable-hive-table-lookup")
+      opt[String]("hive-metastore-jdbc-url")
         .optional()
-        .action((_, config) => config.copy(disableHiveTableLookup = true))
-        .text("Hive metastore 테이블 LOCATION 매핑을 비활성화")
+        .action((value, config) => config.copy(hiveMetastoreJdbcUrl = Some(value.trim)))
+        .validate { value =>
+          if (Option(value).exists(_.trim.nonEmpty)) success
+          else failure("hive-metastore-jdbc-url must not be blank")
+        }
+        .text("Hive Metastore MariaDB JDBC URL"),
+      opt[String]("hive-metastore-user")
+        .optional()
+        .action((value, config) => config.copy(hiveMetastoreUser = Some(value.trim)))
+        .validate { value =>
+          if (Option(value).exists(_.trim.nonEmpty)) success
+          else failure("hive-metastore-user must not be blank")
+        }
+        .text("Hive Metastore MariaDB read-only user"),
+      opt[String]("hive-metastore-password-file")
+        .optional()
+        .action((value, config) => config.copy(hiveMetastorePasswordFile = Some(value.trim)))
+        .validate { value =>
+          if (Option(value).exists(_.trim.nonEmpty)) success
+          else failure("hive-metastore-password-file must not be blank")
+        }
+        .text("Hive Metastore password file path or URI"),
+      checkConfig { config =>
+        val configured = Seq(config.hiveMetastoreJdbcUrl, config.hiveMetastoreUser, config.hiveMetastorePasswordFile).count(_.nonEmpty)
+        if (configured == 0 || configured == 3) success
+        else failure("hive metastore lookup requires all of --hive-metastore-jdbc-url, --hive-metastore-user, and --hive-metastore-password-file")
+      }
     )
   }
 

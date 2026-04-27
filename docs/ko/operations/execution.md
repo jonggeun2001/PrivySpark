@@ -27,7 +27,9 @@
 - `--review-sample-mode <raw|masked|none>`: `review.html` 검출 샘플 표시 방식, 기본 `masked`
 - `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
 - `--suppression-file <PATH>`: 줄 단위 suppression 파일 경로, `#` 주석과 빈 줄 무시
-- `--disable-hive-table-lookup`: Hive Catalog table `LOCATION` 기반 `hive_table_fqn` 매핑을 비활성화
+- `--hive-metastore-jdbc-url <JDBC_URL>`: Hive Metastore underlying MariaDB JDBC URL, 예: `jdbc:mariadb://hms-db.internal:3306/metastore`
+- `--hive-metastore-user <USER>`: Metastore read-only 계정
+- `--hive-metastore-password-file <ABS_PATH_OR_URI>`: password 첫 줄을 읽을 파일. `hdfs://`, `s3a://`, `file://`, 절대경로를 지원
 
 ## `review apply` CLI 인자
 - `--scan-results <ABS_PATH_OR_URI>`: 담당자가 편집한 `scan_results` 입력 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
@@ -62,11 +64,11 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - CLI suppression은 ruleset YAML의 `suppressions:`와 union으로 합쳐집니다.
 
 ## Hive table lookup
-- 기본 동작은 자동 감지입니다. Spark runtime에 `spark-hive`가 제공되고 `hive-site.xml`이 driver classpath 또는 Spark conf 경로에 있으면 `enableHiveSupport()`로 Hive Catalog를 사용합니다.
-- 실행 초기에 driver가 Hive database/table 목록을 1회 열거하고 table-level `LOCATION` prefix 인덱스를 broadcast 합니다. 결과 row의 물리 입력 경로가 해당 prefix 하위이면 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다.
-- `spark-hive` 클래스가 없으면 `hive_disabled_no_class` warning을 1회 남기고 빈 매핑으로 계속 진행합니다.
-- HiveSession 생성 또는 metastore enumeration이 실패하면 `hive_disabled_metastore_init_failed` warning을 남기고 빈 매핑으로 계속 진행합니다. 정상 활성화 시 `hive_enabled`, 인덱스 준비 시 `hive_lookup_ready size=<N>` info 로그가 남습니다.
-- 운영자가 Hive 장애와 무관하게 스캔을 진행하려면 `--disable-hive-table-lookup`을 사용합니다. 이 경우 enumeration을 수행하지 않고 `hive_table_fqn`은 모두 `""`입니다.
+- Hive table lookup은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 셋 중 1~2개만 지정하면 CLI 오류로 종료하고, 모두 생략하면 `hive_lookup_inactive` 로그 후 `hive_table_fqn`은 모두 `""`입니다.
+- 활성화되면 실행 초기에 driver가 MariaDB JDBC로 Hive Metastore `DBS`/`TBLS`/`SDS`를 1회 조회하고 table-level `LOCATION` prefix 인덱스를 broadcast 합니다. 결과 row의 물리 입력 경로가 해당 prefix 하위이면 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다.
+- password 파일은 Hadoop `FileSystem`으로 읽습니다. `hdfs://` 같은 공유 URI를 쓰면 YARN cluster에서 별도 `--files` 배포가 필요 없습니다. client 로컬 파일을 쓰려면 다른 로컬 설정 파일과 마찬가지로 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 배포한 alias를 지정해야 합니다.
+- JDBC driver는 Shadow JAR에 포함된 MariaDB driver를 사용합니다. URL에 timeout이 없으면 기본 `connectTimeout=5000`, `socketTimeout=30000`을 적용합니다.
+- JDBC 접속, password 파일 읽기, metastore query가 실패하면 `hive_lookup_disabled` warning을 남기고 빈 매핑으로 계속 진행합니다. 정상 인덱스 준비 시 `hive_lookup_ready size=<N>` info 로그가 남습니다.
 - archive entry와 Excel sheet는 `<archive>!<entry>`, `<workbook>#<sheet>`에서 host archive/workbook path만 lookup 합니다.
 - partition별 `LOCATION` override는 현재 지원하지 않습니다. table-level `LOCATION`만 사용합니다.
 

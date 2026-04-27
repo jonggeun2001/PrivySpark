@@ -12,7 +12,7 @@
 - `RulesetLoader.scala`: 기본/외부 ruleset과 suppression 로딩, regex 검증
 - `util/DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
 - `detect/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
-- `hive/HiveTableLookup.scala`: Hive table `LOCATION` 정규화, longest-prefix lookup 인덱스, broadcast 생성
+- `hive/HiveTableLookup.scala`: Hive Metastore MariaDB JDBC 조회, table `LOCATION` 정규화, longest-prefix lookup 인덱스, broadcast 생성
 - `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: 입력 확장, 그룹화, 스캔 실행
 - `report/ReportWriter.scala`: 최종 리포트 저장과 포맷별 산출물 생성
 - `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, progress/최종 리포트 저장
@@ -25,7 +25,7 @@
 ## 처리 플로우
 1. 입력 경로 검증
 2. ruleset 로드, regex 사전 검증, ruleset/CLI suppression 병합
-3. Hive lookup이 활성화되면 driver에서 Hive Catalog table `LOCATION`을 1회 열거해 broadcast 인덱스 생성
+3. Hive JDBC lookup 옵션이 모두 지정되면 driver에서 Hive Metastore MariaDB `DBS`/`TBLS`/`SDS`를 1회 조회해 table `LOCATION` broadcast 인덱스 생성
 4. 물리 파일 수집과 ignore 패턴 필터
 5. archive 엔트리 확장, workbook metadata 기반 시트 목록 확장, direct compressed text-style input passthrough, 무확장자/미지원 확장자 magic-byte 판별, CSV dialect 감지 및 text fallback 정규화, archive entry ignore 필터
 6. `(directory, format)` 기준 1차 그룹화
@@ -46,7 +46,7 @@
 - suppression은 `DetectionAggregator.buildMetrics`에서 metric plan 생성 전에 적용해 제외된 `(column, pii_type)` 조합이 결과 row 자체를 만들지 않게 합니다.
 - 디렉터리 discovery는 BFS 순회로 진행하고, 각 레벨의 `listStatus`는 safety ceiling `64` 안에서 병렬 실행합니다.
 - discovery 이후 pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
-- Hive lookup은 table-level `LOCATION`만 열거하고, 실패 시 warning 후 빈 매핑으로 진행합니다. 결과 비교용 review snapshot payload에는 `hive_table_fqn`을 포함하지 않습니다.
+- Hive lookup은 Spark Catalog/`enableHiveSupport()`를 사용하지 않고 MariaDB JDBC로 table-level `LOCATION`만 열거합니다. 옵션 미지정 또는 조회 실패 시 빈 매핑으로 진행합니다. 결과 비교용 review snapshot payload에는 `hive_table_fqn`을 포함하지 않습니다.
 - `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 계획합니다. sheet body row/cell 읽기는 executor-side StAX scan 단계로 넘깁니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.
 - `--file-sample-ratio`는 batch scan과 file fallback scan에서 적용하고, 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.

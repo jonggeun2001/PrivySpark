@@ -22,7 +22,7 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 `<output>/review/review.html`을 생성할 수 있습니다. 회수한 response JSON은 `privyspark review collect`로 누적 allowlist/action plan에 반영합니다.
 - 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress와 현재 실행 중인 작업의 `in-flight` marker를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다. Spark application이 `FAILED`로 끝나는 미복구 group/file 실패에서는 당시 marker를 보존합니다.
 - `scan_results`에는 집계 지표와 함께 `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
-- Hive Catalog를 사용할 수 있으면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다.
+- Hive Metastore MariaDB JDBC 옵션을 지정하면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다.
 
 ## 빠른 시작
 빌드:
@@ -57,7 +57,10 @@ bin/privyspark-submit \
   --excel-byte-array-max-override 300000000 \
   --suppress prdctcd:driver_license_number \
   --ignore "_SUCCESS" \
-  --ignore "backup/**"
+  --ignore "backup/**" \
+  --hive-metastore-jdbc-url "jdbc:mariadb://hms-db.internal:3306/metastore" \
+  --hive-metastore-user privyspark_ro \
+  --hive-metastore-password-file hdfs:///etc/secrets/metastore.pw
 ```
 
 `--file-sample-ratio`는 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용됩니다. 실제 파일 샘플링이 적용된 그룹에서는 `--sample-ratio < 1.0` row sampling을 무시하고 warning 로그를 남깁니다.
@@ -102,7 +105,7 @@ bash scripts/verify-worktree.sh
 - 스캔 실행 시 `--path`, `--output`은 절대경로 또는 URI만 허용합니다.
 - `--output-format`은 반복 지정 가능하고, 기본값은 `parquet`입니다. 지원값은 `parquet`, `csv`, `excel`입니다.
 - `--suppress`는 반복 지정 가능하며 `column:pii_type` 형식입니다. `--suppression-file`은 같은 형식을 줄 단위로 읽고, ruleset `suppressions:`와 union으로 합쳐집니다.
-- Hive table 매핑은 자동 감지되며, metastore 접근을 피하려면 `--disable-hive-table-lookup`을 지정합니다. `spark-hive`나 metastore 접근이 없으면 warning 후 `hive_table_fqn`은 빈 문자열로 남습니다.
+- Hive table 매핑은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 하나라도 빠지면 비활성화되고, 활성화 상태에서 JDBC 접속이나 query가 실패해도 warning 후 `hive_table_fqn`은 빈 문자열로 남습니다.
 - 기본 ruleset은 [config/rules/default.yaml](config/rules/default.yaml)에 있습니다.
 
 ### 결과를 확인하는 위치
@@ -159,7 +162,7 @@ bash scripts/verify-worktree.sh
 - `src/main/scala/io/github/jonggeun2001/privyspark/cli/`: CLI 파싱과 경로 검증
 - `src/main/scala/io/github/jonggeun2001/privyspark/scan/`: 입력 확장, pre-scan, 그룹 스캔, 캐시
 - `src/main/scala/io/github/jonggeun2001/privyspark/format/`: 포맷 판별, CSV 추론, workbook 헬퍼
-- `src/main/scala/io/github/jonggeun2001/privyspark/hive/`: Hive Catalog table location lookup
+- `src/main/scala/io/github/jonggeun2001/privyspark/hive/`: Hive Metastore MariaDB JDBC table location lookup
 - `src/main/scala/io/github/jonggeun2001/privyspark/detect/`: 규칙 집계와 strict validator
 - `src/main/scala/io/github/jonggeun2001/privyspark/report/`: 출력 포맷, JSON codec, 리포트 쓰기
 - `src/main/scala/io/github/jonggeun2001/privyspark/review/`: review apply, offline review HTML, collector, allowlist 처리

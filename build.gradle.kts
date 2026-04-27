@@ -26,7 +26,6 @@ dependencies {
 
     compileOnly("org.apache.spark:spark-sql_2.12:$sparkVersion")
     compileOnly("org.apache.spark:spark-core_2.12:$sparkVersion")
-    compileOnly("org.apache.spark:spark-hive_2.12:$sparkVersion")
 
     implementation("org.apache.spark:spark-avro_2.12:$sparkVersion")
     implementation("com.crealytics:spark-excel_2.12:3.5.1_0.20.4")
@@ -34,6 +33,7 @@ dependencies {
     implementation("org.tukaani:xz:1.10")
     implementation("com.github.luben:zstd-jni:1.5.6-3")
     implementation("com.github.junrar:junrar:7.5.5")
+    implementation("org.mariadb.jdbc:mariadb-java-client:3.4.1")
 
     implementation("com.github.scopt:scopt_2.12:4.1.0")
     implementation("org.yaml:snakeyaml:2.2")
@@ -42,6 +42,7 @@ dependencies {
     testImplementation("org.scalatest:scalatest_2.12:$scalaTestVersion")
     testImplementation("org.scalatestplus:junit-4-13_2.12:3.2.19.0")
     testImplementation("org.apache.spark:spark-sql_2.12:$sparkVersion")
+    testImplementation("com.h2database:h2:2.2.224")
 }
 
 application {

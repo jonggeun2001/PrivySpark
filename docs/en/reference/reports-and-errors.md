@@ -39,11 +39,12 @@
 `scan_results.scan_timestamp` is the UTC ISO-8601 time when each result row is actually materialized, not a fixed CLI start timestamp. Long-running scans and multi-group scans can therefore contain different values across result rows.
 
 ## `hive_table_fqn` Rules
-- When Hive support is available, the driver enumerates Hive Catalog databases/tables once at startup and broadcasts a normalized URI-prefix index of table-level `LOCATION` values.
+- Lookup is enabled only when `--hive-metastore-jdbc-url`, `--hive-metastore-user`, and `--hive-metastore-password-file` are all provided.
+- When enabled, the driver queries the Hive Metastore underlying MariaDB `DBS`/`TBLS`/`SDS` tables once through JDBC and broadcasts a normalized URI-prefix index of table-level `LOCATION` values.
 - If a result row's input file path is under a registered table `LOCATION`, PrivySpark writes the matched `db.table` value into `hive_table_fqn`.
 - When table `LOCATION` values overlap, PrivySpark uses normalized-URI longest-prefix matching. Duplicate prefixes of the same length use deterministic ordering.
 - Archive entry and Excel sheet identifiers are looked up by their host archive/workbook path, stripping `<archive>!<entry>` and `<workbook>#<sheet>` suffixes.
-- If Hive integration is disabled, `spark-hive`/`hive-site.xml`/metastore access is unavailable, or no table matches, the field is an empty string `""`.
+- If the options are omitted, JDBC connection/query/password-file reading fails, or no table matches, the field is an empty string `""`.
 - Partition-level `LOCATION` overrides are not enumerated in this version. Only table-level `LOCATION` is used.
 
 ## `file_identifier` Rules

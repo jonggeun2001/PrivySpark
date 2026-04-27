@@ -1,14 +1,25 @@
 package io.github.jonggeun2001.privyspark.hive
 
 import io.github.jonggeun2001.privyspark.util.DriverLogger
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.TableIdentifier
 
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.net.{URI, URLDecoder}
 import java.nio.charset.StandardCharsets
+import java.sql.{Connection, DriverManager}
+import java.util.Properties
+import scala.collection.mutable.ArrayBuffer
 import scala.util.Try
 import scala.util.control.NonFatal
+
+final case class HiveMetastoreJdbcConfig(
+  jdbcUrl: String,
+  user: String,
+  passwordFile: String
+)
 
 final case class HiveTableLookupIndex(entries: Vector[(String, String)]) extends Serializable {
   @transient private lazy val normalizedEntries: Vector[(String, String)] =
@@ -56,57 +67,117 @@ object HiveTableLookupIndex {
 }
 
 object HiveTableLookup {
-  def buildAndBroadcast(spark: SparkSession): Broadcast[HiveTableLookupIndex] =
-    spark.sparkContext.broadcast(buildIndex(spark))
+  val Empty: HiveTableLookupIndex = HiveTableLookupIndex.Empty
 
-  private[hive] def buildIndex(spark: SparkSession): HiveTableLookupIndex = {
-    try {
-      val entries = spark.catalog.listDatabases().collect().toVector.flatMap { database =>
-        val databaseName = database.name
+  private val MariaDbDriverClass = "org.mariadb.jdbc.Driver"
+  private val MaxPasswordFileBytes = 1024L * 1024L
+  private val TableLocationSql =
+    """SELECT D.NAME, T.TBL_NAME, S.LOCATION
+      |FROM TBLS T
+      |JOIN DBS D ON T.DB_ID = D.DB_ID
+      |JOIN SDS S ON T.SD_ID = S.SD_ID
+      |WHERE T.TBL_TYPE IN ('MANAGED_TABLE', 'EXTERNAL_TABLE')
+      |  AND S.LOCATION IS NOT NULL
+      |  AND S.LOCATION <> ''
+      |""".stripMargin
+
+  def buildAndBroadcast(
+    spark: SparkSession,
+    config: Option[HiveMetastoreJdbcConfig]
+  ): Broadcast[HiveTableLookupIndex] =
+    spark.sparkContext.broadcast(buildLookupIndex(spark, config))
+
+  private[hive] def buildLookupIndex(
+    spark: SparkSession,
+    config: Option[HiveMetastoreJdbcConfig]
+  ): HiveTableLookupIndex = {
+    config match {
+      case None =>
+        DriverLogger.info("hive_lookup_inactive")
+        HiveTableLookupIndex.Empty
+      case Some(jdbcConfig) =>
         try {
-          spark.catalog.listTables(databaseName).collect().toVector.flatMap { table =>
-            if (Option(table.tableType).exists(_.equalsIgnoreCase("VIEW"))) {
-              None
-            } else {
-              tableLocation(spark, databaseName, table.name).flatMap { location =>
-                normalizeLocation(location).map(_ -> s"$databaseName.${table.name}")
-              }
-            }
+          val password = readPasswordFile(spark, jdbcConfig.passwordFile)
+          Class.forName(MariaDbDriverClass)
+          val connection = DriverManager.getConnection(jdbcConfig.jdbcUrl, connectionProperties(jdbcConfig, password))
+          try {
+            val index = buildIndex(queryLocations(connection))
+            DriverLogger.info("hive_lookup_ready", "size" -> index.size)
+            index
+          } finally {
+            connection.close()
           }
         } catch {
           case NonFatal(e) =>
             DriverLogger.warn(
-              "hive_database_lookup_failed",
-              "database" -> databaseName,
+              "hive_lookup_disabled",
               "exception" -> e.getClass.getSimpleName,
               "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
             )
-            Vector.empty
+            HiveTableLookupIndex.Empty
         }
-      }
-      val index = HiveTableLookupIndex(entries)
-      DriverLogger.info("hive_lookup_ready", "size" -> index.size)
-      index
-    } catch {
-      case NonFatal(e) =>
-        DriverLogger.warn(
-          "hive_disabled_metastore_init_failed",
-          "exception" -> e.getClass.getSimpleName,
-          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
-        )
-        HiveTableLookupIndex.Empty
     }
+  }
+
+  def readPasswordFile(spark: SparkSession, path: String): String = {
+    val hadoopPath = new Path(path)
+    val fs = FileSystem.get(new URI(path), spark.sparkContext.hadoopConfiguration)
+    val status = fs.getFileStatus(hadoopPath)
+    if (!status.isFile) {
+      throw new IllegalArgumentException(s"Hive metastore password path is not a file: $path")
+    }
+    if (status.getLen > MaxPasswordFileBytes) {
+      throw new IllegalArgumentException(s"Hive metastore password file is larger than $MaxPasswordFileBytes bytes: $path")
+    }
+
+    val input = fs.open(hadoopPath)
+    try {
+      val reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))
+      val password = Option(reader.readLine()).map(_.trim).getOrElse("")
+      if (password.isEmpty) {
+        throw new IllegalArgumentException(s"Hive metastore password file is empty: $path")
+      }
+      password
+    } finally {
+      input.close()
+    }
+  }
+
+  private[hive] def queryLocations(conn: Connection): Vector[(String, String, String)] = {
+    val rows = ArrayBuffer.empty[(String, String, String)]
+    val statement = conn.createStatement()
+    try {
+      val resultSet = statement.executeQuery(TableLocationSql)
+      try {
+        while (resultSet.next()) {
+          rows += ((
+            resultSet.getString(1),
+            resultSet.getString(2),
+            resultSet.getString(3)
+          ))
+        }
+      } finally {
+        resultSet.close()
+      }
+    } finally {
+      statement.close()
+    }
+    rows.toVector
+  }
+
+  private[hive] def buildIndex(rows: Vector[(String, String, String)]): HiveTableLookupIndex = {
+    HiveTableLookupIndex(rows.flatMap {
+      case (dbName, tableName, location) =>
+        val db = Option(dbName).map(_.trim).getOrElse("")
+        val table = Option(tableName).map(_.trim).getOrElse("")
+        if (db.nonEmpty && table.nonEmpty) Some(location -> s"$db.$table") else None
+    })
   }
 
   def stripCompositeIdentifier(path: String): String = {
     val rawPath = Option(path).getOrElse("")
-    val archiveSeparatorIndex = rawPath.indexOf('!')
-    if (archiveSeparatorIndex > 0) {
-      rawPath.substring(0, archiveSeparatorIndex)
-    } else {
-      val workbookSeparatorIndex = rawPath.lastIndexOf('#')
-      if (workbookSeparatorIndex > 0) rawPath.substring(0, workbookSeparatorIndex) else rawPath
-    }
+    val separatorIndexes = Seq(rawPath.indexOf('!'), rawPath.indexOf('#')).filter(_ > 0)
+    if (separatorIndexes.isEmpty) rawPath else rawPath.substring(0, separatorIndexes.min)
   }
 
   private[hive] def normalizeLocation(rawLocation: String): Option[String] =
@@ -115,23 +186,23 @@ object HiveTableLookup {
   private[hive] def normalizePathForLookup(rawPath: String): Option[String] =
     normalizeUriString(stripCompositeIdentifier(rawPath))
 
-  private def tableLocation(spark: SparkSession, databaseName: String, tableName: String): Option[String] = {
-    try {
-      spark.sessionState.catalog
-        .getTableMetadata(TableIdentifier(tableName, Some(databaseName)))
-        .storage
-        .locationUri
-        .map(_.toString)
-    } catch {
-      case NonFatal(e) =>
-        DriverLogger.warn(
-          "hive_table_lookup_failed",
-          "table" -> s"$databaseName.$tableName",
-          "exception" -> e.getClass.getSimpleName,
-          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
-        )
-        None
+  private def connectionProperties(config: HiveMetastoreJdbcConfig, password: String): Properties = {
+    val props = new Properties()
+    props.setProperty("user", config.user)
+    props.setProperty("password", password)
+    if (!urlHasProperty(config.jdbcUrl, "connectTimeout")) {
+      props.setProperty("connectTimeout", "5000")
     }
+    if (!urlHasProperty(config.jdbcUrl, "socketTimeout")) {
+      props.setProperty("socketTimeout", "30000")
+    }
+    props
+  }
+
+  private def urlHasProperty(jdbcUrl: String, propertyName: String): Boolean = {
+    val lowerUrl = Option(jdbcUrl).getOrElse("").toLowerCase
+    val lowerName = propertyName.toLowerCase
+    lowerUrl.contains(s"?$lowerName=") || lowerUrl.contains(s"&$lowerName=")
   }
 
   private def normalizeUriString(rawValue: String): Option[String] = {
@@ -161,9 +232,16 @@ object HiveTableLookup {
         Some(s"$value://${authority.get}$decodedPath")
       case Some(value) =>
         Some(s"$value:$decodedPath")
+      case None if rawValueLooksLikeMalformedUri(uri) =>
+        None
       case None =>
         Some(decodedPath)
     }
+  }
+
+  private def rawValueLooksLikeMalformedUri(uri: URI): Boolean = {
+    val raw = Option(uri.toString).getOrElse("")
+    raw.startsWith("://")
   }
 
   private def normalizedAuthority(uri: URI): Option[String] = {
