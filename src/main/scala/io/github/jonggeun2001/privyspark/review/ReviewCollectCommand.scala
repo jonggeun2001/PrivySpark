@@ -123,7 +123,11 @@ private[privyspark] object ReviewCollectCommand {
     val retainedExact = existingExact.filterNot(entry =>
       latestFindingKeys.contains(entry.sourceRunId) || affectedExactKeys.contains(entry.key)
     )
-    val retainedPatterns = existingPatterns.filterNot(entry => latestFindingKeys.contains(entry.sourceFindingKey))
+    val reviewedFindings = latestAccepted.map(_.finding)
+    val retainedPatterns = existingPatterns.filterNot(entry =>
+      latestFindingKeys.contains(entry.sourceFindingKey) ||
+        reviewedFindings.exists(patternCoversFinding(entry, _))
+    )
     val exactEntries = (retainedExact ++ exactScope.entries).groupBy(_.key).map(_._2.last).toSeq
       .sortBy(entry => (entry.datasetPath, entry.fileIdentifier, entry.columnName, entry.piiType))
     val patternEntries = (retainedPatterns ++ latestAccepted.filter(_.item.decision == ReviewStatus.FalsePositive)
@@ -275,6 +279,23 @@ private[privyspark] object ReviewCollectCommand {
       expiresAt = response.item.expiresAt,
       sourceFindingKey = response.finding.findingKey
     )
+  }
+
+  private def patternCoversFinding(entry: PatternAllowlistEntry, finding: ReviewFinding): Boolean =
+    entry.datasetPath == finding.scanPath &&
+      wildcardMatches(entry.fileIdentifierPattern, finding.fileIdentifier) &&
+      wildcardMatches(entry.columnNamePattern, finding.columnName) &&
+      wildcardMatches(entry.piiTypePattern, finding.piiType)
+
+  private def wildcardMatches(pattern: String, value: String): Boolean = {
+    val normalizedPattern = Option(pattern).getOrElse("")
+    val normalizedValue = Option(value).getOrElse("")
+    val regex = normalizedPattern.flatMap {
+      case '*' => ".*"
+      case ch if "\\.[]{}()+-^$?|".contains(ch) => "\\" + ch
+      case ch => ch.toString
+    }
+    normalizedValue.matches(regex)
   }
 
   private def toActionPlan(response: AcceptedResponse): ActionPlan =

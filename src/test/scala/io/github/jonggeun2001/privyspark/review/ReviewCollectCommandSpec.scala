@@ -198,6 +198,58 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(!Files.exists(stateRoot.resolve("versions")))
   }
 
+  test("collect removes legacy pattern allowlist entries that cover a newly reviewed finding") {
+    val sparkSession = spark
+    import sparkSession.implicits._
+
+    val scanRoot = Files.createTempDirectory("privyspark-review-scan-pattern-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-pattern-")
+    val scanResultsPath = scanRoot.resolve("parquet/scan_results")
+    Files.createDirectories(scanResultsPath.getParent)
+    Files.createDirectories(stateRoot.resolve("inbox"))
+    Files.createDirectories(stateRoot.resolve("current"))
+
+    val fingerprint = RecordedFileFingerprint(
+      fileIdentifier = "customers/a.parquet",
+      fileSize = 128L,
+      fileMtimeEpochMs = 1710000000000L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "aaaa1111"
+    )
+    val findingResult = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "alice@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(fingerprint)),
+      fileIdentifier = "customers/a.parquet"
+    )
+    Seq(findingResult).toDS().toDF().write.mode("overwrite").parquet(scanResultsPath.toString)
+
+    val legacyPattern =
+      """{"entry_type":"pattern","dataset_path":"/data/project","file_identifier_pattern":"customers/*","column_name_pattern":"email","pii_type_pattern":"email","reason":"legacy broad false positive","reviewer":"owner@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"legacy-hive-table-key"}"""
+    Files.write(stateRoot.resolve("current/allowlist.jsonl"), s"$legacyPattern\n".getBytes(StandardCharsets.UTF_8))
+
+    val findings = ReviewFindingBuilder.fromScanResults(Seq(findingResult))
+    val scanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
+    val finding = findings.head
+    val responseJson =
+      s"""{"schema_version":1,"scan_path":"/data/project","scan_results_fingerprint":"$scanFingerprint","responder":"owner@example.com","responded_at":"2026-04-27T12:00:00Z","responses":[{"finding_key":"${finding.findingKey}","finding_hash":"${finding.findingHash}","decision":"true_positive","false_positive_reason":null,"allowlist_scope":null,"file_identifier_pattern":null,"column_name_pattern":null,"pii_type_pattern":null,"expires_at":null,"action_plan":"mask email","action_due_date":"2999-12-31"}]}"""
+    Files.write(stateRoot.resolve("inbox/owner-response.json"), responseJson.getBytes(StandardCharsets.UTF_8))
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(scanResultsPath.toString, stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val actionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+
+    assert(!allowlist.contains("legacy broad false positive"))
+    assert(!allowlist.contains("customers/*"))
+    assert(actionPlan.contains("customers/a.parquet"))
+    assert(actionPlan.contains("mask email"))
+  }
+
   private def scanResult(
     columnName: String,
     piiType: String,
