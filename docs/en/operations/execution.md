@@ -129,4 +129,5 @@ This design keeps long-running progress observable without mixing partial output
 ## Releases
 - GitHub Release is triggered by pushing a `v*` tag or bare semver tag.
 - The release workflow runs `./gradlew clean shadowJar packageSampleDatasets`.
-- Release assets are `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, and `privyspark-<tag>-sample-datasets.zip`.
+- Release assets are `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, and `privyspark-<tag>-review-response-example.html`.
+- `privyspark-<tag>-review-response-example.html` is a self-contained example for checking the offline owner review response JSON download flow. Production files are generated at `<scan-output>/review/review.html` after running `scan --review-state-root`.

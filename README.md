@@ -152,8 +152,9 @@ bash scripts/verify-worktree.sh
 - 운영과 릴리즈: [docs/ko/operations/execution.md](docs/ko/operations/execution.md), [docs/en/operations/execution.md](docs/en/operations/execution.md)
 - 성능 가이드: [docs/ko/operations/performance.md](docs/ko/operations/performance.md), [docs/en/operations/performance.md](docs/en/operations/performance.md)
 
-## 샘플 데이터셋
+## 샘플
 - 재현 가능한 입력 케이스 번들은 [samples/input-cases/README.md](samples/input-cases/README.md)에 있습니다.
+- 오프라인 리뷰 응답 HTML 예시는 [samples/offline-review/review-response-example.html](samples/offline-review/review-response-example.html)에 있습니다.
 - `./gradlew generateSampleDatasets`는 현재 입력 처리 경로를 재현하는 샘플 케이스를 다시 생성합니다.
 - `./gradlew packageSampleDatasets`는 샘플 번들을 `build/distributions/privyspark-sample-datasets.zip`으로 패키징하고, 릴리즈 자산에서는 `privyspark-<tag>-sample-datasets.zip`으로 배포합니다.
 
@@ -173,5 +174,5 @@ bash scripts/verify-worktree.sh
 
 ## 릴리즈
 - 태그 `v*` 또는 bare semver(`0.1.3`) 푸시 시 GitHub Actions가 Shadow fat JAR를 빌드해 Release 자산으로 업로드합니다.
-- 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip` 형식입니다.
+- 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html` 형식입니다.
 - `default-rules.yaml`은 YARN 제출 시 함께 배포할 수 있는 예시 ruleset 파일입니다.
