@@ -11,7 +11,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 - 바이너리처럼 보이는 미지원 입력만 `Unsupported file format` 오류로 기록합니다.
 - `--ignore`, `--ignore-file`은 파일명 또는 입력 루트 기준 상대 경로로 스캔 제외 대상을 정의합니다.
 - `suppressions:` 또는 `--suppress`, `--suppression-file`은 특정 `(column, pii_type)` 결과만 제외합니다.
-- `--review-state-root`를 지정하면 누적 오프라인 리뷰 state의 allowlist를 적용하고 `<output>/review/review.html`을 생성합니다.
+- `--review-state-root`를 지정하면 누적 오프라인 리뷰 state의 allowlist를 적용하고 기본 `<output>/review/review.html`을 생성합니다. `--review-html-path`로 HTML 파일 출력 경로를 별도 지정할 수 있습니다.
 
 ## 탐지 모델
 - 탐지는 ruleset 기반 regex 결과를 그대로 사용합니다.
@@ -30,7 +30,7 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 - 결과 리포트: `scan_results`
 - 오류 리포트: `scan_errors`
 - 출력 형식: Parquet + CSV
-- 오프라인 리뷰를 켠 경우: `<output>/review/review.html`
+- 오프라인 리뷰를 켠 경우: 기본 `<output>/review/review.html`, 또는 `--review-html-path`로 지정한 파일 경로
 - 긴 스캔에서는 `<output>/_progress/<run_id>` 아래에 중간 JSONL shard가 기록될 수 있지만, 최종 소비 경로는 아닙니다.
 
 ## 샘플 데이터셋

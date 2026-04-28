@@ -58,4 +58,43 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(!html.contains("alice@example.com"))
     assert(html.contains("a***e@example.com"))
   }
+
+  test("write can place review html at a configured file path outside scan output") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-html-output-")
+    val customRoot = Files.createTempDirectory("privyspark-review-html-custom-")
+    val customHtmlPath = customRoot.resolve("owner-review.html")
+    val result = ScanResult(
+      dataset_path = "/data/project",
+      scan_timestamp = "2026-04-27T10:00:00Z",
+      file_identifier = "customers/part-000.parquet",
+      column_name = "email",
+      pii_type = "email",
+      match_count = 1L,
+      sampled_row_count = 2L,
+      match_ratio = 0.5,
+      non_empty_match_ratio = 0.5,
+      confidence = 0.2,
+      sample_raw_value = "owner=bob@example.com",
+      sample_matched_fragment = "bob@example.com",
+      file_size = 128L,
+      file_mtime_epoch_ms = 1710000000000L
+    )
+
+    ReviewHtmlWriter.write(
+      new Configuration(),
+      outputRoot.toString,
+      "/data/project",
+      Seq(result),
+      sampleMode = "none",
+      reviewHtmlPath = Some(customHtmlPath.toString)
+    )
+
+    val defaultHtmlPath = outputRoot.resolve("review").resolve("review.html")
+    val html = new String(Files.readAllBytes(customHtmlPath), StandardCharsets.UTF_8)
+
+    assert(Files.exists(customHtmlPath))
+    assert(!Files.exists(defaultHtmlPath))
+    assert(html.contains("PrivySpark Review"))
+    assert(!html.contains("bob@example.com"))
+  }
 }

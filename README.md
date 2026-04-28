@@ -19,7 +19,7 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - row sampling(`--sample-ratio`)과 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있고, `--file-sample-min-files`로 파일 샘플링을 적용할 최소 그룹 크기(기본 `10`)를 조정할 수 있습니다.
 - `--ignore`, `--ignore-file`로 gitignore 스타일 glob 패턴을 지정해 파일/아카이브 엔트리를 pre-scan 전에 제외할 수 있습니다.
 - ruleset `suppressions:` 또는 `--suppress`, `--suppression-file`로 특정 `(column, pii_type)` 조합만 결과에서 제외할 수 있습니다.
-- `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 `<output>/review/review.html`을 생성할 수 있습니다. 회수한 response JSON은 `privyspark review collect`로 누적 allowlist/action plan에 반영합니다.
+- `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 기본 `<output>/review/review.html`을 생성할 수 있습니다. `--review-html-path`를 지정하면 HTML 파일 출력 위치를 별도 절대경로 또는 URI로 바꿀 수 있습니다. 회수한 response JSON은 `privyspark review collect`로 누적 allowlist/action plan에 반영합니다.
 - 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress와 현재 실행 중인 작업의 `in-flight` marker를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다. Spark application이 `FAILED`로 끝나는 미복구 group/file 실패에서는 당시 marker를 보존합니다.
 - `scan_results`에는 집계 지표와 함께 `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
 - Hive Metastore MariaDB JDBC 옵션을 지정하면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다.
@@ -75,7 +75,7 @@ bin/privyspark-submit \
 
 자세한 실행 절차와 옵션은 [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/ko/operations/execution.md](docs/ko/operations/execution.md)에 정리돼 있습니다.
 
-서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 `review.html`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 명령으로 반영합니다.
+서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 `review.html`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 명령으로 반영합니다. HTML을 scan output 밖에 배치해야 하면 scan 실행에 `--review-html-path /abs/review.html`을 추가합니다.
 
 ```bash
 bin/privyspark-submit \

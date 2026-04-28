@@ -23,6 +23,7 @@ final case class CliConfig(
   ignoreFile: Option[String] = None,
   allowlist: Option[String] = None,
   reviewStateRoot: Option[String] = None,
+  reviewHtmlPath: Option[String] = None,
   reviewSampleMode: String = "masked",
   suppressions: Seq[String] = Seq.empty,
   suppressionFile: Option[String] = None,
@@ -188,6 +189,14 @@ object Cli {
         .optional()
         .action((value, config) => config.copy(reviewStateRoot = Some(value)))
         .text("누적 offline review state root 경로"),
+      opt[String]("review-html-path")
+        .optional()
+        .action((value, config) => config.copy(reviewHtmlPath = Some(value.trim)))
+        .validate { value =>
+          if (Option(value).exists(_.trim.nonEmpty)) success
+          else failure("review-html-path must not be blank")
+        }
+        .text("offline review HTML 파일 출력 경로(미지정 시 <output>/review/review.html)"),
       opt[String]("review-sample-mode")
         .optional()
         .action((value, config) => config.copy(reviewSampleMode = value.trim.toLowerCase))
