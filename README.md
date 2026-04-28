@@ -75,7 +75,7 @@ bin/privyspark-submit \
 
 자세한 실행 절차와 옵션은 [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/ko/operations/execution.md](docs/ko/operations/execution.md)에 정리돼 있습니다.
 
-서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 `review.html`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 명령으로 반영합니다. HTML을 scan output 밖에 배치해야 하면 scan 실행에 `--review-html-path /abs/review.html`을 추가합니다.
+서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 컬럼 헤더 정렬이 가능한 `review.html`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 명령으로 반영합니다. HTML을 scan output 밖에 배치해야 하면 scan 실행에 `--review-html-path /abs/review.html`을 추가합니다.
 
 ```bash
 bin/privyspark-submit \
