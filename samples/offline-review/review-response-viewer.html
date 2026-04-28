@@ -305,6 +305,10 @@
         errors.push('responses 배열은 비어 있을 수 없습니다.');
       } else {
         envelope.responses.forEach((response, index) => {
+          if (!response || typeof response !== 'object' || Array.isArray(response)) {
+            errors.push(`responses[${index}] response는 객체여야 합니다.`);
+            return;
+          }
           ['finding_key', 'finding_hash', 'file_identifier', 'column_name', 'pii_type', 'decision'].forEach(key => {
             if (!trim(response[key])) {
               errors.push(`responses[${index}].${key} 값이 필요합니다.`);
@@ -319,6 +323,9 @@
                 errors.push(`responses[${index}].expires_at 값이 필요합니다.`);
               } else if (!isDateOnly(trim(response.expires_at))) {
                 errors.push(`responses[${index}].expires_at 값은 YYYY-MM-DD 형식이어야 합니다.`);
+              }
+              if (!trim(response.file_identifier_pattern)) {
+                errors.push(`responses[${index}].file_identifier_pattern 값이 필요합니다.`);
               }
               if ([response.file_identifier_pattern, response.column_name_pattern, response.pii_type_pattern].every(value => !trim(value))) {
                 errors.push(`responses[${index}] pattern allowlist에는 pattern 필드가 하나 이상 필요합니다.`);
