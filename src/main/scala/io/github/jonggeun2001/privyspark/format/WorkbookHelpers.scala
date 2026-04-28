@@ -75,12 +75,12 @@ private[privyspark] object WorkbookHelpers {
     val inputStream = fs.open(sourcePath)
     val zipInputStream = new ZipArchiveInputStream(inputStream)
     try {
-      var entry = zipInputStream.getNextEntry
+      var entry = zipInputStream.getNextZipEntry
       while (entry != null) {
         if (!entry.isDirectory && normalizeEntryName(entry.getName) == entryName) {
           return Right(reader(zipInputStream))
         }
-        entry = zipInputStream.getNextEntry
+        entry = zipInputStream.getNextZipEntry
       }
       Left(s"Workbook part not found: $entryName")
     } catch {

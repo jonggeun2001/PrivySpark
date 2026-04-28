@@ -96,12 +96,12 @@ private[privyspark] object WorkbookSheetStreamer {
       val fs = sourcePath.getFileSystem(conf)
       val zipInputStream = new ZipArchiveInputStream(fs.open(sourcePath))
       try {
-        var entry = zipInputStream.getNextEntry
+        var entry = zipInputStream.getNextZipEntry
         while (entry != null) {
           if (!entry.isDirectory && normalizeEntryName(entry.getName) == entryName) {
             return OpenZipEntry(zipInputStream)
           }
-          entry = zipInputStream.getNextEntry
+          entry = zipInputStream.getNextZipEntry
         }
         throw new IllegalArgumentException(s"Workbook part not found: $entryName")
       } catch {
