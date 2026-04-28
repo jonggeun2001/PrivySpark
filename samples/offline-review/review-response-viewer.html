@@ -266,7 +266,7 @@
       messageList.innerHTML = messages.map(message => `<li>${escapeHtml(message)}</li>`).join('');
     };
 
-    const trim = value => String(value ?? '').trim();
+    const textValue = value => typeof value === 'string' ? value.trim() : '';
 
     const isIsoInstant = value => {
       const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/);
@@ -300,9 +300,9 @@
         ['scan_results_fingerprint', 'scan_results_fingerprint 값이 필요합니다.'],
         ['responder', 'responder 값이 필요합니다.']
       ].forEach(([key, message]) => {
-        if (!trim(envelope[key])) errors.push(message);
+        if (!textValue(envelope[key])) errors.push(message);
       });
-      const respondedAt = trim(envelope.responded_at);
+      const respondedAt = textValue(envelope.responded_at);
       if (!respondedAt) {
         errors.push('responded_at 값이 필요합니다.');
       } else if (!isIsoInstant(respondedAt)) {
@@ -319,41 +319,49 @@
             return;
           }
           ['finding_key', 'finding_hash', 'file_identifier', 'column_name', 'pii_type', 'decision'].forEach(key => {
-            if (!trim(response[key])) {
+            if (!textValue(response[key])) {
               errors.push(`responses[${index}].${key} 값이 필요합니다.`);
             }
           });
-          if (response.decision === 'false_positive') {
-            if (!trim(response.false_positive_reason)) {
+          const decision = textValue(response.decision);
+          const allowlistScope = textValue(response.allowlist_scope);
+          if (decision === 'false_positive') {
+            if (!textValue(response.false_positive_reason)) {
               errors.push(`responses[${index}].false_positive_reason 값이 필요합니다.`);
             }
-            if (response.allowlist_scope === 'pattern') {
-              if (!trim(response.expires_at)) {
+            if (allowlistScope === 'pattern') {
+              const expiresAt = textValue(response.expires_at);
+              if (!expiresAt) {
                 errors.push(`responses[${index}].expires_at 값이 필요합니다.`);
-              } else if (!isDateOnly(trim(response.expires_at))) {
+              } else if (!isDateOnly(expiresAt)) {
                 errors.push(`responses[${index}].expires_at 값은 YYYY-MM-DD 형식이어야 합니다.`);
               }
-              const hasFilePattern = Boolean(trim(response.file_identifier_pattern));
-              const hasColumnPattern = Boolean(trim(response.column_name_pattern));
-              const hasPiiPattern = Boolean(trim(response.pii_type_pattern));
+              const filePattern = textValue(response.file_identifier_pattern);
+              const columnPattern = textValue(response.column_name_pattern);
+              const piiPattern = textValue(response.pii_type_pattern);
+              const hasFilePattern = Boolean(filePattern);
+              const hasColumnPattern = Boolean(columnPattern);
+              const hasPiiPattern = Boolean(piiPattern);
               if (!hasFilePattern && !hasColumnPattern && !hasPiiPattern) {
                 errors.push(`responses[${index}] pattern allowlist에는 pattern 필드가 하나 이상 필요합니다.`);
               } else if (!hasFilePattern) {
                 warnings.push(`responses[${index}] 다중 파일 finding은 collector에서 file_identifier_pattern을 요구할 수 있습니다.`);
               }
-              if (trim(response.pii_type_pattern) === '*') {
+              if (piiPattern === '*') {
                 errors.push(`responses[${index}].pii_type_pattern=* 값은 허용되지 않습니다.`);
               }
-            } else if (response.allowlist_scope !== 'exact') {
+            } else if (allowlistScope !== 'exact') {
               errors.push(`responses[${index}] unsupported allowlist_scope: ${field(response.allowlist_scope)}`);
             }
-          } else if (response.decision === 'true_positive') {
-            if (!trim(response.action_plan) || !trim(response.action_due_date)) {
+          } else if (decision === 'true_positive') {
+            const actionPlan = textValue(response.action_plan);
+            const actionDueDate = textValue(response.action_due_date);
+            if (!actionPlan || !actionDueDate) {
               errors.push(`responses[${index}].action_plan과 action_due_date 값이 필요합니다.`);
-            } else if (!isDateOnly(trim(response.action_due_date))) {
+            } else if (!isDateOnly(actionDueDate)) {
               errors.push(`responses[${index}].action_due_date 값은 YYYY-MM-DD 형식이어야 합니다.`);
             }
-          } else if (response.decision) {
+          } else if (decision) {
             errors.push(`responses[${index}].decision 값이 올바르지 않습니다.`);
           }
         });
