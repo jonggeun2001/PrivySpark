@@ -143,7 +143,7 @@ private[privyspark] object ReviewHtmlWriter {
     </thead>
     <tbody></tbody>
   </table>
-  <p><button type="button" id="downloadResponse">response.json 다운로드</button></p>
+  <p><button type="button" id="downloadResponse">응답 파일 생성</button></p>
   <script>
     const REVIEW_DATA = $safeReviewData;
     document.getElementById('scanPath').textContent = REVIEW_DATA.scan_path;
@@ -169,6 +169,16 @@ private[privyspark] object ReviewHtmlWriter {
         '*는 glob 와일드카드입니다. pii_type=* 금지.'
       ].join('\\n');
     };
+    function formatResponseTimestamp(date) {
+      const pad = value => String(value).padStart(2, '0');
+      return String(date.getFullYear()) +
+        pad(date.getMonth() + 1) +
+        pad(date.getDate()) +
+        '-' +
+        pad(date.getHours()) +
+        pad(date.getMinutes()) +
+        pad(date.getSeconds());
+    }
     REVIEW_DATA.findings.forEach((finding, index) => {
       const row = document.createElement('tr');
       row.innerHTML = `
@@ -250,7 +260,7 @@ private[privyspark] object ReviewHtmlWriter {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'privyspark-response.json';
+      link.download = `response-$${formatResponseTimestamp(new Date())}.json`;
       link.click();
       URL.revokeObjectURL(url);
     });
