@@ -9,4 +9,10 @@
 - Click the download button to create a `response-YYYYMMDD-HHMMSS.json` file.
 - The sample data is synthetic and masked; production `review.html` files are generated under `<scan-output>/review/review.html`.
 
-GitHub Release publishes this file as `privyspark-<tag>-review-response-example.html`.
+`review-response-viewer.html` is a local operator page for inspecting a returned `privyspark-response.json`.
+
+- Open it directly in a browser.
+- Choose the response JSON file or paste its contents.
+- Review the envelope metadata, validation messages, and per-finding decisions.
+
+GitHub Release publishes these files as `privyspark-<tag>-review-response-example.html` and `privyspark-<tag>-review-response-viewer.html`.

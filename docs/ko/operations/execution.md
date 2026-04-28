@@ -130,5 +130,6 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 ## 릴리즈
 - GitHub Release는 `v*` 또는 bare semver 태그 푸시로 트리거됩니다.
 - Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행합니다.
-- 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`입니다.
+- 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html`입니다.
 - `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
+- `privyspark-<tag>-review-response-viewer.html`은 회수한 `privyspark-response.json`을 운영자가 로컬에서 열어 envelope 메타데이터, 검증 메시지, finding별 판정을 확인하는 self-contained 파일입니다.
