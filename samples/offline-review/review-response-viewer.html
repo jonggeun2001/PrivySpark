@@ -245,6 +245,17 @@
       document.getElementById(id).textContent = value;
     };
 
+    const clearRenderedState = () => {
+      document.getElementById('summaryPanel').classList.add('hidden');
+      document.getElementById('responsesPanel').classList.add('hidden');
+      document.getElementById('responsesBody').innerHTML = '';
+      document.getElementById('metaTable').innerHTML = '';
+      setText('metricTotal', '0');
+      setText('metricFalsePositive', '0');
+      setText('metricTruePositive', '0');
+      setText('metricPattern', '0');
+    };
+
     const setStatus = (state, messages) => {
       const statusPanel = document.getElementById('statusPanel');
       const statusBadge = document.getElementById('statusBadge');
@@ -255,6 +266,9 @@
       messageList.innerHTML = messages.map(message => `<li>${escapeHtml(message)}</li>`).join('');
     };
 
+    const isIsoInstant = value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)
+      && !Number.isNaN(Date.parse(value));
+
     const validateEnvelope = envelope => {
       const errors = [];
       const warnings = [];
@@ -264,13 +278,23 @@
       if (envelope.schema_version !== 1) {
         errors.push('schema_version 값은 1이어야 합니다.');
       }
-      ['scan_path', 'scan_results_fingerprint', 'responder', 'responded_at'].forEach(key => {
-        if (!String(envelope[key] ?? '').trim()) {
-          warnings.push(`${key} 값이 비어 있습니다.`);
-        }
+      [
+        ['scan_path', 'scan_path 값이 필요합니다.'],
+        ['scan_results_fingerprint', 'scan_results_fingerprint 값이 필요합니다.'],
+        ['responder', 'responder 값이 필요합니다.']
+      ].forEach(([key, message]) => {
+        if (!String(envelope[key] ?? '').trim()) errors.push(message);
       });
+      const respondedAt = String(envelope.responded_at ?? '').trim();
+      if (!respondedAt) {
+        errors.push('responded_at 값이 필요합니다.');
+      } else if (!isIsoInstant(respondedAt)) {
+        errors.push('responded_at 값은 ISO-8601 instant여야 합니다.');
+      }
       if (!Array.isArray(envelope.responses)) {
         errors.push('responses 배열이 필요합니다.');
+      } else if (envelope.responses.length === 0) {
+        errors.push('responses 배열은 비어 있을 수 없습니다.');
       } else {
         envelope.responses.forEach((response, index) => {
           ['finding_key', 'finding_hash', 'file_identifier', 'column_name', 'pii_type', 'decision'].forEach(key => {
@@ -347,14 +371,14 @@ ${field(response.finding_hash)}</td>
       try {
         envelope = JSON.parse(text);
       } catch (error) {
+        clearRenderedState();
         setStatus('error', [`JSON.parse 실패: ${error.message}`]);
         return;
       }
       const validation = validateEnvelope(envelope);
       if (validation.errors.length > 0) {
         setStatus('error', validation.errors.concat(validation.warnings));
-        document.getElementById('summaryPanel').classList.add('hidden');
-        document.getElementById('responsesPanel').classList.add('hidden');
+        clearRenderedState();
         return;
       }
       renderEnvelope(envelope);
@@ -370,7 +394,10 @@ ${field(response.finding_hash)}</td>
         document.getElementById('rawJson').value = text;
         parseAndRender(text);
       };
-      reader.onerror = () => setStatus('error', ['파일을 읽지 못했습니다.']);
+      reader.onerror = () => {
+        clearRenderedState();
+        setStatus('error', ['파일을 읽지 못했습니다.']);
+      };
       reader.readAsText(file);
     });
 
@@ -388,11 +415,8 @@ ${field(response.finding_hash)}</td>
       document.getElementById('responseFile').value = '';
       document.getElementById('rawJson').value = '';
       document.getElementById('statusPanel').classList.add('hidden');
-      document.getElementById('summaryPanel').classList.add('hidden');
-      document.getElementById('responsesPanel').classList.add('hidden');
       document.getElementById('messages').innerHTML = '';
-      document.getElementById('responsesBody').innerHTML = '';
-      document.getElementById('metaTable').innerHTML = '';
+      clearRenderedState();
     });
   </script>
 </body>
