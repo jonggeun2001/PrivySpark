@@ -27,6 +27,14 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(workflow.contains("${{ steps.assets.outputs.asset_review_response_example }}"))
   }
 
+  test("release workflow publishes offline review response JSON viewer") {
+    val workflow = readText(workflowPath)
+
+    assert(workflow.contains("review_response_viewer=\"samples/offline-review/review-response-viewer.html\""))
+    assert(workflow.contains("asset_review_response_viewer=\"build/distributions/privyspark-${{ steps.meta.outputs.tag }}-review-response-viewer.html\""))
+    assert(workflow.contains("${{ steps.assets.outputs.asset_review_response_viewer }}"))
+  }
+
   test("offline review response HTML example is self-contained and downloads response JSON") {
     val html = readText("samples/offline-review/review-response-example.html")
 
@@ -61,6 +69,43 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(html.contains("document.querySelectorAll('#findingsTable th[data-sort-key] button').forEach(button => {"))
     assert(!html.contains("<th>Path / Hive</th>"))
     assert(!html.contains("<th>Column / PII</th>"))
+    assert(!html.contains("http://"))
+    assert(!html.contains("https://"))
+  }
+
+  test("offline review response JSON viewer is self-contained and loads local response files") {
+    val html = readText("samples/offline-review/review-response-viewer.html")
+
+    assert(html.contains("<!doctype html>"))
+    assert(html.contains("type=\"file\""))
+    assert(html.contains("accept=\"application/json,.json\""))
+    assert(html.contains("FileReader"))
+    assert(html.contains("JSON.parse"))
+    assert(html.contains("schema_version"))
+    assert(html.contains("scan_results_fingerprint"))
+    assert(html.contains("privyspark-response.json"))
+    assert(html.contains("오프라인 응답 JSON 확인"))
+    assert(html.contains("responder 값이 필요합니다."))
+    assert(html.contains("responded_at 값은 ISO-8601 instant여야 합니다."))
+    assert(html.contains("responses 배열은 비어 있을 수 없습니다."))
+    assert(html.contains("const textValue ="))
+    assert(html.contains("typeof value === 'string'"))
+    assert(html.contains("Date.parse(value)"))
+    assert(html.contains("getUTCFullYear"))
+    assert(html.contains("false_positive_reason 값이 필요합니다."))
+    assert(html.contains("unsupported allowlist_scope"))
+    assert(html.contains("expires_at 값이 필요합니다."))
+    assert(html.contains("expires_at 값은 YYYY-MM-DD 형식이어야 합니다."))
+    assert(html.contains("pattern allowlist에는 pattern 필드가 하나 이상 필요합니다."))
+    assert(html.contains("다중 파일 finding은 collector에서 file_identifier_pattern을 요구할 수 있습니다."))
+    assert(!html.contains("file_identifier_pattern 값이 필요합니다."))
+    assert(html.contains("pii_type_pattern=* 값은 허용되지 않습니다."))
+    assert(html.contains("action_plan과 action_due_date 값이 필요합니다."))
+    assert(html.contains("action_due_date 값은 YYYY-MM-DD 형식이어야 합니다."))
+    assert(html.contains("response는 객체여야 합니다."))
+    assert(html.contains("const isDateOnly ="))
+    assert(html.contains("const clearRenderedState ="))
+    assert(html.contains("data-field=\"decision\""))
     assert(!html.contains("http://"))
     assert(!html.contains("https://"))
   }
