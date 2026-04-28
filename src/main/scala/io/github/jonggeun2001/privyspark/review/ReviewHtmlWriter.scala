@@ -117,6 +117,9 @@ private[privyspark] object ReviewHtmlWriter {
     table { border-collapse: collapse; width: 100%; }
     th, td { border: 1px solid #d5d8dc; padding: 8px; vertical-align: top; }
     th { background: #f4f6f7; text-align: left; }
+    .sort-button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+    .sort-button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
+    .sort-indicator { min-width: 1em; }
     textarea, input, select { width: 100%; box-sizing: border-box; }
     .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
     .field { display: block; margin-bottom: 8px; }
@@ -132,13 +135,13 @@ private[privyspark] object ReviewHtmlWriter {
   <table id="findingsTable">
     <thead>
       <tr>
-        <th>경로 / Hive</th>
-        <th>컬럼 / PII</th>
-        <th>지표</th>
-        <th>샘플</th>
-        <th>판정</th>
-        <th>Allowlist Scope</th>
-        <th>사유 / 계획</th>
+        <th scope="col" data-sort-key="path" aria-sort="none"><button type="button" class="sort-button">경로 / Hive <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="column" aria-sort="none"><button type="button" class="sort-button">컬럼 / PII <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="metrics" aria-sort="none"><button type="button" class="sort-button">지표 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="sample" aria-sort="none"><button type="button" class="sort-button">샘플 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="decision" aria-sort="none"><button type="button" class="sort-button">판정 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="scope" aria-sort="none"><button type="button" class="sort-button">Allowlist Scope <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="reason" aria-sort="none"><button type="button" class="sort-button">사유 / 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -179,9 +182,114 @@ private[privyspark] object ReviewHtmlWriter {
         pad(date.getMinutes()) +
         pad(date.getSeconds());
     }
-    REVIEW_DATA.findings.forEach((finding, index) => {
-      const row = document.createElement('tr');
-      row.innerHTML = `
+    let sortState = { key: null, direction: 'asc' };
+    function collectFormValues() {
+      const values = {};
+      document.querySelectorAll('[data-index]').forEach(input => {
+        const index = input.getAttribute('data-index');
+        const field = input.getAttribute('data-field');
+        values[index] = values[index] || {};
+        values[index][field] = input.value;
+      });
+      return values;
+    }
+    function sampleSortText(finding) {
+      return finding.evidence_samples.map(sample => [
+        sample.file_identifier,
+        sample.sample_matched_fragment,
+        sample.sample_raw_value
+      ].join(' ')).join(' ');
+    }
+    function formSortText(values, index, fields) {
+      const rowValues = values[index] || {};
+      return fields.map(field => rowValues[field] || '').join(' ');
+    }
+    function getSortValue(row, values) {
+      const finding = row.finding;
+      switch (sortState.key) {
+        case 'path':
+          return [finding.file_identifier, finding.hive_table_fqn, finding.finding_key];
+        case 'column':
+          return [finding.column_name, finding.pii_type];
+        case 'metrics':
+          return [Number(finding.match_count) || 0, Number(finding.confidence) || 0];
+        case 'sample':
+          return sampleSortText(finding);
+        case 'decision':
+          return formSortText(values, row.index, ['decision']);
+        case 'scope':
+          return formSortText(values, row.index, ['allowlist_scope']);
+        case 'reason':
+          return formSortText(values, row.index, [
+            'false_positive_reason',
+            'file_identifier_pattern',
+            'column_name_pattern',
+            'pii_type_pattern',
+            'expires_at',
+            'action_plan',
+            'action_due_date'
+          ]);
+        default:
+          return row.index;
+      }
+    }
+    function compareSortValues(left, right) {
+      if (Array.isArray(left) || Array.isArray(right)) {
+        const leftArray = Array.isArray(left) ? left : [left];
+        const rightArray = Array.isArray(right) ? right : [right];
+        const length = Math.max(leftArray.length, rightArray.length);
+        for (let i = 0; i < length; i += 1) {
+          const result = compareSortValues(leftArray[i] ?? '', rightArray[i] ?? '');
+          if (result !== 0) {
+            return result;
+          }
+        }
+        return 0;
+      }
+      if (typeof left === 'number' && typeof right === 'number') {
+        return left - right;
+      }
+      return String(left ?? '').localeCompare(String(right ?? ''), 'ko-KR', {
+        numeric: true,
+        sensitivity: 'base'
+      });
+    }
+    function sortRows(rows, values) {
+      if (!sortState.key) {
+        return rows;
+      }
+      const direction = sortState.direction === 'desc' ? -1 : 1;
+      return rows.slice().sort((left, right) => {
+        const result = compareSortValues(getSortValue(left, values), getSortValue(right, values));
+        return result === 0 ? left.index - right.index : result * direction;
+      });
+    }
+    function setFieldValues(row, index, savedValues) {
+      Object.entries(savedValues[index] || {}).forEach(([field, value]) => {
+        const input = row.querySelector('[data-index="' + index + '"][data-field="' + field + '"]');
+        if (input) {
+          input.value = value;
+        }
+      });
+    }
+    function updateSortHeaders() {
+      document.querySelectorAll('#findingsTable th[data-sort-key]').forEach(th => {
+        const isActive = th.getAttribute('data-sort-key') === sortState.key;
+        th.setAttribute('aria-sort', isActive ? (sortState.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+        const indicator = th.querySelector('.sort-indicator');
+        if (indicator) {
+          indicator.textContent = isActive ? (sortState.direction === 'asc' ? '▲' : '▼') : '';
+        }
+      });
+    }
+    function renderFindings(savedValues = {}) {
+      tbody.innerHTML = '';
+      const rows = REVIEW_DATA.findings.map((finding, index) => ({ finding, index }));
+      sortRows(rows, savedValues).forEach(rowData => {
+        const finding = rowData.finding;
+        const index = rowData.index;
+        const row = document.createElement('tr');
+        row.innerHTML = `
         <td>$${escapeHtml(finding.file_identifier)}<br><small>$${escapeHtml(finding.hive_database)}.$${escapeHtml(finding.hive_table)}</small><br><small>$${escapeHtml(finding.finding_key)}</small></td>
         <td>$${escapeHtml(finding.column_name)}<br>$${escapeHtml(finding.pii_type)}</td>
         <td>count=$${escapeHtml(finding.match_count)}<br>confidence=$${escapeHtml(finding.confidence)}</td>
@@ -228,16 +336,25 @@ private[privyspark] object ReviewHtmlWriter {
             <input data-index="$${index}" data-field="action_due_date" placeholder="YYYY-MM-DD">
           </label>
         </td>`;
-      tbody.appendChild(row);
-    });
-    document.getElementById('downloadResponse').addEventListener('click', () => {
-      const values = {};
-      document.querySelectorAll('[data-index]').forEach(input => {
-        const index = input.getAttribute('data-index');
-        const field = input.getAttribute('data-field');
-        values[index] = values[index] || {};
-        values[index][field] = input.value;
+        setFieldValues(row, index, savedValues);
+        tbody.appendChild(row);
       });
+      updateSortHeaders();
+    }
+    document.querySelectorAll('#findingsTable th[data-sort-key] button').forEach(button => {
+      button.addEventListener('click', () => {
+        const key = button.closest('th').getAttribute('data-sort-key');
+        const savedValues = collectFormValues();
+        sortState = {
+          key,
+          direction: sortState.key === key && sortState.direction === 'asc' ? 'desc' : 'asc'
+        };
+        renderFindings(savedValues);
+      });
+    });
+    renderFindings();
+    document.getElementById('downloadResponse').addEventListener('click', () => {
+      const values = collectFormValues();
       const responses = REVIEW_DATA.findings.map((finding, index) => Object.assign({
         finding_key: finding.finding_key,
         finding_hash: finding.finding_hash,

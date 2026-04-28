@@ -120,7 +120,7 @@ collector는 response JSON의 `scan_results_fingerprint`가 현재 `--scan-resul
 
 GitHub Release에는 `privyspark-<tag>-review-response-example.html` 예시 파일을 함께 제공합니다. 이 파일은 더미 finding으로 response JSON 다운로드 흐름을 확인하기 위한 샘플이며, 실제 운영 검토에는 각 스캔이 생성한 `<scan-output>/review/review.html`을 사용합니다.
 
-HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 각 finding에 대해 하나의 결정을 입력합니다.
+HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 각 finding에 대해 하나의 결정을 입력합니다.
 
 결정 값은 다음 중 하나입니다.
 - `false_positive`: 실제 개인정보가 아니므로 다음 스캔에서 suppress합니다.
