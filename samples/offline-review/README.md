@@ -4,7 +4,7 @@
 
 - Open it directly in a browser.
 - Select decisions for one or more findings.
-- Click the download button to create `privyspark-response.json`.
+- Click the download button to create a `response-YYYYMMDD-HHMMSS.json` file.
 - The sample data is synthetic and masked; production `review.html` files are generated under `<scan-output>/review/review.html`.
 
 GitHub Release publishes this file as `privyspark-<tag>-review-response-example.html`.
