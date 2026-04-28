@@ -28,6 +28,7 @@
 - 빈 visible sheet는 header 기반 schema detection 이후 결과/오류 없이 건너뜁니다. hidden/veryHidden sheet는 제외합니다.
 - 시트 식별자는 `<workbook>#<sheet>` 형식을 사용합니다.
 - 실제 scan은 Spark executor task 안에서 StAX 기반 sheet row 스트리머로 수행합니다. sharedStrings는 task 수명 동안 executor 메모리에 적재하고, sheet XML은 row 단위로 스트리밍합니다.
+- workbook ZIP 엔트리 순회는 Spark/Hadoop 런타임에 이미 포함된 구버전 `commons-compress`와 호환되는 API를 사용하므로, `xlsx` scan을 위해 cluster classpath의 `commons-compress`를 별도로 교체할 필요가 없습니다.
 - `--excel-max-rows-in-memory`는 과거 spark-excel scan reader 호환용으로만 받습니다. 값을 명시하면 `excel_max_rows_in_memory_unused` warning을 남기며 실제 scan에는 사용하지 않습니다.
 - `--excel-byte-array-max-override` 또는 `spark.privyspark.excel.byteArrayMaxOverride`를 설정하면 Apache POI byte array allocation 상한을 조정합니다. 이 설정은 Excel report writing 등 POI 사용 경로를 위한 호환 설정입니다. 둘 다 생략하면 기본값 `300000000`을 적용합니다.
 

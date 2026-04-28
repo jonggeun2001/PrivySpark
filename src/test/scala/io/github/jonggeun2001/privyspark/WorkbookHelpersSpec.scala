@@ -7,10 +7,25 @@ import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.nio.file.Paths
 
 @RunWith(classOf[JUnitRunner])
 class WorkbookHelpersSpec extends AnyFunSuite {
+  test("workbook zip streaming uses commons-compress API available on Spark runtime classpath") {
+    val sourcePaths = Seq(
+      "src/main/scala/io/github/jonggeun2001/privyspark/format/WorkbookHelpers.scala",
+      "src/main/scala/io/github/jonggeun2001/privyspark/format/WorkbookSheetStreamer.scala"
+    )
+
+    sourcePaths.foreach { sourcePath =>
+      val source = new String(Files.readAllBytes(Paths.get(sourcePath)), StandardCharsets.UTF_8)
+      assert(source.contains("getNextZipEntry"), s"$sourcePath should use getNextZipEntry")
+      assert(!source.contains(".getNextEntry"), s"$sourcePath should not use getNextEntry")
+    }
+  }
+
   test("listVisibleWorkbookSheets reads sheet metadata without filtering empty visible sheets") {
     val tempDir = Files.createTempDirectory("privyspark-workbook-metadata-")
     val workbookPath = tempDir.resolve("contacts.xlsx")
