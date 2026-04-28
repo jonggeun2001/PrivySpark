@@ -101,7 +101,7 @@ private[privyspark] object ReviewHtmlWriter {
   <table id="findingsTable">
     <thead>
       <tr>
-        <th>Hive Table</th>
+        <th>Path / Hive</th>
         <th>Column / PII</th>
         <th>Metrics</th>
         <th>Samples</th>
@@ -126,7 +126,7 @@ private[privyspark] object ReviewHtmlWriter {
     REVIEW_DATA.findings.forEach((finding, index) => {
       const row = document.createElement('tr');
       row.innerHTML = `
-        <td>$${escapeHtml(finding.hive_database)}.$${escapeHtml(finding.hive_table)}<br><small>$${escapeHtml(finding.finding_key)}</small></td>
+        <td>$${escapeHtml(finding.file_identifier)}<br><small>$${escapeHtml(finding.hive_database)}.$${escapeHtml(finding.hive_table)}</small><br><small>$${escapeHtml(finding.finding_key)}</small></td>
         <td>$${escapeHtml(finding.column_name)}<br>$${escapeHtml(finding.pii_type)}</td>
         <td>count=$${escapeHtml(finding.match_count)}<br>confidence=$${escapeHtml(finding.confidence)}</td>
         <td class="sample">$${finding.evidence_samples.map(sample => escapeHtml(sample.file_identifier) + '\\n' + escapeHtml(sample.sample_matched_fragment) + '\\n' + escapeHtml(sample.sample_raw_value)).join('\\n---\\n')}</td>
@@ -163,6 +163,9 @@ private[privyspark] object ReviewHtmlWriter {
       const responses = REVIEW_DATA.findings.map((finding, index) => Object.assign({
         finding_key: finding.finding_key,
         finding_hash: finding.finding_hash,
+        file_identifier: finding.file_identifier,
+        column_name: finding.column_name,
+        pii_type: finding.pii_type,
         file_identifier_pattern: null,
         column_name_pattern: null,
         pii_type_pattern: null
@@ -191,7 +194,7 @@ private[privyspark] object ReviewHtmlWriter {
 
   private def findingToJson(finding: ReviewFinding, sampleMode: String): String = {
     val samples = finding.evidence.take(5).map(evidenceToJson(_, sampleMode)).mkString("[", ",", "]")
-    s"""{"scan_path":${jsonString(finding.scanPath)},"hive_database":${jsonString(finding.hiveDatabase)},"hive_table":${jsonString(finding.hiveTable)},"hive_table_fqn":${jsonString(finding.hiveTableFqn)},"column_name":${jsonString(finding.columnName)},"pii_type":${jsonString(finding.piiType)},"match_count":${finding.matchCount},"sampled_row_count":${finding.sampledRowCount},"match_ratio":${finding.matchRatio},"non_empty_match_ratio":${finding.nonEmptyMatchRatio},"confidence":${finding.confidence},"finding_key":${jsonString(finding.findingKey)},"finding_hash":${jsonString(finding.findingHash)},"evidence_samples":$samples}"""
+    s"""{"scan_path":${jsonString(finding.scanPath)},"file_identifier":${jsonString(finding.fileIdentifier)},"hive_database":${jsonString(finding.hiveDatabase)},"hive_table":${jsonString(finding.hiveTable)},"hive_table_fqn":${jsonString(finding.hiveTableFqn)},"column_name":${jsonString(finding.columnName)},"pii_type":${jsonString(finding.piiType)},"match_count":${finding.matchCount},"sampled_row_count":${finding.sampledRowCount},"match_ratio":${finding.matchRatio},"non_empty_match_ratio":${finding.nonEmptyMatchRatio},"confidence":${finding.confidence},"finding_key":${jsonString(finding.findingKey)},"finding_hash":${jsonString(finding.findingHash)},"evidence_samples":$samples}"""
   }
 
   private def evidenceToJson(evidence: ReviewEvidence, sampleMode: String): String = {

@@ -63,7 +63,7 @@
 - `file_mtime_epoch_ms`는 해당 row를 대표하는 파일의 마지막 수정 시각(epoch milliseconds)입니다. 디렉토리 식별자 row는 포함된 파일 중 최대 mtime을 기록합니다.
 - `review_status` 기본값은 `pending`입니다. 운영 검토에서 `false_positive`, `true_positive`로 편집할 수 있습니다.
 - `review_reason`은 검토 사유 텍스트입니다. `false_positive` 판정 시 필수로 채우는 것을 권장합니다.
-- `review_invalidated=true`는 이전 allowlist와 같은 `(file_identifier, column_name, pii_type)` 조합이 있었지만, 현재 파일 메타데이터와 checksum이 달라져 재검토가 필요함을 의미합니다.
+- `review_invalidated=true`는 이전 allowlist와 같은 `(dataset_path, file_identifier, column_name, pii_type)` 조합이 있었지만, 현재 파일 메타데이터와 checksum이 달라져 재검토가 필요함을 의미합니다.
 - `review_scope_file_identifiers`는 디렉토리 집계 row가 실제로 포함한 concrete file identifier 목록입니다. `|` 구분 문자열로 저장되고 `review apply`는 이 목록만 allowlist로 전개합니다.
 - `review_scope_file_fingerprints`는 디렉토리 집계 row의 파일별 fingerprint snapshot입니다. 내부 인코딩 문자열로 저장되고 `review apply`는 scope 안의 모든 fingerprint가 일치할 때만 false positive를 staged 합니다.
 - `--allowlist`를 쓰지 않으면 review 관련 필드는 기본값만 채워집니다.
