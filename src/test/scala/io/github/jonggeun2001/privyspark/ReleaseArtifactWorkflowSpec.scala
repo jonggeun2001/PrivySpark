@@ -89,6 +89,7 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(html.contains("responded_at 값은 ISO-8601 instant여야 합니다."))
     assert(html.contains("responses 배열은 비어 있을 수 없습니다."))
     assert(html.contains("Date.parse(value)"))
+    assert(html.contains("getUTCFullYear"))
     assert(html.contains("false_positive_reason 값이 필요합니다."))
     assert(html.contains("unsupported allowlist_scope"))
     assert(html.contains("expires_at 값이 필요합니다."))

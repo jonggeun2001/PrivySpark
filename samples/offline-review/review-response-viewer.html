@@ -268,8 +268,17 @@
 
     const trim = value => String(value ?? '').trim();
 
-    const isIsoInstant = value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)
-      && !Number.isNaN(Date.parse(value));
+    const isIsoInstant = value => {
+      const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/);
+      if (!match || Number.isNaN(Date.parse(value))) return false;
+      const parsed = new Date(value);
+      return parsed.getUTCFullYear() === Number(match[1])
+        && parsed.getUTCMonth() + 1 === Number(match[2])
+        && parsed.getUTCDate() === Number(match[3])
+        && parsed.getUTCHours() === Number(match[4])
+        && parsed.getUTCMinutes() === Number(match[5])
+        && parsed.getUTCSeconds() === Number(match[6]);
+    };
 
     const isDateOnly = value => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
