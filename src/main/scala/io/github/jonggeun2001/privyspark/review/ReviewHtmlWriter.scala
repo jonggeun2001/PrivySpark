@@ -128,17 +128,17 @@ private[privyspark] object ReviewHtmlWriter {
 <body>
   <h1>PrivySpark Review</h1>
   <p>Scan path: <code id="scanPath"></code></p>
-  <p><label>응답자 <input id="responder" placeholder="owner@example.com"></label></p>
+  <p><label>응답자 <input id="responder"></label></p>
   <table id="findingsTable">
     <thead>
       <tr>
-        <th>Path / Hive</th>
-        <th>Column / PII</th>
-        <th>Metrics</th>
-        <th>Samples</th>
-        <th>Decision</th>
+        <th>경로 / Hive</th>
+        <th>컬럼 / PII</th>
+        <th>지표</th>
+        <th>샘플</th>
+        <th>판정</th>
         <th>Allowlist Scope</th>
-        <th>Reason / Plan</th>
+        <th>사유 / 계획</th>
       </tr>
     </thead>
     <tbody></tbody>
