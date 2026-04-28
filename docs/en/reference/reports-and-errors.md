@@ -63,7 +63,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 - `file_mtime_epoch_ms` stores the representative last-modified time in epoch milliseconds. Directory-level rows keep the maximum mtime across included files.
 - `review_status` defaults to `pending`. Operators can edit it to `false_positive` or `true_positive`.
 - `review_reason` stores the operator note. It should be filled when a row is marked `false_positive`.
-- `review_invalidated=true` means the same `(file_identifier, column_name, pii_type)` tuple existed in the allowlist before, but the current file metadata and checksum no longer match and the row should be reviewed again.
+- `review_invalidated=true` means the same `(dataset_path, file_identifier, column_name, pii_type)` tuple existed in the allowlist before, but the current file metadata and checksum no longer match and the row should be reviewed again.
 - `review_scope_file_identifiers` stores the concrete file identifiers included in a directory-level row. It is encoded as a `|`-delimited string, and `review apply` expands only this recorded scope.
 - `review_scope_file_fingerprints` stores the recorded per-file fingerprint snapshot for directory-level rows. It uses an internal encoded string format and `review apply` requires every scoped file fingerprint to match before staging a false-positive review.
 - When `--allowlist` is not provided, all review fields stay at their default values.

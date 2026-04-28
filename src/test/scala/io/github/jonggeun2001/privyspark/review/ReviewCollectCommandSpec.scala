@@ -125,16 +125,91 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(updatedActionPlan.contains("mask email"))
   }
 
+  test("collect keys unified review state by scan path and file identifier") {
+    val sparkSession = spark
+    import sparkSession.implicits._
+
+    val scanRoot = Files.createTempDirectory("privyspark-review-scan-unified-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-unified-")
+    val scanResultsPath = scanRoot.resolve("parquet/scan_results")
+    Files.createDirectories(scanResultsPath.getParent)
+    Files.createDirectories(stateRoot.resolve("inbox"))
+
+    val firstFingerprint = RecordedFileFingerprint(
+      fileIdentifier = "customers/a.parquet",
+      fileSize = 128L,
+      fileMtimeEpochMs = 1710000000000L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "aaaa1111"
+    )
+    val secondFingerprint = RecordedFileFingerprint(
+      fileIdentifier = "customers/b.parquet",
+      fileSize = 256L,
+      fileMtimeEpochMs = 1710000000001L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "bbbb2222"
+    )
+    val firstFindingResult = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "alice@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(firstFingerprint)),
+      fileIdentifier = "customers/a.parquet"
+    )
+    val secondFindingResult = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "bob@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(secondFingerprint)),
+      fileIdentifier = "customers/b.parquet"
+    )
+
+    Seq(firstFindingResult, secondFindingResult).toDS().toDF().write.mode("overwrite").parquet(scanResultsPath.toString)
+
+    val findings = ReviewFindingBuilder.fromScanResults(Seq(firstFindingResult, secondFindingResult))
+    assert(findings.size == 2)
+    assert(findings.map(_.findingKey).distinct.size == 2)
+
+    val scanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
+    val firstFinding = findings.find(_.evidence.exists(_.fileIdentifier == "customers/a.parquet")).get
+    val secondFinding = findings.find(_.evidence.exists(_.fileIdentifier == "customers/b.parquet")).get
+    val responseJson =
+      s"""{"schema_version":1,"scan_path":"/data/project","scan_results_fingerprint":"$scanFingerprint","responder":"owner@example.com","responded_at":"2026-04-27T11:00:00Z","responses":[{"finding_key":"${firstFinding.findingKey}","finding_hash":"${firstFinding.findingHash}","decision":"false_positive","false_positive_reason":"dummy email in owner file","allowlist_scope":"exact","file_identifier_pattern":null,"column_name_pattern":null,"pii_type_pattern":null,"expires_at":null,"action_plan":null,"action_due_date":null},{"finding_key":"${secondFinding.findingKey}","finding_hash":"${secondFinding.findingHash}","decision":"true_positive","false_positive_reason":null,"allowlist_scope":null,"file_identifier_pattern":null,"column_name_pattern":null,"pii_type_pattern":null,"expires_at":null,"action_plan":"mask b email","action_due_date":"2999-12-31"}]}"""
+    Files.write(stateRoot.resolve("inbox/owner-response.json"), responseJson.getBytes(StandardCharsets.UTF_8))
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(scanResultsPath.toString, stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val actionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+    val findingStatus = read(stateRoot.resolve("current/finding_status.jsonl"))
+    val ledger = read(stateRoot.resolve("current/response_ledger.jsonl"))
+
+    assert(allowlist.contains("customers/a.parquet"))
+    assert(!allowlist.contains("customers/b.parquet"))
+    assert(actionPlan.contains("customers/b.parquet"))
+    assert(findingStatus.contains("customers/a.parquet"))
+    assert(findingStatus.contains("customers/b.parquet"))
+    assert(ledger.contains("customers/a.parquet"))
+    assert(ledger.contains("customers/b.parquet"))
+    assert(!Files.exists(stateRoot.resolve("rejected")))
+    assert(!Files.exists(stateRoot.resolve("versions")))
+  }
+
   private def scanResult(
     columnName: String,
     piiType: String,
     sample: String,
-    scopeFingerprints: String
+    scopeFingerprints: String,
+    datasetPath: String = "/data/project",
+    fileIdentifier: String = "customers/part-000.parquet"
   ): ScanResult =
     ScanResult(
-      dataset_path = "/data/project",
+      dataset_path = datasetPath,
       scan_timestamp = "2026-04-27T10:00:00Z",
-      file_identifier = "customers/part-000.parquet",
+      file_identifier = fileIdentifier,
       column_name = columnName,
       pii_type = piiType,
       match_count = 1L,

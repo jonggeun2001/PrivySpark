@@ -48,15 +48,6 @@
     action_plan.jsonl
     finding_status.jsonl
     response_ledger.jsonl
-  rejected/
-    rejected_responses.jsonl
-  versions/
-    <collect-run-id>/
-      allowlist.jsonl
-      action_plan.jsonl
-      finding_status.jsonl
-      response_ledger.jsonl
-      collect_report.json
 ```
 
 운영자는 이번 스캔의 `scan_results` 경로와 누적 `<review-state-root>`만 지정합니다.
@@ -85,6 +76,7 @@ privyspark scan \
 
 ```text
 scan_path = scan CLI의 --path 값
+file_identifier = scan_results.file_identifier
 ```
 
 collector와 HTML 생성기는 `scan_path`를 정규화한 뒤 finding key를 계산합니다.
@@ -92,8 +84,7 @@ collector와 HTML 생성기는 `scan_path`를 정규화한 뒤 finding key를 �
 ```text
 finding_key = sha256(
   normalized_scan_path + "|" +
-  hive_database + "|" +
-  hive_table + "|" +
+  file_identifier + "|" +
   column_name + "|" +
   pii_type
 )
@@ -116,7 +107,6 @@ finding_hash = sha256(
 
 ```text
 scan_results_fingerprint = sha256(
-  normalized_scan_path + "|" +
   sorted(finding_key, finding_hash)
 )
 ```
@@ -147,6 +137,7 @@ HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을
 
 finding 요약에는 다음 필드를 표시합니다.
 - `scan_path`
+- `file_identifier`
 - `hive_database`
 - `hive_table`
 - `column_name`
@@ -200,6 +191,9 @@ response JSON은 하나의 파일 안에 여러 finding 응답을 담을 수 있
     {
       "finding_key": "sha256...",
       "finding_hash": "sha256...",
+      "file_identifier": "project_db/customer/part-000.parquet",
+      "column_name": "customer_no",
+      "pii_type": "driver_license_number",
       "decision": "false_positive",
       "false_positive_reason": "내부 주문번호 포맷이 운전면허번호 규칙과 충돌",
       "allowlist_scope": "exact",
@@ -213,6 +207,9 @@ response JSON은 하나의 파일 안에 여러 finding 응답을 담을 수 있
     {
       "finding_key": "sha256...",
       "finding_hash": "sha256...",
+      "file_identifier": "project_db/customer/part-001.parquet",
+      "column_name": "email",
+      "pii_type": "email",
       "decision": "true_positive",
       "false_positive_reason": null,
       "allowlist_scope": null,
@@ -233,6 +230,9 @@ pattern allowlist response 예시는 다음과 같습니다.
 {
   "finding_key": "sha256...",
   "finding_hash": "sha256...",
+  "file_identifier": "project_db/customer/part-000.parquet",
+  "column_name": "temp_driver_no",
+  "pii_type": "driver_license_number",
   "decision": "false_positive",
   "false_positive_reason": "temp_* 컬럼은 내부 테스트 식별자",
   "allowlist_scope": "pattern",
@@ -259,7 +259,6 @@ collector는 idempotent batch job이어야 합니다. 같은 `scan_results`와 �
 6. 같은 finding에 여러 유효 응답이 있으면 envelope의 `responded_at`이 가장 최신인 응답을 채택합니다.
 7. 기존 `<review-state-root>/current`와 새 응답을 merge합니다.
 8. 새 state를 임시 경로에 쓴 뒤 원자적으로 `current`를 교체합니다.
-9. 이전 state와 collect report는 `versions/<collect-run-id>`에 보관합니다.
 
 reject 사유 예시:
 - JSON 파싱 실패
@@ -329,6 +328,7 @@ pattern allowlist의 `*`는 glob 의미입니다. 정규식으로 해석하지 �
 action_plan.jsonl
 - finding_key
 - scan_path
+- file_identifier
 - hive_database
 - hive_table
 - hive_table_fqn
@@ -392,15 +392,14 @@ scan은 `<review-state-root>/current/allowlist.jsonl`을 읽어 오탐을 suppre
    - `<review-state-root>/current/allowlist.jsonl`
    - `<review-state-root>/current/action_plan.jsonl`
    - `<review-state-root>/current/finding_status.jsonl`
-   - `<review-state-root>/rejected/rejected_responses.jsonl`
-   - `<review-state-root>/versions/<collect-run-id>/collect_report.json`
+   - `<review-state-root>/current/response_ledger.jsonl`
 
 7. 다음 스캔도 같은 `<review-state-root>`를 사용합니다.
 
 ## 보안과 감사
 - 검출 샘플은 HTML에만 포함하고 메일 본문과 response JSON에는 포함하지 않습니다.
 - response JSON 원본은 삭제하지 않습니다.
-- collector는 accepted/rejected 처리 이력을 `response_ledger.jsonl`에 남깁니다.
+- collector는 accepted 처리 이력을 `response_ledger.jsonl`에 남깁니다. 현재 `scan_results`와 맞지 않는 response는 state에 반영하지 않고 driver 로그의 rejected count로 확인합니다.
 - pattern allowlist는 반드시 만료일을 가져야 합니다.
 - broad wildcard는 기본적으로 제한합니다.
 - 구버전 HTML 또는 오래된 scan result에 대한 응답은 `finding_hash` mismatch로 거부합니다.

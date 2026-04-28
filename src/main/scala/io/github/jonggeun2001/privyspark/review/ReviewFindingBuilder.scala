@@ -20,6 +20,7 @@ private[privyspark] final case class ReviewEvidence(
 
 private[privyspark] final case class ReviewFinding(
   scanPath: String,
+  fileIdentifier: String,
   hiveDatabase: String,
   hiveTable: String,
   hiveTableFqn: String,
@@ -48,21 +49,20 @@ private[privyspark] object ReviewFindingBuilder {
     val accumulators = mutable.Map.empty[ReviewFindingGroupKey, ReviewFindingAccumulator]
 
     results.foreach { result =>
-      val groupKey = ReviewFindingGroupKey(result.dataset_path, result.hive_table_fqn, result.column_name, result.pii_type)
+      val groupKey = ReviewFindingGroupKey(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)
       val accumulator = accumulators.getOrElseUpdate(groupKey, new ReviewFindingAccumulator(groupKey, sampleLimit))
       accumulator.add(result)
     }
 
     accumulators.values.map(_.toFinding).toSeq
-      .sortBy(finding => (finding.scanPath, finding.hiveTableFqn, finding.columnName, finding.piiType))
+      .sortBy(finding => (finding.scanPath, finding.fileIdentifier, finding.columnName, finding.piiType))
   }
 
   def scanResultsFingerprint(findings: Seq[ReviewFinding]): String =
     sha256(findings.map(finding => s"${finding.findingKey}|${finding.findingHash}").sorted.mkString("|"))
 
   def findingKeyForResult(result: ScanResult): String = {
-    val (hiveDatabase, hiveTable) = splitHiveTableFqn(result.hive_table_fqn)
-    findingKeyForFields(result.dataset_path, hiveDatabase, hiveTable, result.column_name, result.pii_type)
+    findingKeyForFields(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)
   }
 
   def evidenceFromScanResult(result: ScanResult): Seq[ReviewEvidence] =
@@ -119,15 +119,17 @@ private[privyspark] object ReviewFindingBuilder {
 
   private final case class ReviewFindingGroupKey(
     scanPath: String,
-    hiveTableFqn: String,
+    fileIdentifier: String,
     columnName: String,
     piiType: String
   )
 
   private final class ReviewFindingAccumulator(groupKey: ReviewFindingGroupKey, sampleLimit: Int) {
-    private val (hiveDatabase, hiveTable) = splitHiveTableFqn(groupKey.hiveTableFqn)
     private val evidenceSamples = mutable.ArrayBuffer.empty[ReviewEvidence]
     private val evidenceDigest = MessageDigest.getInstance("SHA-256")
+    private var hiveTableFqn = ""
+    private var hiveDatabase = ""
+    private var hiveTable = ""
     private var matchCount = 0L
     private var sampledRowCount = 0L
     private var matchRatio = 0.0
@@ -139,13 +141,19 @@ private[privyspark] object ReviewFindingBuilder {
 
     private val findingKey = findingKeyForFields(
       groupKey.scanPath,
-      hiveDatabase,
-      hiveTable,
+      groupKey.fileIdentifier,
       groupKey.columnName,
       groupKey.piiType
     )
 
     def add(result: ScanResult): Unit = {
+      val resultHiveTableFqn = Option(result.hive_table_fqn).map(_.trim).getOrElse("")
+      if (hiveTableFqn.trim.isEmpty && resultHiveTableFqn.nonEmpty) {
+        hiveTableFqn = resultHiveTableFqn
+        val split = splitHiveTableFqn(hiveTableFqn)
+        hiveDatabase = split._1
+        hiveTable = split._2
+      }
       matchCount += result.match_count
       sampledRowCount += result.sampled_row_count
       matchRatio = math.max(matchRatio, result.match_ratio)
@@ -174,9 +182,10 @@ private[privyspark] object ReviewFindingBuilder {
       val findingHash = sha256(s"$findingKey|${bytesToHex(evidenceDigest.digest())}")
       ReviewFinding(
         scanPath = groupKey.scanPath,
+        fileIdentifier = groupKey.fileIdentifier,
         hiveDatabase = hiveDatabase,
         hiveTable = hiveTable,
-        hiveTableFqn = groupKey.hiveTableFqn,
+        hiveTableFqn = hiveTableFqn,
         columnName = groupKey.columnName,
         piiType = groupKey.piiType,
         matchCount = matchCount,
@@ -209,15 +218,13 @@ private[privyspark] object ReviewFindingBuilder {
 
   private def findingKeyForFields(
     scanPath: String,
-    hiveDatabase: String,
-    hiveTable: String,
+    fileIdentifier: String,
     columnName: String,
     piiType: String
   ): String =
     sha256(Seq(
       normalizeScanPath(scanPath),
-      hiveDatabase,
-      hiveTable,
+      fileIdentifier,
       columnName,
       piiType
     ).mkString("|"))

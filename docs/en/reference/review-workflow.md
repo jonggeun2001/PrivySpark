@@ -2,7 +2,7 @@
 
 ## Goal
 - Reduce repeated noise from the same reviewed false positives.
-- The review key is `(file_identifier, column_name, pii_type)`.
+- The review key is `(dataset_path, file_identifier, column_name, pii_type)`.
 - If file metadata or checksum changes, the previous false-positive decision is automatically invalidated.
 
 This page describes the single-file workflow where operators edit `scan_results` directly and run `review apply` to build an exact allowlist. For serverless owner review through `review.html` and cumulative response JSON collection, use the Korean reference [offline-review-collector.md](../../ko/reference/offline-review-collector.md).
@@ -53,7 +53,7 @@ privyspark scan \
 ```
 
 During the next scan:
-- If the allowlist key matches the current `(file_identifier, column_name, pii_type)` and
+- If the allowlist key matches the current `(dataset_path, file_identifier, column_name, pii_type)` and
 - `file_size`, `file_mtime_epoch_ms`, and `CRC32` still match,
 - the result row is removed from the final `scan_results`.
 
