@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "io.github.jonggeun2001"
-version = "1.4.2"
+version = "1.4.3"
 
 repositories {
     mavenCentral()
@@ -33,7 +33,8 @@ dependencies {
     implementation("org.tukaani:xz:1.10")
     implementation("com.github.luben:zstd-jni:1.5.6-3")
     implementation("com.github.junrar:junrar:7.5.5")
-    implementation("org.mariadb.jdbc:mariadb-java-client:3.4.1")
+
+    compileOnly("org.mariadb.jdbc:mariadb-java-client:3.4.1")
 
     implementation("com.github.scopt:scopt_2.12:4.1.0")
     implementation("org.yaml:snakeyaml:2.2")

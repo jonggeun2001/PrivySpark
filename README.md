@@ -105,7 +105,7 @@ bash scripts/verify-worktree.sh
 - 스캔 실행 시 `--path`, `--output`은 절대경로 또는 URI만 허용합니다.
 - `--output-format`은 반복 지정 가능하고, 기본값은 `parquet`입니다. 지원값은 `parquet`, `csv`, `excel`입니다.
 - `--suppress`는 반복 지정 가능하며 `column:pii_type` 형식입니다. `--suppression-file`은 같은 형식을 줄 단위로 읽고, ruleset `suppressions:`와 union으로 합쳐집니다.
-- Hive table 매핑은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 하나라도 빠지면 비활성화되고, 활성화 상태에서 JDBC 접속이나 query가 실패해도 warning 후 `hive_table_fqn`은 빈 문자열로 남습니다.
+- Hive table 매핑은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. MariaDB JDBC driver는 fat JAR에 포함하지 않으므로 cluster classpath에 두거나 `PRIVYSPARK_JARS=/path/to/mariadb-java-client.jar`로 함께 제출합니다. driver가 없거나 JDBC 접속/query가 실패하면 warning 후 `hive_table_fqn`은 빈 문자열로 남습니다.
 - 기본 ruleset은 [config/rules/default.yaml](config/rules/default.yaml)에 있습니다.
 
 ### 결과를 확인하는 위치

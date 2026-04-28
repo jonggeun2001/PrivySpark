@@ -67,7 +67,8 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - Hive table lookup은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 셋 중 1~2개만 지정하면 CLI 오류로 종료하고, 모두 생략하면 `hive_lookup_inactive` 로그 후 `hive_table_fqn`은 모두 `""`입니다.
 - 활성화되면 실행 초기에 driver가 MariaDB JDBC로 Hive Metastore `DBS`/`TBLS`/`SDS`를 1회 조회하고 table-level `LOCATION` prefix 인덱스를 broadcast 합니다. 결과 row의 물리 입력 경로가 해당 prefix 하위이면 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다.
 - password 파일은 Hadoop `FileSystem`으로 읽습니다. `hdfs://` 같은 공유 URI를 쓰면 YARN cluster에서 별도 `--files` 배포가 필요 없습니다. client 로컬 파일을 쓰려면 다른 로컬 설정 파일과 마찬가지로 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 배포한 alias를 지정해야 합니다.
-- JDBC driver는 Shadow JAR에 포함된 MariaDB driver를 사용합니다. URL에 timeout이 없으면 기본 `connectTimeout=5000`, `socketTimeout=30000`을 적용합니다.
+- MariaDB JDBC driver는 Shadow JAR에 포함하지 않습니다. Hive table lookup을 쓰려면 cluster 공통 classpath에 driver를 설치하거나, 제출 시 `PRIVYSPARK_JARS=/path/to/mariadb-java-client.jar`처럼 driver JAR를 Spark `--jars`로 함께 전달합니다. Maven package resolution을 허용하는 환경에서는 `PRIVYSPARK_PACKAGES=org.mariadb.jdbc:mariadb-java-client:3.4.1`도 사용할 수 있습니다.
+- URL에 timeout이 없으면 기본 `connectTimeout=5000`, `socketTimeout=30000`을 적용합니다.
 - JDBC 접속, password 파일 읽기, metastore query가 실패하면 `hive_lookup_disabled` warning을 남기고 빈 매핑으로 계속 진행합니다. 정상 인덱스 준비 시 `hive_lookup_ready size=<N>` info 로그가 남습니다.
 - archive entry와 Excel sheet는 `<archive>!<entry>`, `<workbook>#<sheet>`에서 host archive/workbook path만 lookup 합니다.
 - partition별 `LOCATION` override는 현재 지원하지 않습니다. table-level `LOCATION`만 사용합니다.
