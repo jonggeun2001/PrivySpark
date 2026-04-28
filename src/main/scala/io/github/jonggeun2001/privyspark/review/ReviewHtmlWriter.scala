@@ -119,6 +119,10 @@ private[privyspark] object ReviewHtmlWriter {
     th { background: #f4f6f7; text-align: left; }
     textarea, input, select { width: 100%; box-sizing: border-box; }
     .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+    .field { display: block; margin-bottom: 8px; }
+    .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
+    .hint { color: #566573; font-size: 12px; line-height: 1.45; margin: 6px 0 10px; white-space: pre-wrap; }
+    .scope-cell { min-width: 240px; }
   </style>
 </head>
 <body>
@@ -133,6 +137,7 @@ private[privyspark] object ReviewHtmlWriter {
         <th>Metrics</th>
         <th>Samples</th>
         <th>Decision</th>
+        <th>Allowlist Scope</th>
         <th>Reason / Plan</th>
       </tr>
     </thead>
@@ -150,6 +155,20 @@ private[privyspark] object ReviewHtmlWriter {
       '"': '&quot;',
       "'": '&#39;'
     }[ch]));
+    const scopeGuidance = finding => {
+      const exactHint = finding.fingerprint_complete
+        ? 'exact: 이 finding만 제외합니다. 다음 스캔에서 dataset_path, file_identifier, column_name, pii_type, file_size, mtime, checksum fingerprint가 모두 다시 일치할 때만 suppress됩니다. 일반적으로 기본 선택입니다.'
+        : 'exact: 이 finding은 checksum 등 fingerprint metadata가 부족해 collector에서 거부됩니다. pattern을 쓰거나 정탐으로 처리하세요.';
+      const patternFileHint = finding.has_multiple_file_evidence
+        ? '여러 파일 증거가 있어 file_identifier_pattern 필수입니다.'
+        : 'file_identifier_pattern을 비우면 현재 대표 file_identifier를 사용합니다.';
+      return [
+        exactHint,
+        'pattern: 반복 오탐을 넓게 제외합니다. 사유와 expires_at(YYYY-MM-DD)이 필수이고 pattern 필드 중 하나 이상 필요합니다.',
+        patternFileHint,
+        '*는 glob 와일드카드입니다. pii_type=* 금지.'
+      ].join('\\n');
+    };
     REVIEW_DATA.findings.forEach((finding, index) => {
       const row = document.createElement('tr');
       row.innerHTML = `
@@ -158,24 +177,46 @@ private[privyspark] object ReviewHtmlWriter {
         <td>count=$${escapeHtml(finding.match_count)}<br>confidence=$${escapeHtml(finding.confidence)}</td>
         <td class="sample">$${finding.evidence_samples.map(sample => escapeHtml(sample.file_identifier) + '\\n' + escapeHtml(sample.sample_matched_fragment) + '\\n' + escapeHtml(sample.sample_raw_value)).join('\\n---\\n')}</td>
         <td>
-          <select data-index="$${index}" data-field="decision">
-            <option value="">선택</option>
-            <option value="false_positive">오탐</option>
-            <option value="true_positive">정탐</option>
-          </select>
-          <select data-index="$${index}" data-field="allowlist_scope">
-            <option value="exact">exact</option>
-            <option value="pattern">pattern</option>
-          </select>
+          <label class="field"><span>판정</span>
+            <select data-index="$${index}" data-field="decision">
+              <option value="">선택</option>
+              <option value="false_positive">오탐</option>
+              <option value="true_positive">정탐</option>
+            </select>
+          </label>
+          <div class="hint">오탐은 다음 스캔 suppress 대상입니다. 정탐은 suppress하지 않고 조치 계획을 남깁니다.</div>
+        </td>
+        <td class="scope-cell">
+          <label class="field"><span>오탐 scope</span>
+            <select data-index="$${index}" data-field="allowlist_scope">
+              <option value="exact">exact</option>
+              <option value="pattern">pattern</option>
+            </select>
+          </label>
+          <div class="hint">$${escapeHtml(scopeGuidance(finding))}</div>
         </td>
         <td>
-          <textarea data-index="$${index}" data-field="false_positive_reason" placeholder="오탐 사유"></textarea>
-          <input data-index="$${index}" data-field="file_identifier_pattern" placeholder="file_identifier pattern (* 지원)">
-          <input data-index="$${index}" data-field="column_name_pattern" placeholder="column_name pattern (* 지원)">
-          <input data-index="$${index}" data-field="pii_type_pattern" placeholder="pii_type pattern (* 제외)">
-          <input data-index="$${index}" data-field="expires_at" placeholder="pattern 만료일 YYYY-MM-DD">
-          <textarea data-index="$${index}" data-field="action_plan" placeholder="정탐 조치 계획"></textarea>
-          <input data-index="$${index}" data-field="action_due_date" placeholder="YYYY-MM-DD">
+          <label class="field"><span>오탐 사유</span>
+            <textarea data-index="$${index}" data-field="false_positive_reason" placeholder="오탐 판단 근거. exact와 pattern 모두 필수"></textarea>
+          </label>
+          <label class="field"><span>file_identifier_pattern</span>
+            <input data-index="$${index}" data-field="file_identifier_pattern" placeholder="예: project_db/customer/*">
+          </label>
+          <label class="field"><span>column_name_pattern</span>
+            <input data-index="$${index}" data-field="column_name_pattern" placeholder="예: temp_*">
+          </label>
+          <label class="field"><span>pii_type_pattern</span>
+            <input data-index="$${index}" data-field="pii_type_pattern" placeholder="예: driver_license_number (* 금지)">
+          </label>
+          <label class="field"><span>pattern expires_at</span>
+            <input data-index="$${index}" data-field="expires_at" placeholder="YYYY-MM-DD">
+          </label>
+          <label class="field"><span>정탐 조치 계획</span>
+            <textarea data-index="$${index}" data-field="action_plan" placeholder="정탐이면 필수. 예: 컬럼 마스킹, 접근권한 회수"></textarea>
+          </label>
+          <label class="field"><span>조치 예정일</span>
+            <input data-index="$${index}" data-field="action_due_date" placeholder="YYYY-MM-DD">
+          </label>
         </td>`;
       tbody.appendChild(row);
     });
@@ -221,7 +262,7 @@ private[privyspark] object ReviewHtmlWriter {
 
   private def findingToJson(finding: ReviewFinding, sampleMode: String): String = {
     val samples = finding.evidence.take(5).map(evidenceToJson(_, sampleMode)).mkString("[", ",", "]")
-    s"""{"scan_path":${jsonString(finding.scanPath)},"file_identifier":${jsonString(finding.fileIdentifier)},"hive_database":${jsonString(finding.hiveDatabase)},"hive_table":${jsonString(finding.hiveTable)},"hive_table_fqn":${jsonString(finding.hiveTableFqn)},"column_name":${jsonString(finding.columnName)},"pii_type":${jsonString(finding.piiType)},"match_count":${finding.matchCount},"sampled_row_count":${finding.sampledRowCount},"match_ratio":${finding.matchRatio},"non_empty_match_ratio":${finding.nonEmptyMatchRatio},"confidence":${finding.confidence},"finding_key":${jsonString(finding.findingKey)},"finding_hash":${jsonString(finding.findingHash)},"evidence_samples":$samples}"""
+    s"""{"scan_path":${jsonString(finding.scanPath)},"file_identifier":${jsonString(finding.fileIdentifier)},"hive_database":${jsonString(finding.hiveDatabase)},"hive_table":${jsonString(finding.hiveTable)},"hive_table_fqn":${jsonString(finding.hiveTableFqn)},"column_name":${jsonString(finding.columnName)},"pii_type":${jsonString(finding.piiType)},"match_count":${finding.matchCount},"sampled_row_count":${finding.sampledRowCount},"match_ratio":${finding.matchRatio},"non_empty_match_ratio":${finding.nonEmptyMatchRatio},"confidence":${finding.confidence},"finding_key":${jsonString(finding.findingKey)},"finding_hash":${jsonString(finding.findingHash)},"fingerprint_complete":${finding.fingerprintComplete},"has_multiple_file_evidence":${finding.hasMultipleFileEvidence},"evidence_samples":$samples}"""
   }
 
   private def evidenceToJson(evidence: ReviewEvidence, sampleMode: String): String = {
