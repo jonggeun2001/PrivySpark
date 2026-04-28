@@ -112,4 +112,64 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("PrivySpark Review"))
     assert(!html.contains("bob@example.com"))
   }
+
+  test("write renders allowlist scope in a separate column with collector-matched guidance") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-scope-hint-")
+    val fingerprints = ReviewScopeFingerprintCodec.encode(Seq(
+      RecordedFileFingerprint(
+        fileIdentifier = "customers/part-000.parquet",
+        fileSize = 128L,
+        fileMtimeEpochMs = 1710000000000L,
+        fileChecksumAlgo = "sha256",
+        fileChecksum = "aaa"
+      ),
+      RecordedFileFingerprint(
+        fileIdentifier = "customers/part-001.parquet",
+        fileSize = 256L,
+        fileMtimeEpochMs = 1710000001000L,
+        fileChecksumAlgo = "sha256",
+        fileChecksum = "bbb"
+      )
+    ))
+    val result = ScanResult(
+      dataset_path = "/data/project",
+      scan_timestamp = "2026-04-27T10:00:00Z",
+      file_identifier = "customers",
+      column_name = "temp_driver_no",
+      pii_type = "driver_license_number",
+      match_count = 2L,
+      sampled_row_count = 10L,
+      match_ratio = 0.2,
+      non_empty_match_ratio = 0.2,
+      confidence = 0.1,
+      sample_raw_value = "991231-1234567",
+      sample_matched_fragment = "991231-1234567",
+      file_size = 128L,
+      file_mtime_epoch_ms = 1710000000000L,
+      review_scope_file_fingerprints = fingerprints
+    )
+
+    ReviewHtmlWriter.write(
+      new Configuration(),
+      outputRoot.toString,
+      "/data/project",
+      Seq(result),
+      sampleMode = "masked"
+    )
+
+    val htmlPath = outputRoot.resolve("review").resolve("review.html")
+    val html = new String(Files.readAllBytes(htmlPath), StandardCharsets.UTF_8)
+
+    assert(html.contains("<th>Allowlist Scope</th>"))
+    assert(html.contains("class=\"scope-cell\""))
+    assert(html.contains("data-field=\"allowlist_scope\""))
+    assert(html.contains("\"fingerprint_complete\":true"))
+    assert(html.contains("\"has_multiple_file_evidence\":true"))
+    assert(html.contains("exact: 이 finding만 제외"))
+    assert(html.contains("fingerprint가 모두 다시 일치"))
+    assert(html.contains("pattern: 반복 오탐을 넓게 제외"))
+    assert(html.contains("여러 파일 증거가 있어 file_identifier_pattern 필수"))
+    assert(html.contains("*는 glob 와일드카드"))
+    assert(html.contains("pii_type=* 금지"))
+  }
 }

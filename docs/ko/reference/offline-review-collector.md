@@ -126,6 +126,11 @@ HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을
 - `false_positive`: 실제 개인정보가 아니므로 다음 스캔에서 suppress합니다.
 - `true_positive`: 실제 개인정보이므로 조치 계획을 등록합니다.
 
+HTML 표는 판정과 allowlist scope를 별도 컬럼으로 보여줍니다.
+- `Decision`: 오탐/정탐 판정만 선택합니다.
+- `Allowlist Scope`: 오탐일 때만 `exact` 또는 `pattern`을 선택합니다.
+- `Reason / Plan`: 오탐 사유, pattern 필드, 정탐 조치 계획을 입력합니다.
+
 오탐 입력 필수값:
 - 오탐 사유
 - allowlist scope: `exact` 또는 `pattern`
@@ -286,6 +291,8 @@ reject 사유 예시:
 ### Exact allowlist
 `allowlist_scope=exact`는 기존 allowlist 의미를 유지합니다.
 
+HTML에서는 일반 담당자 기본 선택지로 안내합니다. 단, finding의 fingerprint metadata가 완전하지 않으면 collector가 exact allowlist 응답을 거부하므로 HTML 힌트에 그 사실을 표시합니다.
+
 매칭 기준:
 - `dataset_path`
 - `file_identifier`
@@ -299,6 +306,8 @@ reject 사유 예시:
 
 ### Pattern allowlist
 `allowlist_scope=pattern`은 반복 오탐을 줄이기 위한 확장입니다.
+
+HTML에서는 반복 오탐용 확장 선택지로 안내합니다. pattern은 fingerprint 검증을 하지 못하므로 `false_positive_reason`, `expires_at`, 하나 이상의 pattern 필드를 요구합니다. 여러 파일 증거가 있는 finding은 collector가 `file_identifier_pattern`도 요구하므로 HTML 힌트에 별도로 표시합니다.
 
 예시:
 
