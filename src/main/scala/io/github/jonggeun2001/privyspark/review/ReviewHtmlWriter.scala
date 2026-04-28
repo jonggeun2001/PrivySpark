@@ -25,13 +25,23 @@ private[privyspark] object ReviewHtmlWriter {
     scanPath: String,
     results: Seq[ScanResult],
     sampleMode: String
+  ): Unit =
+    write(conf, outputRoot, scanPath, results, sampleMode, None)
+
+  def write(
+    conf: Configuration,
+    outputRoot: String,
+    scanPath: String,
+    results: Seq[ScanResult],
+    sampleMode: String,
+    reviewHtmlPath: Option[String]
   ): Unit = {
     val normalizedSampleMode = normalizeSampleMode(sampleMode).getOrElse(DefaultSampleMode)
     val findings = ReviewFindingBuilder.fromScanResultsIterator(
       results.iterator,
       ReviewFindingBuilder.DefaultMaxEvidenceSamples
     )
-    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode)
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlPath)
   }
 
   def write(
@@ -40,13 +50,23 @@ private[privyspark] object ReviewHtmlWriter {
     scanPath: String,
     resultDf: DataFrame,
     sampleMode: String
+  ): Unit =
+    write(conf, outputRoot, scanPath, resultDf, sampleMode, None)
+
+  def write(
+    conf: Configuration,
+    outputRoot: String,
+    scanPath: String,
+    resultDf: DataFrame,
+    sampleMode: String,
+    reviewHtmlPath: Option[String]
   ): Unit = {
     val normalizedSampleMode = normalizeSampleMode(sampleMode).getOrElse(DefaultSampleMode)
     val findings = ReviewFindingBuilder.fromScanResultsIterator(
       ScanResultsReader.iterateScanResults(resultDf, ordered = true),
       ReviewFindingBuilder.DefaultMaxEvidenceSamples
     )
-    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode)
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlPath)
   }
 
   private def writeFindings(
@@ -54,14 +74,14 @@ private[privyspark] object ReviewHtmlWriter {
     outputRoot: String,
     scanPath: String,
     findings: Seq[ReviewFinding],
-    sampleMode: String
+    sampleMode: String,
+    reviewHtmlPath: Option[String]
   ): Unit = {
     val scanResultsFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
     val html = renderHtml(scanPath, scanResultsFingerprint, findings, sampleMode)
-    val reviewDir = new Path(new Path(outputRoot), "review")
-    val htmlPath = new Path(reviewDir, "review.html")
+    val htmlPath = resolveHtmlPath(outputRoot, reviewHtmlPath)
     val fs = htmlPath.getFileSystem(conf)
-    fs.mkdirs(reviewDir)
+    Option(htmlPath.getParent).foreach(fs.mkdirs)
     val writer = new BufferedWriter(new OutputStreamWriter(fs.create(htmlPath, true), StandardCharsets.UTF_8))
     try {
       writer.write(html)
@@ -69,6 +89,13 @@ private[privyspark] object ReviewHtmlWriter {
       writer.close()
     }
   }
+
+  private def resolveHtmlPath(outputRoot: String, reviewHtmlPath: Option[String]): Path =
+    reviewHtmlPath
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map(new Path(_))
+      .getOrElse(new Path(new Path(outputRoot), "review/review.html"))
 
   private def renderHtml(
     scanPath: String,
