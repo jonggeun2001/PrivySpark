@@ -89,6 +89,7 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - `--excel-byte-array-max-override`를 지정하면 Apache POI `IOUtils.setByteArrayMaxOverride` 값을 적용합니다. 이 설정은 POI 기반 Excel report writing 등 POI 사용 경로를 위한 호환 설정입니다.
 - CLI 값을 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`을 적용합니다.
 - executor-side `xlsx` 스트리머는 한 workbook sheet를 하나의 Spark task에서 읽습니다. 단일 시트 자체를 row 단위로 split해서 여러 executor가 나눠 읽게 만들지는 않으며, cache/persist도 추가하지 않아 여러 action에서는 workbook zip을 다시 읽습니다.
+- workbook ZIP 엔트리 순회는 Spark/Hadoop 런타임에 번들된 구버전 `commons-compress`와 호환되는 API를 사용합니다. 따라서 `xlsx` scan의 `NoSuchMethodError` 회피를 위해 cluster 공통 classpath를 별도로 덮어쓸 필요가 없습니다.
 
 ## 샘플링
 - `--sample-ratio`는 비결정적 row sampling입니다.

@@ -28,6 +28,7 @@ The text/CSV fallback exists because extension-based filtering alone would rejec
 - Empty visible sheets are skipped without results or errors after header-based schema detection. Hidden and very hidden sheets are excluded.
 - Sheet identifiers use the `<workbook>#<sheet>` format.
 - Actual scans run through an executor-side StAX sheet row streamer. Shared strings are loaded for the lifetime of the task on the executor, while sheet XML rows are streamed.
+- Workbook ZIP entry iteration uses an API compatible with older `commons-compress` versions already provided by Spark/Hadoop runtimes, so `xlsx` scans do not require overriding the cluster `commons-compress` classpath.
 - `--excel-max-rows-in-memory` is accepted only for compatibility with the previous spark-excel scan reader. Explicitly setting it logs `excel_max_rows_in_memory_unused` and does not affect scan reads.
 - `--excel-byte-array-max-override` or `spark.privyspark.excel.byteArrayMaxOverride` adjusts the Apache POI byte array allocation limit for POI-backed paths such as Excel report writing. When both are omitted, PrivySpark applies the default value `300000000`.
 
