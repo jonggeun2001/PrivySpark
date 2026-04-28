@@ -6,10 +6,12 @@
 - Click a table header to sort findings; click the same header again to reverse the order.
 - Select decisions for one or more findings.
 - Use the separate Allowlist Scope column only for false positives: `exact` for a single fingerprint-checked finding, `pattern` for repeated false positives with a reason, expiry date, and pattern fields.
+- False-positive fields and true-positive action-plan fields are shown based on the selected decision.
+- Use the bulk delete-plan button to fill `action_plan=삭제 처리` and a shared due date for findings already marked `true_positive`.
 - Click the download button to create a `response-YYYYMMDD-HHMMSS.json` file.
 - The sample data is synthetic and masked; production `review.html` files are generated under `<scan-output>/review/review.html`.
 
-`review-response-viewer.html` is a local operator page for inspecting a returned `privyspark-response.json`.
+`review-response-viewer.html` is a local operator page for inspecting a returned `response-YYYYMMDD-HHMMSS.json`.
 
 - Open it directly in a browser.
 - Choose the response JSON file or paste its contents.

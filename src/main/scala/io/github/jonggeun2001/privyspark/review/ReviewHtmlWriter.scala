@@ -126,12 +126,19 @@ private[privyspark] object ReviewHtmlWriter {
     .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
     .hint { color: #566573; font-size: 12px; line-height: 1.45; margin: 6px 0 10px; white-space: pre-wrap; }
     .scope-cell { min-width: 240px; }
+    .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
+    .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
+    .decision-fields[hidden], [data-decision-section][hidden] { display: none; }
   </style>
 </head>
 <body>
   <h1>PrivySpark Review</h1>
   <p>Scan path: <code id="scanPath"></code></p>
   <p><label>응답자 <input id="responder"></label></p>
+  <p class="bulk-actions">
+    <label>삭제 예정일 <input id="bulkDeleteDueDate" type="date"></label>
+    <button type="button" id="applyBulkDeletePlan">일괄 삭제 계획 등록</button>
+  </p>
   <table id="findingsTable">
     <thead>
       <tr>
@@ -158,6 +165,7 @@ private[privyspark] object ReviewHtmlWriter {
       '"': '&quot;',
       "'": '&#39;'
     }[ch]));
+    const BulkDeleteActionPlan = '삭제 처리';
     const scopeGuidance = finding => {
       const exactHint = finding.fingerprint_complete
         ? 'exact: 이 finding만 제외합니다. 다음 스캔에서 dataset_path, file_identifier, column_name, pii_type, file_size, mtime, checksum fingerprint가 모두 다시 일치할 때만 suppress됩니다. 일반적으로 기본 선택입니다.'
@@ -272,6 +280,44 @@ private[privyspark] object ReviewHtmlWriter {
         }
       });
     }
+    function applyDecisionVisibility(row) {
+      const decision = row.querySelector('[data-field="decision"]').value;
+      row.querySelectorAll('[data-decision-section]').forEach(section => {
+        section.hidden = section.getAttribute('data-decision-section') !== decision;
+      });
+    }
+    function applyBulkDeletePlan() {
+      const values = collectFormValues();
+      const dueDate = document.getElementById('bulkDeleteDueDate').value;
+      Object.keys(values).forEach(index => {
+        if (values[index].decision === 'true_positive') {
+          values[index].action_plan = BulkDeleteActionPlan;
+          if (dueDate) {
+            values[index].action_due_date = dueDate;
+          }
+        }
+      });
+      renderFindings(values);
+    }
+    function sanitizeResponse(response) {
+      if (response.decision === 'false_positive') {
+        return Object.assign({}, response, {
+          action_plan: null,
+          action_due_date: null
+        });
+      }
+      if (response.decision === 'true_positive') {
+        return Object.assign({}, response, {
+          false_positive_reason: null,
+          allowlist_scope: null,
+          file_identifier_pattern: null,
+          column_name_pattern: null,
+          pii_type_pattern: null,
+          expires_at: null
+        });
+      }
+      return response;
+    }
     function updateSortHeaders() {
       document.querySelectorAll('#findingsTable th[data-sort-key]').forEach(th => {
         const isActive = th.getAttribute('data-sort-key') === sortState.key;
@@ -305,38 +351,45 @@ private[privyspark] object ReviewHtmlWriter {
           <div class="hint">오탐은 다음 스캔 suppress 대상입니다. 정탐은 suppress하지 않고 조치 계획을 남깁니다.</div>
         </td>
         <td class="scope-cell">
-          <label class="field"><span>오탐 scope</span>
-            <select data-index="$${index}" data-field="allowlist_scope">
-              <option value="exact">exact</option>
-              <option value="pattern">pattern</option>
-            </select>
-          </label>
-          <div class="hint">$${escapeHtml(scopeGuidance(finding))}</div>
+          <div data-decision-section="false_positive">
+            <label class="field"><span>오탐 scope</span>
+              <select data-index="$${index}" data-field="allowlist_scope">
+                <option value="exact">exact</option>
+                <option value="pattern">pattern</option>
+              </select>
+            </label>
+            <div class="hint">$${escapeHtml(scopeGuidance(finding))}</div>
+          </div>
         </td>
         <td>
-          <label class="field"><span>오탐 사유</span>
-            <textarea data-index="$${index}" data-field="false_positive_reason" placeholder="오탐 판단 근거. exact와 pattern 모두 필수"></textarea>
-          </label>
-          <label class="field"><span>file_identifier_pattern</span>
-            <input data-index="$${index}" data-field="file_identifier_pattern" placeholder="예: project_db/customer/*">
-          </label>
-          <label class="field"><span>column_name_pattern</span>
-            <input data-index="$${index}" data-field="column_name_pattern" placeholder="예: temp_*">
-          </label>
-          <label class="field"><span>pii_type_pattern</span>
-            <input data-index="$${index}" data-field="pii_type_pattern" placeholder="예: driver_license_number (* 금지)">
-          </label>
-          <label class="field"><span>pattern expires_at</span>
-            <input data-index="$${index}" data-field="expires_at" placeholder="YYYY-MM-DD">
-          </label>
-          <label class="field"><span>정탐 조치 계획</span>
-            <textarea data-index="$${index}" data-field="action_plan" placeholder="정탐이면 필수. 예: 컬럼 마스킹, 접근권한 회수"></textarea>
-          </label>
-          <label class="field"><span>조치 예정일</span>
-            <input data-index="$${index}" data-field="action_due_date" placeholder="YYYY-MM-DD">
-          </label>
+          <div class="decision-fields" data-decision-section="false_positive">
+            <label class="field"><span>오탐 사유</span>
+              <textarea data-index="$${index}" data-field="false_positive_reason" placeholder="오탐 판단 근거. exact와 pattern 모두 필수"></textarea>
+            </label>
+            <label class="field"><span>file_identifier_pattern</span>
+              <input data-index="$${index}" data-field="file_identifier_pattern" placeholder="예: project_db/customer/*">
+            </label>
+            <label class="field"><span>column_name_pattern</span>
+              <input data-index="$${index}" data-field="column_name_pattern" placeholder="예: temp_*">
+            </label>
+            <label class="field"><span>pii_type_pattern</span>
+              <input data-index="$${index}" data-field="pii_type_pattern" placeholder="예: driver_license_number (* 금지)">
+            </label>
+            <label class="field"><span>pattern expires_at</span>
+              <input data-index="$${index}" data-field="expires_at" placeholder="YYYY-MM-DD">
+            </label>
+          </div>
+          <div class="decision-fields" data-decision-section="true_positive">
+            <label class="field"><span>정탐 조치 계획</span>
+              <textarea data-index="$${index}" data-field="action_plan" placeholder="정탐이면 필수. 예: 컬럼 마스킹, 삭제 처리"></textarea>
+            </label>
+            <label class="field"><span>조치 예정일</span>
+              <input data-index="$${index}" data-field="action_due_date" placeholder="YYYY-MM-DD">
+            </label>
+          </div>
         </td>`;
         setFieldValues(row, index, savedValues);
+        applyDecisionVisibility(row);
         tbody.appendChild(row);
       });
       updateSortHeaders();
@@ -352,6 +405,12 @@ private[privyspark] object ReviewHtmlWriter {
         renderFindings(savedValues);
       });
     });
+    tbody.addEventListener('change', event => {
+      if (event.target.matches('[data-field="decision"]')) {
+        applyDecisionVisibility(event.target.closest('tr'));
+      }
+    });
+    document.getElementById('applyBulkDeletePlan').addEventListener('click', applyBulkDeletePlan);
     renderFindings();
     document.getElementById('downloadResponse').addEventListener('click', () => {
       const values = collectFormValues();
@@ -364,7 +423,7 @@ private[privyspark] object ReviewHtmlWriter {
         file_identifier_pattern: null,
         column_name_pattern: null,
         pii_type_pattern: null
-      }, values[index] || {})).filter(response => response.decision);
+      }, values[index] || {})).map(sanitizeResponse).filter(response => response.decision);
       const envelope = {
         schema_version: 1,
         scan_path: REVIEW_DATA.scan_path,
