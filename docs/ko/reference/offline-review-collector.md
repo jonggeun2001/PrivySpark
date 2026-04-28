@@ -116,6 +116,8 @@ collector는 response JSON의 `scan_results_fingerprint`가 현재 `--scan-resul
 ## Review HTML
 `review.html`은 self-contained HTML 파일입니다. 서버 호출 없이 로컬 브라우저에서 열 수 있어야 합니다.
 
+GitHub Release에는 `privyspark-<tag>-review-response-example.html` 예시 파일을 함께 제공합니다. 이 파일은 더미 finding으로 response JSON 다운로드 흐름을 확인하기 위한 샘플이며, 실제 운영 검토에는 각 스캔이 생성한 `<scan-output>/review/review.html`을 사용합니다.
+
 HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 각 finding에 대해 하나의 결정을 입력합니다.
 
 결정 값은 다음 중 하나입니다.
