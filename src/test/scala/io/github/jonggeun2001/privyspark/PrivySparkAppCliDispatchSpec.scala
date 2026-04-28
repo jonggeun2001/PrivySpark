@@ -86,4 +86,28 @@ class PrivySparkAppCliDispatchSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(executedReview.get().isEmpty)
     assert(executedCollect.get().exists(_.reviewStateRoot == "/data/review-state"))
   }
+
+  test("runMain rejects relative review html path before creating Spark session") {
+    val exitCode = new AtomicReference[Option[Int]](None)
+    val executedScan = new AtomicReference[Option[CliConfig]](None)
+
+    PrivySparkApp.runMain(
+      Array(
+        "--path",
+        "/data/input",
+        "--output",
+        "/data/output",
+        "--review-state-root",
+        "/data/review-state",
+        "--review-html-path",
+        "review/review.html"
+      ),
+      createSparkSession = () => fail("Spark session should not be created for invalid path arguments"),
+      exitWith = code => exitCode.set(Some(code)),
+      runScanCommand = (_, config) => executedScan.set(Some(config))
+    )
+
+    assert(exitCode.get().contains(2))
+    assert(executedScan.get().isEmpty)
+  }
 }

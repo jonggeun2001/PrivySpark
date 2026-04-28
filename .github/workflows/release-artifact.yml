@@ -70,12 +70,20 @@ jobs:
           fi
           asset_review_response_example="build/distributions/privyspark-${{ steps.meta.outputs.tag }}-review-response-example.html"
           cp "$review_response_example" "$asset_review_response_example"
+          review_response_viewer="samples/offline-review/review-response-viewer.html"
+          if [ ! -f "$review_response_viewer" ]; then
+            echo "Expected offline review response viewer at $review_response_viewer" >&2
+            exit 1
+          fi
+          asset_review_response_viewer="build/distributions/privyspark-${{ steps.meta.outputs.tag }}-review-response-viewer.html"
+          cp "$review_response_viewer" "$asset_review_response_viewer"
 
           echo "asset_jar=$asset_jar" >> "$GITHUB_OUTPUT"
           echo "asset_sha=${asset_jar}.sha256" >> "$GITHUB_OUTPUT"
           echo "asset_rules=$asset_rules" >> "$GITHUB_OUTPUT"
           echo "asset_sample_zip=$asset_sample_zip" >> "$GITHUB_OUTPUT"
           echo "asset_review_response_example=$asset_review_response_example" >> "$GITHUB_OUTPUT"
+          echo "asset_review_response_viewer=$asset_review_response_viewer" >> "$GITHUB_OUTPUT"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -87,6 +95,7 @@ jobs:
             ${{ steps.assets.outputs.asset_rules }}
             ${{ steps.assets.outputs.asset_sample_zip }}
             ${{ steps.assets.outputs.asset_review_response_example }}
+            ${{ steps.assets.outputs.asset_review_response_viewer }}
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
@@ -100,4 +109,5 @@ jobs:
             ${{ steps.assets.outputs.asset_rules }}
             ${{ steps.assets.outputs.asset_sample_zip }}
             ${{ steps.assets.outputs.asset_review_response_example }}
+            ${{ steps.assets.outputs.asset_review_response_viewer }}
           fail_on_unmatched_files: true

@@ -23,7 +23,8 @@
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
 - `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
-- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. `<review-state-root>/current/allowlist.jsonl`을 적용하고 `<output>/review/review.html`을 생성
+- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. `<review-state-root>/current/allowlist.jsonl`을 적용하고 기본 `<output>/review/review.html`을 생성
+- `--review-html-path <ABS_PATH_OR_URI>`: 오프라인 리뷰 HTML 파일 출력 경로. 미지정 시 `<output>/review/review.html`
 - `--review-sample-mode <raw|masked|none>`: `review.html` 검출 샘플 표시 방식, 기본 `masked`
 - `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
 - `--suppression-file <PATH>`: 줄 단위 suppression 파일 경로, `#` 주석과 빈 줄 무시
@@ -129,5 +130,6 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 ## 릴리즈
 - GitHub Release는 `v*` 또는 bare semver 태그 푸시로 트리거됩니다.
 - Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행합니다.
-- 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`입니다.
+- 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html`입니다.
 - `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
+- `privyspark-<tag>-review-response-viewer.html`은 회수한 `privyspark-response.json`을 운영자가 로컬에서 열어 envelope 메타데이터, 검증 메시지, finding별 판정을 확인하는 self-contained 파일입니다.

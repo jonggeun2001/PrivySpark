@@ -17,7 +17,7 @@
 - 정탐은 suppress하지 않습니다. 정탐은 조치 계획 추적 대상으로만 관리합니다.
 
 ## 출력 경로 원칙
-스캔 output은 기존 리포트와 검토용 HTML만 포함합니다.
+스캔 output은 기본적으로 기존 리포트와 검토용 HTML만 포함합니다.
 
 ```text
 <scan-output>/
@@ -35,6 +35,8 @@
 ```
 
 `review.html`은 담당자 입력 도구입니다. response JSON과 collector state는 이 경로에 저장하지 않습니다.
+
+scan output과 HTML 전달 경로를 분리해야 하는 운영 환경에서는 scan 실행 시 `--review-html-path <ABS_PATH_OR_URI>`를 지정합니다. 이때 HTML은 지정한 파일 경로에 생성되고 기본 `<scan-output>/review/review.html`은 만들지 않습니다.
 
 누적 response와 state는 별도 root에서 관리합니다.
 
@@ -67,7 +69,7 @@ privyspark scan \
   --review-state-root <review-state-root>
 ```
 
-`--review-state-root`를 받은 scan은 내부적으로 `<review-state-root>/current/allowlist.jsonl`을 적용하고, `<scan-output>/review/review.html`을 추가 생성합니다. `action_plan.jsonl`은 suppress에 쓰지 않고 collector의 `finding_status.jsonl` 계산에 사용합니다.
+`--review-state-root`를 받은 scan은 내부적으로 `<review-state-root>/current/allowlist.jsonl`을 적용하고, 기본 `<scan-output>/review/review.html`을 추가 생성합니다. `--review-html-path`가 있으면 해당 파일 경로에 HTML을 생성합니다. `action_plan.jsonl`은 suppress에 쓰지 않고 collector의 `finding_status.jsonl` 계산에 사용합니다.
 
 ## 식별자 정책
 사람이 관리하는 별도 campaign/task ID를 만들지 않습니다.
@@ -118,11 +120,18 @@ collector는 response JSON의 `scan_results_fingerprint`가 현재 `--scan-resul
 
 GitHub Release에는 `privyspark-<tag>-review-response-example.html` 예시 파일을 함께 제공합니다. 이 파일은 더미 finding으로 response JSON 다운로드 흐름을 확인하기 위한 샘플이며, 실제 운영 검토에는 각 스캔이 생성한 `<scan-output>/review/review.html`을 사용합니다.
 
-HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 각 finding에 대해 하나의 결정을 입력합니다.
+GitHub Release에는 `privyspark-<tag>-review-response-viewer.html`도 함께 제공합니다. 운영자는 회수한 `privyspark-response.json`을 이 파일로 로컬에서 열어 envelope 메타데이터, schema/fingerprint 유무, finding별 판정과 allowlist/action plan 입력값을 확인할 수 있습니다. 이 파일은 JSON 확인용이며 collector state를 갱신하지 않습니다.
+
+HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 각 finding에 대해 하나의 결정을 입력합니다.
 
 결정 값은 다음 중 하나입니다.
 - `false_positive`: 실제 개인정보가 아니므로 다음 스캔에서 suppress합니다.
 - `true_positive`: 실제 개인정보이므로 조치 계획을 등록합니다.
+
+HTML 표는 판정과 allowlist scope를 별도 컬럼으로 보여줍니다.
+- `Decision`: 오탐/정탐 판정만 선택합니다.
+- `Allowlist Scope`: 오탐일 때만 `exact` 또는 `pattern`을 선택합니다.
+- `Reason / Plan`: 오탐 사유, pattern 필드, 정탐 조치 계획을 입력합니다.
 
 오탐 입력 필수값:
 - 오탐 사유
@@ -166,10 +175,11 @@ finding 요약에는 다음 필드를 표시합니다.
 - 누적 state에는 샘플 원문을 저장하지 않습니다.
 - 필요한 경우 `finding_key`로 현재 또는 과거 `scan_results`에서 샘플을 다시 조회합니다.
 
-샘플 표시 모드는 옵션화합니다.
+오프라인 리뷰 HTML 관련 scan 옵션은 다음과 같습니다.
 
 ```text
 --review-sample-mode raw|masked|none
+--review-html-path <ABS_PATH_OR_URI>
 ```
 
 권장 기본값은 `masked`입니다.
@@ -283,6 +293,8 @@ reject 사유 예시:
 ### Exact allowlist
 `allowlist_scope=exact`는 기존 allowlist 의미를 유지합니다.
 
+HTML에서는 일반 담당자 기본 선택지로 안내합니다. 단, finding의 fingerprint metadata가 완전하지 않으면 collector가 exact allowlist 응답을 거부하므로 HTML 힌트에 그 사실을 표시합니다.
+
 매칭 기준:
 - `dataset_path`
 - `file_identifier`
@@ -296,6 +308,8 @@ reject 사유 예시:
 
 ### Pattern allowlist
 `allowlist_scope=pattern`은 반복 오탐을 줄이기 위한 확장입니다.
+
+HTML에서는 반복 오탐용 확장 선택지로 안내합니다. pattern은 fingerprint 검증을 하지 못하므로 `false_positive_reason`, `expires_at`, 하나 이상의 pattern 필드를 요구합니다. 여러 파일 증거가 있는 finding은 collector가 `file_identifier_pattern`도 요구하므로 HTML 힌트에 별도로 표시합니다.
 
 예시:
 
@@ -379,7 +393,7 @@ scan은 `<review-state-root>/current/allowlist.jsonl`을 읽어 오탐을 suppre
      --review-state-root <review-state-root>
    ```
 
-2. 생성된 `<scan-output>/review/review.html`을 담당자에게 전달합니다.
+2. 생성된 `<scan-output>/review/review.html` 또는 `--review-html-path`로 지정한 HTML 파일을 담당자에게 전달합니다.
 3. 담당자는 HTML에서 검출 샘플을 확인하고 response JSON을 생성합니다.
 4. 사내 시스템은 response JSON을 `<review-state-root>/inbox`에 업로드합니다.
 5. collector를 실행합니다.

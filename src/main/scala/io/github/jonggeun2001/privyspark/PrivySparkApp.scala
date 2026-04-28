@@ -75,6 +75,11 @@ object PrivySparkApp {
           exitWith(2)
           return
         }
+        if (config.reviewHtmlPath.exists(path => !PathValidator.isAbsolute(path))) {
+          emitAbsolutePathError("--review-html-path", config.reviewHtmlPath.get)
+          exitWith(2)
+          return
+        }
         if (config.hiveMetastorePasswordFile.exists(path => !PathValidator.isAbsolute(path))) {
           emitAbsolutePathError("--hive-metastore-password-file", config.hiveMetastorePasswordFile.get)
           exitWith(2)
@@ -201,6 +206,7 @@ object PrivySparkApp {
       "ignore_file" -> config.ignoreFile.getOrElse("none"),
       "allowlist" -> config.allowlist.getOrElse("none"),
       "review_state_root" -> config.reviewStateRoot.getOrElse("none"),
+      "review_html_path" -> config.reviewHtmlPath.getOrElse("default"),
       "review_sample_mode" -> config.reviewSampleMode,
       "allowlist_entries" -> allowlistMatcher.size,
       "suppressions" -> config.suppressions.size,
@@ -322,7 +328,8 @@ object PrivySparkApp {
               config.outputPath,
               config.inputPath,
               resultDf,
-              config.reviewSampleMode
+              config.reviewSampleMode,
+              config.reviewHtmlPath
             )
           }
         }

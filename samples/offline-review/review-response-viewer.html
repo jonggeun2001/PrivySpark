@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>PrivySpark Offline Review Response Viewer</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      --border: #d5d8dc;
+      --muted: #566573;
+      --surface: #f8f9f9;
+      --good: #1e8449;
+      --warn: #b9770e;
+      --bad: #b03a2e;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 24px;
+      color: #17202a;
+      background: #ffffff;
+    }
+    header {
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 0 0 8px;
+    }
+    h2 {
+      font-size: 18px;
+      margin: 24px 0 10px;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    input[type="file"] {
+      display: block;
+      margin: 8px 0 12px;
+    }
+    textarea {
+      box-sizing: border-box;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      min-height: 160px;
+      width: 100%;
+    }
+    button {
+      background: #17202a;
+      border: 1px solid #17202a;
+      border-radius: 6px;
+      color: #ffffff;
+      cursor: pointer;
+      padding: 8px 12px;
+    }
+    button.secondary {
+      background: #ffffff;
+      color: #17202a;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f4f6f7;
+    }
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 16px;
+      padding: 14px;
+    }
+    .summary {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      margin: 14px 0;
+    }
+    .metric {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .metric strong {
+      display: block;
+      font-size: 22px;
+      margin-top: 4px;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    .status {
+      border-radius: 6px;
+      display: inline-block;
+      font-weight: 600;
+      padding: 2px 8px;
+    }
+    .status.ok {
+      background: #eafaf1;
+      color: var(--good);
+    }
+    .status.warn {
+      background: #fef5e7;
+      color: var(--warn);
+    }
+    .status.error {
+      background: #fdedec;
+      color: var(--bad);
+    }
+    .messages {
+      margin: 10px 0 0;
+      padding-left: 20px;
+    }
+    .messages li {
+      margin: 4px 0;
+    }
+    .sample {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PrivySpark 오프라인 응답 JSON 확인</h1>
+    <div class="muted">`review.html`에서 다운로드한 `privyspark-response.json`을 로컬 브라우저에서 확인합니다.</div>
+  </header>
+
+  <section class="panel">
+    <label for="responseFile"><strong>응답 파일</strong></label>
+    <input id="responseFile" type="file" accept="application/json,.json">
+    <div>
+      <button type="button" id="loadExample" class="secondary">예시 JSON 불러오기</button>
+      <button type="button" id="clearViewer" class="secondary">초기화</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <label for="rawJson"><strong>JSON 원문</strong></label>
+    <textarea id="rawJson" spellcheck="false" placeholder="privyspark-response.json 내용을 붙여넣어도 확인할 수 있습니다."></textarea>
+    <p><button type="button" id="parseText">원문 확인</button></p>
+  </section>
+
+  <section id="statusPanel" class="panel hidden" aria-live="polite">
+    <strong id="statusBadge" class="status warn">대기</strong>
+    <ul id="messages" class="messages"></ul>
+  </section>
+
+  <section id="summaryPanel" class="hidden">
+    <h2>요약</h2>
+    <div class="summary">
+      <div class="metric">전체 응답<strong id="metricTotal">0</strong></div>
+      <div class="metric">오탐<strong id="metricFalsePositive">0</strong></div>
+      <div class="metric">정탐<strong id="metricTruePositive">0</strong></div>
+      <div class="metric">Pattern Allowlist<strong id="metricPattern">0</strong></div>
+    </div>
+    <table>
+      <tbody id="metaTable"></tbody>
+    </table>
+  </section>
+
+  <section id="responsesPanel" class="hidden">
+    <h2>응답 목록</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>판정</th>
+          <th>대상</th>
+          <th>근거 식별자</th>
+          <th>오탐 설정</th>
+          <th>조치 계획</th>
+        </tr>
+      </thead>
+      <tbody id="responsesBody"></tbody>
+    </table>
+  </section>
+
+  <script>
+    const exampleResponse = {
+      "schema_version": 1,
+      "scan_path": "hdfs:///warehouse/example_db.db",
+      "scan_results_fingerprint": "sha256:example-scan-results-fingerprint",
+      "responder": "security-reviewer",
+      "responded_at": "2026-04-28T00:00:00.000Z",
+      "responses": [
+        {
+          "finding_key": "sha256:example-driver-license-finding-key",
+          "finding_hash": "sha256:example-driver-license-finding-hash",
+          "file_identifier": "example_db/customers/part-000.parquet",
+          "column_name": "customer_no",
+          "pii_type": "driver_license_number",
+          "decision": "false_positive",
+          "allowlist_scope": "pattern",
+          "false_positive_reason": "Synthetic customer number pattern",
+          "file_identifier_pattern": "example_db/customers/*",
+          "column_name_pattern": "customer_*",
+          "pii_type_pattern": null,
+          "expires_at": "2026-12-31",
+          "action_plan": "",
+          "action_due_date": ""
+        },
+        {
+          "finding_key": "sha256:example-email-finding-key",
+          "finding_hash": "sha256:example-email-finding-hash",
+          "file_identifier": "example_db/members/part-001.parquet",
+          "column_name": "email",
+          "pii_type": "email",
+          "decision": "true_positive",
+          "allowlist_scope": "exact",
+          "false_positive_reason": "",
+          "file_identifier_pattern": null,
+          "column_name_pattern": null,
+          "pii_type_pattern": null,
+          "expires_at": "",
+          "action_plan": "Mask email before downstream export",
+          "action_due_date": "2026-05-15"
+        }
+      ]
+    };
+
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
+
+    const field = (value, empty = '-') => {
+      const normalized = value === null || value === undefined ? '' : String(value);
+      return normalized.trim() ? escapeHtml(normalized) : empty;
+    };
+
+    const setText = (id, value) => {
+      document.getElementById(id).textContent = value;
+    };
+
+    const clearRenderedState = () => {
+      document.getElementById('summaryPanel').classList.add('hidden');
+      document.getElementById('responsesPanel').classList.add('hidden');
+      document.getElementById('responsesBody').innerHTML = '';
+      document.getElementById('metaTable').innerHTML = '';
+      setText('metricTotal', '0');
+      setText('metricFalsePositive', '0');
+      setText('metricTruePositive', '0');
+      setText('metricPattern', '0');
+    };
+
+    const setStatus = (state, messages) => {
+      const statusPanel = document.getElementById('statusPanel');
+      const statusBadge = document.getElementById('statusBadge');
+      const messageList = document.getElementById('messages');
+      statusPanel.classList.remove('hidden');
+      statusBadge.className = `status ${state}`;
+      statusBadge.textContent = state === 'ok' ? '정상' : state === 'error' ? '오류' : '확인 필요';
+      messageList.innerHTML = messages.map(message => `<li>${escapeHtml(message)}</li>`).join('');
+    };
+
+    const textValue = value => typeof value === 'string' ? value.trim() : '';
+
+    const isIsoInstant = value => {
+      const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/);
+      if (!match || Number.isNaN(Date.parse(value))) return false;
+      const parsed = new Date(value);
+      return parsed.getUTCFullYear() === Number(match[1])
+        && parsed.getUTCMonth() + 1 === Number(match[2])
+        && parsed.getUTCDate() === Number(match[3])
+        && parsed.getUTCHours() === Number(match[4])
+        && parsed.getUTCMinutes() === Number(match[5])
+        && parsed.getUTCSeconds() === Number(match[6]);
+    };
+
+    const isDateOnly = value => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const parsed = new Date(`${value}T00:00:00Z`);
+      return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+    };
+
+    const validateEnvelope = envelope => {
+      const errors = [];
+      const warnings = [];
+      if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+        return { errors: ['JSON 최상위 값은 객체여야 합니다.'], warnings };
+      }
+      if (envelope.schema_version !== 1) {
+        errors.push('schema_version 값은 1이어야 합니다.');
+      }
+      [
+        ['scan_path', 'scan_path 값이 필요합니다.'],
+        ['scan_results_fingerprint', 'scan_results_fingerprint 값이 필요합니다.'],
+        ['responder', 'responder 값이 필요합니다.']
+      ].forEach(([key, message]) => {
+        if (!textValue(envelope[key])) errors.push(message);
+      });
+      const respondedAt = textValue(envelope.responded_at);
+      if (!respondedAt) {
+        errors.push('responded_at 값이 필요합니다.');
+      } else if (!isIsoInstant(respondedAt)) {
+        errors.push('responded_at 값은 ISO-8601 instant여야 합니다.');
+      }
+      if (!Array.isArray(envelope.responses)) {
+        errors.push('responses 배열이 필요합니다.');
+      } else if (envelope.responses.length === 0) {
+        errors.push('responses 배열은 비어 있을 수 없습니다.');
+      } else {
+        envelope.responses.forEach((response, index) => {
+          if (!response || typeof response !== 'object' || Array.isArray(response)) {
+            errors.push(`responses[${index}] response는 객체여야 합니다.`);
+            return;
+          }
+          ['finding_key', 'finding_hash', 'file_identifier', 'column_name', 'pii_type', 'decision'].forEach(key => {
+            if (!textValue(response[key])) {
+              errors.push(`responses[${index}].${key} 값이 필요합니다.`);
+            }
+          });
+          const decision = textValue(response.decision);
+          const allowlistScope = textValue(response.allowlist_scope);
+          if (decision === 'false_positive') {
+            if (!textValue(response.false_positive_reason)) {
+              errors.push(`responses[${index}].false_positive_reason 값이 필요합니다.`);
+            }
+            if (allowlistScope === 'pattern') {
+              const expiresAt = textValue(response.expires_at);
+              if (!expiresAt) {
+                errors.push(`responses[${index}].expires_at 값이 필요합니다.`);
+              } else if (!isDateOnly(expiresAt)) {
+                errors.push(`responses[${index}].expires_at 값은 YYYY-MM-DD 형식이어야 합니다.`);
+              }
+              const filePattern = textValue(response.file_identifier_pattern);
+              const columnPattern = textValue(response.column_name_pattern);
+              const piiPattern = textValue(response.pii_type_pattern);
+              const hasFilePattern = Boolean(filePattern);
+              const hasColumnPattern = Boolean(columnPattern);
+              const hasPiiPattern = Boolean(piiPattern);
+              if (!hasFilePattern && !hasColumnPattern && !hasPiiPattern) {
+                errors.push(`responses[${index}] pattern allowlist에는 pattern 필드가 하나 이상 필요합니다.`);
+              } else if (!hasFilePattern) {
+                warnings.push(`responses[${index}] 다중 파일 finding은 collector에서 file_identifier_pattern을 요구할 수 있습니다.`);
+              }
+              if (piiPattern === '*') {
+                errors.push(`responses[${index}].pii_type_pattern=* 값은 허용되지 않습니다.`);
+              }
+            } else if (allowlistScope !== 'exact') {
+              errors.push(`responses[${index}] unsupported allowlist_scope: ${field(response.allowlist_scope)}`);
+            }
+          } else if (decision === 'true_positive') {
+            const actionPlan = textValue(response.action_plan);
+            const actionDueDate = textValue(response.action_due_date);
+            if (!actionPlan || !actionDueDate) {
+              errors.push(`responses[${index}].action_plan과 action_due_date 값이 필요합니다.`);
+            } else if (!isDateOnly(actionDueDate)) {
+              errors.push(`responses[${index}].action_due_date 값은 YYYY-MM-DD 형식이어야 합니다.`);
+            }
+          } else if (decision) {
+            errors.push(`responses[${index}].decision 값이 올바르지 않습니다.`);
+          }
+        });
+      }
+      return { errors, warnings };
+    };
+
+    const renderEnvelope = envelope => {
+      const responses = Array.isArray(envelope.responses) ? envelope.responses : [];
+      const falsePositiveCount = responses.filter(response => response.decision === 'false_positive').length;
+      const truePositiveCount = responses.filter(response => response.decision === 'true_positive').length;
+      const patternCount = responses.filter(response => response.allowlist_scope === 'pattern').length;
+
+      setText('metricTotal', responses.length);
+      setText('metricFalsePositive', falsePositiveCount);
+      setText('metricTruePositive', truePositiveCount);
+      setText('metricPattern', patternCount);
+
+      document.getElementById('metaTable').innerHTML = [
+        ['schema_version', envelope.schema_version],
+        ['scan_path', envelope.scan_path],
+        ['scan_results_fingerprint', envelope.scan_results_fingerprint],
+        ['responder', envelope.responder],
+        ['responded_at', envelope.responded_at]
+      ].map(([key, value]) => `<tr><th>${escapeHtml(key)}</th><td>${field(value)}</td></tr>`).join('');
+
+      document.getElementById('responsesBody').innerHTML = responses.map(response => `
+        <tr>
+          <td data-field="decision">${field(response.decision)}</td>
+          <td>
+            <div>${field(response.file_identifier)}</div>
+            <div class="muted">${field(response.column_name)} / ${field(response.pii_type)}</div>
+          </td>
+          <td class="sample">${field(response.finding_key)}
+${field(response.finding_hash)}</td>
+          <td>
+            <div>scope: ${field(response.allowlist_scope)}</div>
+            <div>reason: ${field(response.false_positive_reason)}</div>
+            <div>file pattern: ${field(response.file_identifier_pattern)}</div>
+            <div>column pattern: ${field(response.column_name_pattern)}</div>
+            <div>pii pattern: ${field(response.pii_type_pattern)}</div>
+            <div>expires: ${field(response.expires_at)}</div>
+          </td>
+          <td>
+            <div>${field(response.action_plan)}</div>
+            <div class="muted">due: ${field(response.action_due_date)}</div>
+          </td>
+        </tr>
+      `).join('');
+
+      document.getElementById('summaryPanel').classList.remove('hidden');
+      document.getElementById('responsesPanel').classList.remove('hidden');
+    };
+
+    const parseAndRender = text => {
+      let envelope;
+      try {
+        envelope = JSON.parse(text);
+      } catch (error) {
+        clearRenderedState();
+        setStatus('error', [`JSON.parse 실패: ${error.message}`]);
+        return;
+      }
+      const validation = validateEnvelope(envelope);
+      if (validation.errors.length > 0) {
+        setStatus('error', validation.errors.concat(validation.warnings));
+        clearRenderedState();
+        return;
+      }
+      renderEnvelope(envelope);
+      setStatus(validation.warnings.length > 0 ? 'warn' : 'ok', validation.warnings.length > 0 ? validation.warnings : ['응답 JSON 구조를 확인했습니다.']);
+    };
+
+    document.getElementById('responseFile').addEventListener('change', event => {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = String(reader.result || '');
+        document.getElementById('rawJson').value = text;
+        parseAndRender(text);
+      };
+      reader.onerror = () => {
+        clearRenderedState();
+        setStatus('error', ['파일을 읽지 못했습니다.']);
+      };
+      reader.readAsText(file);
+    });
+
+    document.getElementById('parseText').addEventListener('click', () => {
+      parseAndRender(document.getElementById('rawJson').value);
+    });
+
+    document.getElementById('loadExample').addEventListener('click', () => {
+      const text = JSON.stringify(exampleResponse, null, 2);
+      document.getElementById('rawJson').value = text;
+      parseAndRender(text);
+    });
+
+    document.getElementById('clearViewer').addEventListener('click', () => {
+      document.getElementById('responseFile').value = '';
+      document.getElementById('rawJson').value = '';
+      document.getElementById('statusPanel').classList.add('hidden');
+      document.getElementById('messages').innerHTML = '';
+      clearRenderedState();
+    });
+  </script>
+</body>
+</html>
