@@ -135,7 +135,10 @@ private[privyspark] object ReviewCollectCommand {
       .map(toPatternAllowlistEntry)).groupBy(_.key).map(_._2.last).toSeq
       .sortBy(entry => (entry.datasetPath, entry.fileIdentifierPattern, entry.columnNamePattern, entry.piiTypePattern))
     val existingActionPlans = loadActionPlans(conf, s"$currentPath/action_plan.jsonl")
-    val retainedActionPlans = existingActionPlans.filterNot(plan => latestFindingKeys.contains(plan.findingKey))
+    val retainedActionPlans = existingActionPlans.filterNot(plan =>
+      latestFindingKeys.contains(plan.findingKey) ||
+        reviewedFindings.exists(actionPlanCoversFinding(plan, _))
+    )
     val actionPlans = (retainedActionPlans ++ latestAccepted.filter(_.item.decision == ReviewStatus.TruePositive)
       .map(toActionPlan)
     ).groupBy(_.findingKey)
@@ -296,6 +299,19 @@ private[privyspark] object ReviewCollectCommand {
       case ch => ch.toString
     }
     normalizedValue.matches(regex)
+  }
+
+  private def actionPlanCoversFinding(plan: ActionPlan, finding: ReviewFinding): Boolean = {
+    val sameScanAndType = plan.scanPath == finding.scanPath &&
+      plan.columnName == finding.columnName &&
+      plan.piiType == finding.piiType
+    if (!sameScanAndType) {
+      false
+    } else if (plan.fileIdentifier.trim.nonEmpty) {
+      plan.fileIdentifier == finding.fileIdentifier
+    } else {
+      plan.hiveTableFqn.trim.nonEmpty && plan.hiveTableFqn == finding.hiveTableFqn
+    }
   }
 
   private def toActionPlan(response: AcceptedResponse): ActionPlan =
