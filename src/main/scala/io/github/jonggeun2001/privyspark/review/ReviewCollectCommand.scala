@@ -51,6 +51,7 @@ private[privyspark] object ReviewCollectCommand {
   private final case class ActionPlan(
     findingKey: String,
     scanPath: String,
+    fileIdentifier: String,
     hiveDatabase: String,
     hiveTable: String,
     hiveTableFqn: String,
@@ -75,7 +76,6 @@ private[privyspark] object ReviewCollectCommand {
     val root = config.reviewStateRoot.stripSuffix("/")
     val inboxPath = s"$root/inbox"
     val currentPath = s"$root/current"
-    val rejectedPath = s"$root/rejected/rejected_responses.jsonl"
 
     val envelopes = readResponseEnvelopes(conf, inboxPath)
     val rejected = ArrayBuffer.empty[RejectedResponse]
@@ -123,7 +123,11 @@ private[privyspark] object ReviewCollectCommand {
     val retainedExact = existingExact.filterNot(entry =>
       latestFindingKeys.contains(entry.sourceRunId) || affectedExactKeys.contains(entry.key)
     )
-    val retainedPatterns = existingPatterns.filterNot(entry => latestFindingKeys.contains(entry.sourceFindingKey))
+    val reviewedFindings = latestAccepted.map(_.finding)
+    val retainedPatterns = existingPatterns.filterNot(entry =>
+      latestFindingKeys.contains(entry.sourceFindingKey) ||
+        reviewedFindings.exists(patternCoversFinding(entry, _))
+    )
     val exactEntries = (retainedExact ++ exactScope.entries).groupBy(_.key).map(_._2.last).toSeq
       .sortBy(entry => (entry.datasetPath, entry.fileIdentifier, entry.columnName, entry.piiType))
     val patternEntries = (retainedPatterns ++ latestAccepted.filter(_.item.decision == ReviewStatus.FalsePositive)
@@ -131,22 +135,21 @@ private[privyspark] object ReviewCollectCommand {
       .map(toPatternAllowlistEntry)).groupBy(_.key).map(_._2.last).toSeq
       .sortBy(entry => (entry.datasetPath, entry.fileIdentifierPattern, entry.columnNamePattern, entry.piiTypePattern))
     val existingActionPlans = loadActionPlans(conf, s"$currentPath/action_plan.jsonl")
-    val retainedActionPlans = existingActionPlans.filterNot(plan => latestFindingKeys.contains(plan.findingKey))
+    val retainedActionPlans = existingActionPlans.filterNot(plan =>
+      latestFindingKeys.contains(plan.findingKey) ||
+        reviewedFindings.exists(actionPlanCoversFinding(plan, _))
+    )
     val actionPlans = (retainedActionPlans ++ latestAccepted.filter(_.item.decision == ReviewStatus.TruePositive)
       .map(toActionPlan)
     ).groupBy(_.findingKey)
       .map(_._2.maxBy(_.respondedAt))
       .toSeq
-      .sortBy(plan => (plan.scanPath, plan.hiveTableFqn, plan.columnName, plan.piiType))
+      .sortBy(plan => (plan.scanPath, plan.fileIdentifier, plan.columnName, plan.piiType))
 
     val collectRunId = s"${Instant.now().toString.replace(':', '-')}-${UUID.randomUUID().toString.take(8)}"
     val tempCurrentPath = s"$root/current.tmp-$collectRunId"
     writeState(conf, tempCurrentPath, findings, exactEntries, patternEntries, actionPlans, latestAccepted)
     replacePath(conf, tempCurrentPath, currentPath)
-    writeLines(conf, rejectedPath, rejected.map(rejectedToJson))
-    val versionPath = s"$root/versions/$collectRunId"
-    writeState(conf, versionPath, findings, exactEntries, patternEntries, actionPlans, latestAccepted)
-    writeLines(conf, s"$versionPath/collect_report.json", Seq(collectReportJson(findings.size, accepted.size, rejected.size)))
 
     DriverLogger.info(
       "review_collect_complete",
@@ -281,10 +284,47 @@ private[privyspark] object ReviewCollectCommand {
     )
   }
 
+  private def patternCoversFinding(entry: PatternAllowlistEntry, finding: ReviewFinding): Boolean =
+    entry.datasetPath == finding.scanPath &&
+      findingIdentifiers(finding).exists(wildcardMatches(entry.fileIdentifierPattern, _)) &&
+      wildcardMatches(entry.columnNamePattern, finding.columnName) &&
+      wildcardMatches(entry.piiTypePattern, finding.piiType)
+
+  private def findingIdentifiers(finding: ReviewFinding): Seq[String] =
+    (Seq(finding.fileIdentifier) ++ finding.evidence.map(_.fileIdentifier))
+      .map(identifier => Option(identifier).getOrElse(""))
+      .filter(_.nonEmpty)
+      .distinct
+
+  private def wildcardMatches(pattern: String, value: String): Boolean = {
+    val normalizedPattern = Option(pattern).getOrElse("")
+    val normalizedValue = Option(value).getOrElse("")
+    val regex = normalizedPattern.flatMap {
+      case '*' => ".*"
+      case ch if "\\.[]{}()+-^$?|".contains(ch) => "\\" + ch
+      case ch => ch.toString
+    }
+    normalizedValue.matches(regex)
+  }
+
+  private def actionPlanCoversFinding(plan: ActionPlan, finding: ReviewFinding): Boolean = {
+    val sameScanAndType = plan.scanPath == finding.scanPath &&
+      plan.columnName == finding.columnName &&
+      plan.piiType == finding.piiType
+    if (!sameScanAndType) {
+      false
+    } else if (plan.fileIdentifier.trim.nonEmpty) {
+      plan.fileIdentifier == finding.fileIdentifier
+    } else {
+      plan.hiveTableFqn.trim.isEmpty || plan.hiveTableFqn == finding.hiveTableFqn
+    }
+  }
+
   private def toActionPlan(response: AcceptedResponse): ActionPlan =
     ActionPlan(
       findingKey = response.finding.findingKey,
       scanPath = response.finding.scanPath,
+      fileIdentifier = response.finding.fileIdentifier,
       hiveDatabase = response.finding.hiveDatabase,
       hiveTable = response.finding.hiveTable,
       hiveTableFqn = response.finding.hiveTableFqn,
@@ -368,6 +408,7 @@ private[privyspark] object ReviewCollectCommand {
           ActionPlan(
             findingKey = extractJsonStringField(line, "finding_key").getOrElse(""),
             scanPath = extractJsonStringField(line, "scan_path").getOrElse(""),
+            fileIdentifier = extractJsonStringField(line, "file_identifier").getOrElse(""),
             hiveDatabase = extractJsonStringField(line, "hive_database").getOrElse(fallbackDatabase),
             hiveTable = extractJsonStringField(line, "hive_table").getOrElse(fallbackTable),
             hiveTableFqn = hiveTableFqn,
@@ -493,13 +534,10 @@ private[privyspark] object ReviewCollectCommand {
     readText(conf, path).split("\\r?\\n").toSeq.map(_.trim).filter(_.nonEmpty)
 
   private def actionPlanToJson(plan: ActionPlan): String =
-    s"""{"finding_key":${jsonString(plan.findingKey)},"scan_path":${jsonString(plan.scanPath)},"hive_database":${jsonString(plan.hiveDatabase)},"hive_table":${jsonString(plan.hiveTable)},"hive_table_fqn":${jsonString(plan.hiveTableFqn)},"column_name":${jsonString(plan.columnName)},"pii_type":${jsonString(plan.piiType)},"action_plan":${jsonString(plan.actionPlan)},"action_due_date":${jsonString(plan.actionDueDate)},"responder":${jsonString(plan.responder)},"responded_at":${jsonString(plan.respondedAt)},"status":${jsonString(plan.status)}}"""
+    s"""{"finding_key":${jsonString(plan.findingKey)},"scan_path":${jsonString(plan.scanPath)},"file_identifier":${jsonString(plan.fileIdentifier)},"hive_database":${jsonString(plan.hiveDatabase)},"hive_table":${jsonString(plan.hiveTable)},"hive_table_fqn":${jsonString(plan.hiveTableFqn)},"column_name":${jsonString(plan.columnName)},"pii_type":${jsonString(plan.piiType)},"action_plan":${jsonString(plan.actionPlan)},"action_due_date":${jsonString(plan.actionDueDate)},"responder":${jsonString(plan.responder)},"responded_at":${jsonString(plan.respondedAt)},"status":${jsonString(plan.status)}}"""
 
   private def acceptedToJson(response: AcceptedResponse): String =
-    s"""{"source_path":${jsonString(response.sourcePath)},"finding_key":${jsonString(response.finding.findingKey)},"decision":${jsonString(response.item.decision)},"responder":${jsonString(response.responder)},"responded_at":${jsonString(response.respondedAt)}}"""
-
-  private def rejectedToJson(rejected: RejectedResponse): String =
-    s"""{"source_path":${jsonString(rejected.sourcePath)},"reason":${jsonString(rejected.reason)}}"""
+    s"""{"source_path":${jsonString(response.sourcePath)},"scan_path":${jsonString(response.finding.scanPath)},"file_identifier":${jsonString(response.finding.fileIdentifier)},"finding_key":${jsonString(response.finding.findingKey)},"column_name":${jsonString(response.finding.columnName)},"pii_type":${jsonString(response.finding.piiType)},"decision":${jsonString(response.item.decision)},"responder":${jsonString(response.responder)},"responded_at":${jsonString(response.respondedAt)}}"""
 
   private def findingStatusLines(
     findings: Seq[ReviewFinding],
@@ -524,11 +562,11 @@ private[privyspark] object ReviewCollectCommand {
       } else {
         actionPlans.find(_.findingKey == finding.findingKey).map(currentActionStatus).getOrElse(ReviewStatus.Pending)
       }
-    s"""{"finding_key":${jsonString(finding.findingKey)},"scan_path":${jsonString(finding.scanPath)},"hive_table_fqn":${jsonString(finding.hiveTableFqn)},"column_name":${jsonString(finding.columnName)},"pii_type":${jsonString(finding.piiType)},"status":${jsonString(status)}}"""
+    s"""{"finding_key":${jsonString(finding.findingKey)},"scan_path":${jsonString(finding.scanPath)},"file_identifier":${jsonString(finding.fileIdentifier)},"hive_table_fqn":${jsonString(finding.hiveTableFqn)},"column_name":${jsonString(finding.columnName)},"pii_type":${jsonString(finding.piiType)},"status":${jsonString(status)}}"""
   }
 
   private def actionPlanStatusToJson(plan: ActionPlan, status: String): String =
-    s"""{"finding_key":${jsonString(plan.findingKey)},"scan_path":${jsonString(plan.scanPath)},"hive_table_fqn":${jsonString(plan.hiveTableFqn)},"column_name":${jsonString(plan.columnName)},"pii_type":${jsonString(plan.piiType)},"status":${jsonString(status)}}"""
+    s"""{"finding_key":${jsonString(plan.findingKey)},"scan_path":${jsonString(plan.scanPath)},"file_identifier":${jsonString(plan.fileIdentifier)},"hive_table_fqn":${jsonString(plan.hiveTableFqn)},"column_name":${jsonString(plan.columnName)},"pii_type":${jsonString(plan.piiType)},"status":${jsonString(status)}}"""
 
   private def currentActionStatus(plan: ActionPlan): String = {
     if (plan.status == Verified) {
@@ -549,9 +587,6 @@ private[privyspark] object ReviewCollectCommand {
       "" -> normalized
     }
   }
-
-  private def collectReportJson(findings: Int, accepted: Int, rejected: Int): String =
-    s"""{"findings":$findings,"accepted":$accepted,"rejected":$rejected}"""
 
   private val RemediationPlanned = "remediation_planned"
   private val Overdue = "overdue"

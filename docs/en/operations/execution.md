@@ -55,7 +55,7 @@
 
 The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `.crc`, log dumps, or backup directories do not inflate I/O, error rows, or report noise.
 
-Allowlists are intentionally different from ignore rules. Ignore rules skip files before scanning, while allowlists suppress only reviewed false positives at the `(file_identifier, column_name, pii_type)` level after detection.
+Allowlists are intentionally different from ignore rules. Ignore rules skip files before scanning, while allowlists suppress only reviewed false positives at the `(dataset_path, file_identifier, column_name, pii_type)` level after detection.
 
 ## Suppression
 - Suppression removes only a specific `(column, pii_type)` result pair. Column names are matched case-insensitively by exact equality.

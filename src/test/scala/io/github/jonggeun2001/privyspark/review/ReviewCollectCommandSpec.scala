@@ -125,16 +125,256 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(updatedActionPlan.contains("mask email"))
   }
 
+  test("collect keys unified review state by scan path and file identifier") {
+    val sparkSession = spark
+    import sparkSession.implicits._
+
+    val scanRoot = Files.createTempDirectory("privyspark-review-scan-unified-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-unified-")
+    val scanResultsPath = scanRoot.resolve("parquet/scan_results")
+    Files.createDirectories(scanResultsPath.getParent)
+    Files.createDirectories(stateRoot.resolve("inbox"))
+
+    val firstFingerprint = RecordedFileFingerprint(
+      fileIdentifier = "customers/a.parquet",
+      fileSize = 128L,
+      fileMtimeEpochMs = 1710000000000L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "aaaa1111"
+    )
+    val secondFingerprint = RecordedFileFingerprint(
+      fileIdentifier = "customers/b.parquet",
+      fileSize = 256L,
+      fileMtimeEpochMs = 1710000000001L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "bbbb2222"
+    )
+    val firstFindingResult = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "alice@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(firstFingerprint)),
+      fileIdentifier = "customers/a.parquet"
+    )
+    val secondFindingResult = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "bob@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(secondFingerprint)),
+      fileIdentifier = "customers/b.parquet"
+    )
+
+    Seq(firstFindingResult, secondFindingResult).toDS().toDF().write.mode("overwrite").parquet(scanResultsPath.toString)
+
+    val findings = ReviewFindingBuilder.fromScanResults(Seq(firstFindingResult, secondFindingResult))
+    assert(findings.size == 2)
+    assert(findings.map(_.findingKey).distinct.size == 2)
+
+    val scanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
+    val firstFinding = findings.find(_.evidence.exists(_.fileIdentifier == "customers/a.parquet")).get
+    val secondFinding = findings.find(_.evidence.exists(_.fileIdentifier == "customers/b.parquet")).get
+    val responseJson =
+      s"""{"schema_version":1,"scan_path":"/data/project","scan_results_fingerprint":"$scanFingerprint","responder":"owner@example.com","responded_at":"2026-04-27T11:00:00Z","responses":[{"finding_key":"${firstFinding.findingKey}","finding_hash":"${firstFinding.findingHash}","decision":"false_positive","false_positive_reason":"dummy email in owner file","allowlist_scope":"exact","file_identifier_pattern":null,"column_name_pattern":null,"pii_type_pattern":null,"expires_at":null,"action_plan":null,"action_due_date":null},{"finding_key":"${secondFinding.findingKey}","finding_hash":"${secondFinding.findingHash}","decision":"true_positive","false_positive_reason":null,"allowlist_scope":null,"file_identifier_pattern":null,"column_name_pattern":null,"pii_type_pattern":null,"expires_at":null,"action_plan":"mask b email","action_due_date":"2999-12-31"}]}"""
+    Files.write(stateRoot.resolve("inbox/owner-response.json"), responseJson.getBytes(StandardCharsets.UTF_8))
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(scanResultsPath.toString, stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val actionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+    val findingStatus = read(stateRoot.resolve("current/finding_status.jsonl"))
+    val ledger = read(stateRoot.resolve("current/response_ledger.jsonl"))
+
+    assert(allowlist.contains("customers/a.parquet"))
+    assert(!allowlist.contains("customers/b.parquet"))
+    assert(actionPlan.contains("customers/b.parquet"))
+    assert(findingStatus.contains("customers/a.parquet"))
+    assert(findingStatus.contains("customers/b.parquet"))
+    assert(ledger.contains("customers/a.parquet"))
+    assert(ledger.contains("customers/b.parquet"))
+    assert(!Files.exists(stateRoot.resolve("rejected")))
+    assert(!Files.exists(stateRoot.resolve("versions")))
+  }
+
+  test("collect removes legacy pattern allowlist entries that cover a newly reviewed finding") {
+    val sparkSession = spark
+    import sparkSession.implicits._
+
+    val scanRoot = Files.createTempDirectory("privyspark-review-scan-pattern-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-pattern-")
+    val scanResultsPath = scanRoot.resolve("parquet/scan_results")
+    Files.createDirectories(scanResultsPath.getParent)
+    Files.createDirectories(stateRoot.resolve("inbox"))
+    Files.createDirectories(stateRoot.resolve("current"))
+
+    val fingerprint = RecordedFileFingerprint(
+      fileIdentifier = "customers/a.parquet",
+      fileSize = 128L,
+      fileMtimeEpochMs = 1710000000000L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "aaaa1111"
+    )
+    val findingResult = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "alice@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(fingerprint)),
+      fileIdentifier = "customers/a.parquet"
+    )
+    Seq(findingResult).toDS().toDF().write.mode("overwrite").parquet(scanResultsPath.toString)
+
+    val legacyPattern =
+      """{"entry_type":"pattern","dataset_path":"/data/project","file_identifier_pattern":"customers/*","column_name_pattern":"email","pii_type_pattern":"email","reason":"legacy broad false positive","reviewer":"owner@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"legacy-hive-table-key"}"""
+    Files.write(stateRoot.resolve("current/allowlist.jsonl"), s"$legacyPattern\n".getBytes(StandardCharsets.UTF_8))
+
+    val findings = ReviewFindingBuilder.fromScanResults(Seq(findingResult))
+    val scanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
+    val finding = findings.head
+    val responseJson =
+      s"""{"schema_version":1,"scan_path":"/data/project","scan_results_fingerprint":"$scanFingerprint","responder":"owner@example.com","responded_at":"2026-04-27T12:00:00Z","responses":[{"finding_key":"${finding.findingKey}","finding_hash":"${finding.findingHash}","decision":"true_positive","false_positive_reason":null,"allowlist_scope":null,"file_identifier_pattern":null,"column_name_pattern":null,"pii_type_pattern":null,"expires_at":null,"action_plan":"mask email","action_due_date":"2999-12-31"}]}"""
+    Files.write(stateRoot.resolve("inbox/owner-response.json"), responseJson.getBytes(StandardCharsets.UTF_8))
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(scanResultsPath.toString, stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val actionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+
+    assert(!allowlist.contains("legacy broad false positive"))
+    assert(!allowlist.contains("customers/*"))
+    assert(actionPlan.contains("customers/a.parquet"))
+    assert(actionPlan.contains("mask email"))
+  }
+
+  test("collect removes legacy pattern allowlist entries that cover directory evidence") {
+    val sparkSession = spark
+    import sparkSession.implicits._
+
+    val scanRoot = Files.createTempDirectory("privyspark-review-scan-pattern-directory-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-pattern-directory-")
+    val scanResultsPath = scanRoot.resolve("parquet/scan_results")
+    Files.createDirectories(scanResultsPath.getParent)
+    Files.createDirectories(stateRoot.resolve("inbox"))
+    Files.createDirectories(stateRoot.resolve("current"))
+
+    val fingerprints = Seq(
+      RecordedFileFingerprint(
+        fileIdentifier = "customers/a.parquet",
+        fileSize = 128L,
+        fileMtimeEpochMs = 1710000000000L,
+        fileChecksumAlgo = "CRC32",
+        fileChecksum = "aaaa1111"
+      ),
+      RecordedFileFingerprint(
+        fileIdentifier = "customers/b.parquet",
+        fileSize = 256L,
+        fileMtimeEpochMs = 1710000000001L,
+        fileChecksumAlgo = "CRC32",
+        fileChecksum = "bbbb2222"
+      )
+    )
+    val findingResult = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "alice@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(fingerprints),
+      fileIdentifier = "customers"
+    )
+    Seq(findingResult).toDS().toDF().write.mode("overwrite").parquet(scanResultsPath.toString)
+
+    val legacyPattern =
+      """{"entry_type":"pattern","dataset_path":"/data/project","file_identifier_pattern":"customers/*","column_name_pattern":"email","pii_type_pattern":"email","reason":"legacy directory false positive","reviewer":"owner@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"legacy-hive-table-key"}"""
+    Files.write(stateRoot.resolve("current/allowlist.jsonl"), s"$legacyPattern\n".getBytes(StandardCharsets.UTF_8))
+
+    val findings = ReviewFindingBuilder.fromScanResults(Seq(findingResult))
+    val scanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
+    val finding = findings.head
+    val responseJson =
+      s"""{"schema_version":1,"scan_path":"/data/project","scan_results_fingerprint":"$scanFingerprint","responder":"owner@example.com","responded_at":"2026-04-27T12:15:00Z","responses":[{"finding_key":"${finding.findingKey}","finding_hash":"${finding.findingHash}","decision":"true_positive","false_positive_reason":null,"allowlist_scope":null,"file_identifier_pattern":null,"column_name_pattern":null,"pii_type_pattern":null,"expires_at":null,"action_plan":"mask directory email","action_due_date":"2999-12-31"}]}"""
+    Files.write(stateRoot.resolve("inbox/owner-response.json"), responseJson.getBytes(StandardCharsets.UTF_8))
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(scanResultsPath.toString, stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val actionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+
+    assert(!allowlist.contains("legacy directory false positive"))
+    assert(!allowlist.contains("customers/*"))
+    assert(actionPlan.contains("customers"))
+    assert(actionPlan.contains("mask directory email"))
+  }
+
+  test("collect removes legacy action plans that cover a newly reviewed finding") {
+    val sparkSession = spark
+    import sparkSession.implicits._
+
+    val scanRoot = Files.createTempDirectory("privyspark-review-scan-action-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-action-")
+    val scanResultsPath = scanRoot.resolve("parquet/scan_results")
+    Files.createDirectories(scanResultsPath.getParent)
+    Files.createDirectories(stateRoot.resolve("inbox"))
+    Files.createDirectories(stateRoot.resolve("current"))
+
+    val fingerprint = RecordedFileFingerprint(
+      fileIdentifier = "customers/a.parquet",
+      fileSize = 128L,
+      fileMtimeEpochMs = 1710000000000L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "aaaa1111"
+    )
+    val findingResult = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "alice@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(fingerprint)),
+      fileIdentifier = "customers/a.parquet"
+    )
+    Seq(findingResult).toDS().toDF().write.mode("overwrite").parquet(scanResultsPath.toString)
+
+    val legacyActionPlan =
+      """{"finding_key":"legacy-hive-table-key","scan_path":"/data/project","hive_database":"","hive_table":"","hive_table_fqn":"","column_name":"email","pii_type":"email","action_plan":"legacy mask email","action_due_date":"2999-12-31","responder":"owner@example.com","responded_at":"2026-04-20T00:00:00Z","status":"remediation_planned"}"""
+    Files.write(stateRoot.resolve("current/action_plan.jsonl"), s"$legacyActionPlan\n".getBytes(StandardCharsets.UTF_8))
+
+    val findings = ReviewFindingBuilder.fromScanResults(Seq(findingResult))
+    val scanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
+    val finding = findings.head
+    val responseJson =
+      s"""{"schema_version":1,"scan_path":"/data/project","scan_results_fingerprint":"$scanFingerprint","responder":"owner@example.com","responded_at":"2026-04-27T12:30:00Z","responses":[{"finding_key":"${finding.findingKey}","finding_hash":"${finding.findingHash}","decision":"true_positive","false_positive_reason":null,"allowlist_scope":null,"file_identifier_pattern":null,"column_name_pattern":null,"pii_type_pattern":null,"expires_at":null,"action_plan":"new mask email","action_due_date":"2999-12-31"}]}"""
+    Files.write(stateRoot.resolve("inbox/owner-response.json"), responseJson.getBytes(StandardCharsets.UTF_8))
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(scanResultsPath.toString, stateRoot.toString)
+    )
+
+    val actionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+    val findingStatus = read(stateRoot.resolve("current/finding_status.jsonl"))
+
+    assert(!actionPlan.contains("legacy mask email"))
+    assert(actionPlan.contains("new mask email"))
+    assert(actionPlan.contains("customers/a.parquet"))
+    assert(!findingStatus.contains("remediated_candidate"))
+  }
+
   private def scanResult(
     columnName: String,
     piiType: String,
     sample: String,
-    scopeFingerprints: String
+    scopeFingerprints: String,
+    datasetPath: String = "/data/project",
+    fileIdentifier: String = "customers/part-000.parquet"
   ): ScanResult =
     ScanResult(
-      dataset_path = "/data/project",
+      dataset_path = datasetPath,
       scan_timestamp = "2026-04-27T10:00:00Z",
-      file_identifier = "customers/part-000.parquet",
+      file_identifier = fileIdentifier,
       column_name = columnName,
       pii_type = piiType,
       match_count = 1L,
