@@ -286,9 +286,15 @@ private[privyspark] object ReviewCollectCommand {
 
   private def patternCoversFinding(entry: PatternAllowlistEntry, finding: ReviewFinding): Boolean =
     entry.datasetPath == finding.scanPath &&
-      wildcardMatches(entry.fileIdentifierPattern, finding.fileIdentifier) &&
+      findingIdentifiers(finding).exists(wildcardMatches(entry.fileIdentifierPattern, _)) &&
       wildcardMatches(entry.columnNamePattern, finding.columnName) &&
       wildcardMatches(entry.piiTypePattern, finding.piiType)
+
+  private def findingIdentifiers(finding: ReviewFinding): Seq[String] =
+    (Seq(finding.fileIdentifier) ++ finding.evidence.map(_.fileIdentifier))
+      .map(identifier => Option(identifier).getOrElse(""))
+      .filter(_.nonEmpty)
+      .distinct
 
   private def wildcardMatches(pattern: String, value: String): Boolean = {
     val normalizedPattern = Option(pattern).getOrElse("")
@@ -310,7 +316,7 @@ private[privyspark] object ReviewCollectCommand {
     } else if (plan.fileIdentifier.trim.nonEmpty) {
       plan.fileIdentifier == finding.fileIdentifier
     } else {
-      plan.hiveTableFqn.trim.nonEmpty && plan.hiveTableFqn == finding.hiveTableFqn
+      plan.hiveTableFqn.trim.isEmpty || plan.hiveTableFqn == finding.hiveTableFqn
     }
   }
 
