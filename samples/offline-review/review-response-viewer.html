@@ -324,11 +324,13 @@
               } else if (!isDateOnly(trim(response.expires_at))) {
                 errors.push(`responses[${index}].expires_at 값은 YYYY-MM-DD 형식이어야 합니다.`);
               }
-              if (!trim(response.file_identifier_pattern)) {
-                errors.push(`responses[${index}].file_identifier_pattern 값이 필요합니다.`);
-              }
-              if ([response.file_identifier_pattern, response.column_name_pattern, response.pii_type_pattern].every(value => !trim(value))) {
+              const hasFilePattern = Boolean(trim(response.file_identifier_pattern));
+              const hasColumnPattern = Boolean(trim(response.column_name_pattern));
+              const hasPiiPattern = Boolean(trim(response.pii_type_pattern));
+              if (!hasFilePattern && !hasColumnPattern && !hasPiiPattern) {
                 errors.push(`responses[${index}] pattern allowlist에는 pattern 필드가 하나 이상 필요합니다.`);
+              } else if (!hasFilePattern) {
+                warnings.push(`responses[${index}] 다중 파일 finding은 collector에서 file_identifier_pattern을 요구할 수 있습니다.`);
               }
               if (trim(response.pii_type_pattern) === '*') {
                 errors.push(`responses[${index}].pii_type_pattern=* 값은 허용되지 않습니다.`);
