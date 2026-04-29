@@ -236,10 +236,7 @@
           "false_positive_reason": "Synthetic customer number pattern",
           "file_identifier_pattern": "example_db/customers/*",
           "column_name_pattern": "customer_*",
-          "pii_type_pattern": null,
-          "expires_at": "2026-12-31",
-          "action_plan": "",
-          "action_due_date": ""
+          "expires_at": "2026-12-31"
         },
         {
           "finding_key": "sha256:example-email-finding-key",
@@ -248,12 +245,6 @@
           "column_name": "email",
           "pii_type": "email",
           "decision": "true_positive",
-          "allowlist_scope": "exact",
-          "false_positive_reason": "",
-          "file_identifier_pattern": null,
-          "column_name_pattern": null,
-          "pii_type_pattern": null,
-          "expires_at": "",
           "action_plan": "Mask email before downstream export",
           "action_due_date": "2026-05-15"
         }

@@ -125,6 +125,59 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(updatedActionPlan.contains("mask email"))
   }
 
+  test("collect accepts compact response JSON without unused null fields") {
+    val sparkSession = spark
+    import sparkSession.implicits._
+
+    val scanRoot = Files.createTempDirectory("privyspark-review-scan-compact-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-compact-")
+    val scanResultsPath = scanRoot.resolve("parquet/scan_results")
+    Files.createDirectories(scanResultsPath.getParent)
+    Files.createDirectories(stateRoot.resolve("inbox"))
+
+    val fingerprint = RecordedFileFingerprint(
+      fileIdentifier = "customers/part-000.parquet",
+      fileSize = 128L,
+      fileMtimeEpochMs = 1710000000000L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "abcd1234"
+    )
+    val falsePositive = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "alice@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(fingerprint))
+    )
+    val truePositive = scanResult(
+      columnName = "phone",
+      piiType = "phone_number",
+      sample = "010-1234-5678",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(fingerprint))
+    )
+    Seq(falsePositive, truePositive).toDS().toDF().write.mode("overwrite").parquet(scanResultsPath.toString)
+
+    val findings = ReviewFindingBuilder.fromScanResults(Seq(falsePositive, truePositive))
+    val scanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
+    val emailFinding = findings.find(_.columnName == "email").get
+    val phoneFinding = findings.find(_.columnName == "phone").get
+    val responseJson =
+      s"""{"schema_version":1,"scan_path":"/data/project","scan_results_fingerprint":"$scanFingerprint","responder":"owner@example.com","responded_at":"2026-04-27T10:00:00Z","responses":[{"finding_key":"${emailFinding.findingKey}","finding_hash":"${emailFinding.findingHash}","decision":"false_positive","false_positive_reason":"dummy email","allowlist_scope":"exact"},{"finding_key":"${phoneFinding.findingKey}","finding_hash":"${phoneFinding.findingHash}","decision":"true_positive","action_plan":"mask column","action_due_date":"2999-12-31"}]}"""
+    Files.write(stateRoot.resolve("inbox/owner-response.json"), responseJson.getBytes(StandardCharsets.UTF_8))
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(scanResultsPath.toString, stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val actionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+    val rejected = stateRoot.resolve("rejected/rejected_responses.jsonl")
+
+    assert(allowlist.contains("dummy email"))
+    assert(actionPlan.contains("mask column"))
+    assert(!Files.exists(rejected) || read(rejected).trim.isEmpty)
+  }
+
   test("collect keys unified review state by scan path and file identifier") {
     val sparkSession = spark
     import sparkSession.implicits._
