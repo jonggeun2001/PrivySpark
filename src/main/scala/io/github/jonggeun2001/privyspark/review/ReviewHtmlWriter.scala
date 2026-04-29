@@ -117,15 +117,17 @@ private[privyspark] object ReviewHtmlWriter {
     table { border-collapse: collapse; width: 100%; }
     th, td { border: 1px solid #d5d8dc; padding: 8px; vertical-align: top; }
     th { background: #f4f6f7; text-align: left; }
+    thead th { position: sticky; top: 0; z-index: 10; }
     .sort-button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
     .sort-button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
     .sort-indicator { min-width: 1em; }
     textarea, input, select { width: 100%; box-sizing: border-box; }
-    .table-wrap { overflow-x: auto; }
+    .table-wrap { overflow: auto; max-height: 70vh; }
     .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
     .field { display: block; margin-bottom: 8px; }
     .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
     .review-guide { background: #f8fafc; border: 1px solid #d5d8dc; padding: 12px 16px; margin: 16px 0; line-height: 1.5; }
+    .review-guide summary { cursor: pointer; font-weight: 700; }
     .review-guide ul { margin: 8px 0 0; padding-left: 20px; }
     .review-guide code { background: #eef2f7; padding: 1px 4px; border-radius: 3px; }
     .metric-cell { text-align: right; white-space: nowrap; }
@@ -148,8 +150,8 @@ private[privyspark] object ReviewHtmlWriter {
     <label>삭제 예정일 <input id="bulkDeleteDueDate" type="date"></label>
     <button type="button" id="applyBulkDeletePlan">일괄 삭제 계획 등록</button>
   </p>
-  <section class="review-guide" aria-label="검토 안내">
-    <strong>검토 안내</strong>
+  <details class="review-guide" open aria-label="검토 안내">
+    <summary>검토 안내</summary>
     <ul>
       <li>오탐은 다음 스캔에서 제외하고, 정탐은 제외하지 않고 조치 계획만 남깁니다.</li>
       <li>오탐 응답은 <code>exact</code> 범위로만 생성합니다. 다음 스캔에서 동일 fingerprint가 다시 일치할 때만 제외됩니다.</li>
@@ -157,7 +159,7 @@ private[privyspark] object ReviewHtmlWriter {
       <li>정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>.</li>
       <li>개인정보 유형은 화면에 한글로 표시합니다.</li>
     </ul>
-  </section>
+  </details>
   <div class="table-wrap">
   <table id="findingsTable">
     <thead>
@@ -262,7 +264,6 @@ private[privyspark] object ReviewHtmlWriter {
       return finding.evidence_samples.map(sample => [
         finding.column_name,
         displayPiiType(finding.pii_type),
-        sample.file_identifier,
         sample.sample_matched_fragment,
         sample.sample_raw_value
       ].join(' ')).join(' ');
@@ -347,6 +348,9 @@ private[privyspark] object ReviewHtmlWriter {
         section.hidden = section.getAttribute('data-decision-section') !== decision;
       });
     }
+    function applyScopeVisibility(row) {
+      return row;
+    }
     function applyBulkDeletePlan() {
       const dueDate = document.getElementById('bulkDeleteDueDate').value;
       const bulkSortKeys = new Set(['action_plan', 'action_due_date']);
@@ -414,7 +418,6 @@ private[privyspark] object ReviewHtmlWriter {
     }
     function renderSampleCell(finding) {
       const samples = finding.evidence_samples.map(sample =>
-        escapeHtml(sample.file_identifier) + '\\n' +
         escapeHtml(sample.sample_matched_fragment) + '\\n' +
         escapeHtml(sample.sample_raw_value)
       ).join('\\n---\\n');
@@ -465,6 +468,7 @@ private[privyspark] object ReviewHtmlWriter {
       row.setAttribute('data-hydrated', 'true');
       setFieldValues(row, index);
       applyDecisionVisibility(row);
+      applyScopeVisibility(row);
       hydratedRows.set(index, row);
     }
     function dehydrateRow(row) {
@@ -481,6 +485,7 @@ private[privyspark] object ReviewHtmlWriter {
       if (row) {
         setFieldValues(row, index);
         applyDecisionVisibility(row);
+        applyScopeVisibility(row);
       }
     }
     function resetRowObserver() {
@@ -540,7 +545,9 @@ private[privyspark] object ReviewHtmlWriter {
       const field = input.getAttribute('data-field');
       updateFormState(index, field, input.value);
       if (field === 'decision') {
-        applyDecisionVisibility(input.closest('tr'));
+        const row = input.closest('tr');
+        applyDecisionVisibility(row);
+        applyScopeVisibility(row);
       }
     }
     tbody.addEventListener('input', handleFormEvent);

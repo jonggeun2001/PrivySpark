@@ -197,12 +197,13 @@ private[privyspark] object DirectoryScanner {
       val preScanOutcomes = executeInParallel(resolvedPreScanParallelism, files.map { filePath =>
         () => {
           val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
+          val groupingDirectory = normalizeHiveLayoutGroupingPath(parentDirectory, inputPath)
           val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
           val pathInferredFormat = FormatDetector.infer(filePath)
           val probeRequired = shouldProbeForFormat(filePath, pathInferredFormat)
           val preScanErrorScope = pathInferredFormat match {
             case Some(format) if ArchiveFormats.contains(format) || format == XlsxFormat => logicalIdentifier
-            case _ => parentDirectory
+            case _ => groupingDirectory
           }
           val localStagingPaths = ArrayBuffer.empty[String]
 
@@ -218,7 +219,7 @@ private[privyspark] object DirectoryScanner {
                 case Left(e) =>
                   PreScanFileOutcome(
                     filePath = filePath,
-                    groupingDirectoryPath = parentDirectory,
+                    groupingDirectoryPath = groupingDirectory,
                     preScanErrorScope = preScanErrorScope,
                     expandedEntries = Seq.empty,
                     expandedErrors = Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
@@ -230,7 +231,7 @@ private[privyspark] object DirectoryScanner {
                 case Right(true) =>
                   PreScanFileOutcome(
                     filePath = filePath,
-                    groupingDirectoryPath = parentDirectory,
+                    groupingDirectoryPath = groupingDirectory,
                     preScanErrorScope = preScanErrorScope,
                     expandedEntries = Seq.empty,
                     expandedErrors = Seq.empty,
@@ -249,7 +250,7 @@ private[privyspark] object DirectoryScanner {
                       timestamp,
                       filePath,
                       logicalIdentifier,
-                      parentDirectory,
+                      groupingDirectory,
                       localStagingPaths,
                       fileSize = fileStatus.getLen,
                       fileMtimeEpochMs = fileStatus.getModificationTime,
@@ -259,7 +260,7 @@ private[privyspark] object DirectoryScanner {
                   val refinedEntries = refineCsvLikeEntries(spark, expandedEntries, csvHeadCache)
                   PreScanFileOutcome(
                     filePath = filePath,
-                    groupingDirectoryPath = parentDirectory,
+                    groupingDirectoryPath = groupingDirectory,
                     preScanErrorScope = preScanErrorScope,
                     expandedEntries = refinedEntries,
                     expandedErrors = expandedErrors,
@@ -273,7 +274,7 @@ private[privyspark] object DirectoryScanner {
               case NonFatal(e) =>
                 PreScanFileOutcome(
                   filePath = filePath,
-                  groupingDirectoryPath = parentDirectory,
+                  groupingDirectoryPath = groupingDirectory,
                   preScanErrorScope = preScanErrorScope,
                   expandedEntries = Seq.empty,
                   expandedErrors = Seq.empty,
@@ -465,7 +466,7 @@ private[privyspark] object DirectoryScanner {
 
       val nonSkippedPreScanOutcomes = preScanOutcomes.filterNot(_.skipped)
       val directoryCount = nonSkippedPreScanOutcomes
-        .map(outcome => Option(new Path(outcome.filePath).getParent).map(_.toString).getOrElse(outcome.filePath))
+        .map(_.groupingDirectoryPath)
         .distinct
         .size
       val totalFiles = nonSkippedPreScanOutcomes.size

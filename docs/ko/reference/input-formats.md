@@ -35,6 +35,7 @@
 ## 그룹화와 스캔 단위
 - 기본 스캔 단위는 파일입니다.
 - 먼저 `(directory, format)` 기준으로 1차 그룹을 만듭니다.
+- 이 그룹화 전에 `key=value` partition 디렉토리, `bucket_00000` 또는 `bucket-00000` bucket 디렉토리, `__HIVE_DEFAULT_LIST_BUCKETING_DIR_NAME__` skew/list-bucketing 디렉토리는 입력 루트 안에서 가장 가까운 비-layout 상위 경로로 정규화합니다.
 - 이후 대표 파일 스키마 샘플링과 exact split으로 `schemaSignature`를 보강하거나 그룹을 다시 나눕니다.
 - 동일 스키마가 확인된 다중 파일 그룹만 디렉토리 식별자로 승격할 수 있습니다.
 - archive 엔트리와 Excel 시트는 논리 입력 식별자를 유지합니다.

@@ -122,7 +122,7 @@ GitHub Release에는 `privyspark-<tag>-review-response-example.html` 예시 파�
 
 GitHub Release에는 `privyspark-<tag>-review-response-viewer.html`도 함께 제공합니다. 운영자는 회수한 `response-YYYYMMDD-HHMMSS.json`을 이 파일로 로컬에서 열어 envelope 메타데이터, schema/fingerprint 유무, finding별 판정과 allowlist/action plan 입력값을 확인할 수 있습니다. 이 파일은 JSON 확인용이며 collector state를 갱신하지 않습니다.
 
-HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 같은 `file_identifier` 경로에서 여러 PII가 검출되더라도 개인정보 유형별 판정이 다를 수 있으므로 각 finding은 별도 row로 표시합니다.
+HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 테이블 헤더는 스크롤 중에도 고정됩니다. 같은 `file_identifier` 경로에서 여러 PII가 검출되더라도 개인정보 유형별 판정이 다를 수 있으므로 각 finding은 별도 row로 표시합니다.
 
 브라우저 렌더링 비용을 낮추기 위해 `review.html`은 입력 상태를 DOM이 아닌 페이지 내부 상태에 보관하고, 화면 근처의 row만 실제 입력 필드로 hydrate합니다. 화면 밖 row는 가벼운 placeholder로 유지되지만, 입력한 판정/사유/조치 계획은 response JSON 생성 시 전체 finding 기준으로 포함됩니다. 정렬과 일괄 삭제 계획 적용도 이 내부 상태를 기준으로 처리하므로 화면에 보이지 않는 row의 입력값이 누락되지 않습니다.
 
@@ -136,7 +136,7 @@ HTML 표는 검토자가 빠르게 훑을 수 있도록 주요 값을 별도 컬
 - `판정`: 오탐/정탐 판정만 선택합니다.
 - `오탐 사유`, `정탐 조치 계획`, `조치 예정일`: 기존 사유/계획 입력 영역을 필드별 컬럼으로 나눠 입력합니다.
 
-반복되는 입력 힌트는 row마다 표시하지 않고 표 상단의 `검토 안내`에 한 번만 표시합니다. `review.html`에서 생성하는 오탐 응답은 `allowlist_scope=exact`로 고정하며, 별도의 오탐 제외 범위 선택 컬럼을 표시하지 않습니다. 화면에 표시되는 개인정보 유형은 한글명이지만 response JSON의 `pii_type`은 collector가 쓰는 원본 타입 값을 유지합니다.
+반복되는 입력 힌트는 row마다 표시하지 않고 표 상단의 접기/펼치기 가능한 `검토 안내`에 한 번만 표시합니다. `review.html`에서 생성하는 오탐 응답은 `allowlist_scope=exact`로 고정하며, 별도의 오탐 제외 범위 선택 컬럼이나 pattern 입력 필드를 표시하지 않습니다. 화면에 표시되는 개인정보 유형은 한글명이지만 response JSON의 `pii_type`은 collector가 쓰는 원본 타입 값을 유지합니다.
 
 판정 선택 전에는 사유/계획 입력 영역을 숨깁니다. `false_positive`를 선택하면 오탐 사유만 표시하고, `true_positive`를 선택하면 조치 계획과 조치 예정일만 표시합니다.
 
@@ -168,7 +168,6 @@ finding 요약에는 다음 필드를 표시합니다.
 `finding_key`, `finding_hash`, `match_ratio`, `confidence`는 HTML 내부 데이터와 response 검증에는 사용하지만 검토 표의 일반 표시 컬럼으로는 노출하지 않습니다.
 
 상세 영역에는 evidence sample을 표시합니다.
-- `file_identifier`
 - `sample_matched_fragment`
 - `sample_raw_value`
 - `match_count`

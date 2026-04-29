@@ -4,10 +4,12 @@
 
 - Open it directly in a browser.
 - Click a table header to sort findings; click the same header again to reverse the order.
+- Table headers stay fixed while scrolling, and the shared guidance block can be collapsed or expanded.
 - The table keeps form state outside the DOM and hydrates only rows near the viewport, so the example matches the generated `review.html` behavior for large finding sets.
 - Review location, Hive table, column, PII type, and metrics in separate Korean-labeled columns; findings with the same path remain separate rows so each PII type can be judged independently.
 - PII types are displayed as Korean names such as `이메일` and `운전면허번호`; downloaded JSON keeps the collector's raw `pii_type` values.
 - Select decisions for one or more findings. The top guidance block contains the shared examples instead of repeating hints in every row.
+- The detection sample column shows matched fragments and raw sample context, while the path stays in the separate path column.
 - False-positive responses always use `allowlist_scope=exact`; the scope selector column is not shown.
 - False-positive fields and true-positive action-plan fields are split into individual columns and shown based on the selected decision.
 - Use the bulk delete-plan button to fill `action_plan=삭제 처리` and a shared due date for findings already marked `true_positive`.
