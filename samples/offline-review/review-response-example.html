@@ -23,16 +23,16 @@
     .review-guide ul { margin: 8px 0 0; padding-left: 20px; }
     .review-guide code { background: #eef2f7; padding: 1px 4px; border-radius: 3px; }
     .metric-cell { text-align: right; white-space: nowrap; }
-    .pattern-cell { min-width: 180px; }
     .reason-cell, .plan-cell { min-width: 220px; }
-    .scope-cell { min-width: 240px; }
+    .scope-cell { min-width: 320px; }
+    .date-cell { min-width: 180px; }
     .placeholder-cell { min-height: 120px; color: #566573; background: #fbfcfc; }
     .placeholder-summary { display: block; min-height: 120px; }
     .finding-summary { margin-bottom: 8px; }
     .finding-summary:last-child { margin-bottom: 0; }
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
-    .decision-fields[hidden], [data-decision-section][hidden] { display: none; }
+    .decision-fields[hidden], [data-decision-section][hidden], [data-scope-section][hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -69,10 +69,6 @@
         <th scope="col" data-sort-key="decision" aria-sort="none"><button type="button" class="sort-button">판정 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="scope" aria-sort="none"><button type="button" class="sort-button">오탐 제외 범위 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="false_positive_reason" aria-sort="none"><button type="button" class="sort-button">오탐 사유 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="file_identifier_pattern" aria-sort="none"><button type="button" class="sort-button">경로 패턴 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="column_name_pattern" aria-sort="none"><button type="button" class="sort-button">컬럼명 패턴 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="pii_type_pattern" aria-sort="none"><button type="button" class="sort-button">개인정보 유형 패턴 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="expires_at" aria-sort="none"><button type="button" class="sort-button">패턴 만료일 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="action_plan" aria-sort="none"><button type="button" class="sort-button">정탐 조치 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="action_due_date" aria-sort="none"><button type="button" class="sort-button">조치 예정일 <span class="sort-indicator" aria-hidden="true"></span></button></th>
       </tr>
@@ -278,10 +274,6 @@
         case 'scope':
           return formSortText(index, ['allowlist_scope']);
         case 'false_positive_reason':
-        case 'file_identifier_pattern':
-        case 'column_name_pattern':
-        case 'pii_type_pattern':
-        case 'expires_at':
         case 'action_plan':
         case 'action_due_date':
           return formSortText(index, [sortState.key]);
@@ -334,6 +326,13 @@
       const decision = decisionInput.value;
       row.querySelectorAll('[data-decision-section]').forEach(section => {
         section.hidden = section.getAttribute('data-decision-section') !== decision;
+      });
+    }
+    function applyScopeVisibility(row) {
+      const scopeInput = row.querySelector('[data-field="allowlist_scope"]');
+      const showPatternFields = scopeInput && scopeInput.value === 'pattern';
+      row.querySelectorAll('[data-scope-section="pattern"]').forEach(section => {
+        section.hidden = !showPatternFields;
       });
     }
     function applyBulkDeletePlan() {
@@ -394,7 +393,7 @@
         finding.column_name,
         displayPiiType(finding.pii_type)
       ].filter(Boolean).join(' / ');
-      return `<td colspan="17" class="placeholder-cell"><span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">${escapeHtml(summary)}</span></td>`;
+      return `<td colspan="13" class="placeholder-cell"><span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">${escapeHtml(summary)}</span></td>`;
     }
     function renderSampleCell(finding) {
       const samples = finding.evidence_samples.map(sample =>
@@ -430,6 +429,20 @@
                 <option value="pattern">pattern</option>
               </select>
             </label>
+            <div data-scope-section="pattern">
+              <label class="field"><span>경로 패턴</span>
+                <input data-index="${index}" data-field="file_identifier_pattern" aria-label="경로 패턴" placeholder="선택">
+              </label>
+              <label class="field"><span>컬럼명 패턴</span>
+                <input data-index="${index}" data-field="column_name_pattern" aria-label="컬럼명 패턴" placeholder="선택">
+              </label>
+              <label class="field"><span>개인정보 유형 패턴</span>
+                <input data-index="${index}" data-field="pii_type_pattern" aria-label="개인정보 유형 패턴" placeholder="선택">
+              </label>
+              <label class="field"><span>패턴 만료일</span>
+                <input data-index="${index}" data-field="expires_at" aria-label="패턴 만료일" placeholder="YYYY-MM-DD">
+              </label>
+            </div>
           </div>
         </td>
         <td class="reason-cell">
@@ -437,32 +450,12 @@
             <textarea data-index="${index}" data-field="false_positive_reason" aria-label="오탐 사유" placeholder="필수"></textarea>
           </div>
         </td>
-        <td class="pattern-cell">
-          <div class="decision-fields" data-decision-section="false_positive">
-            <input data-index="${index}" data-field="file_identifier_pattern" aria-label="경로 패턴" placeholder="선택">
-          </div>
-        </td>
-        <td class="pattern-cell">
-          <div class="decision-fields" data-decision-section="false_positive">
-            <input data-index="${index}" data-field="column_name_pattern" aria-label="컬럼명 패턴" placeholder="선택">
-          </div>
-        </td>
-        <td class="pattern-cell">
-          <div class="decision-fields" data-decision-section="false_positive">
-            <input data-index="${index}" data-field="pii_type_pattern" aria-label="개인정보 유형 패턴" placeholder="선택">
-          </div>
-        </td>
-        <td class="pattern-cell">
-          <div class="decision-fields" data-decision-section="false_positive">
-            <input data-index="${index}" data-field="expires_at" aria-label="패턴 만료일" placeholder="YYYY-MM-DD">
-          </div>
-        </td>
         <td class="plan-cell">
           <div class="decision-fields" data-decision-section="true_positive">
             <textarea data-index="${index}" data-field="action_plan" aria-label="정탐 조치 계획" placeholder="필수"></textarea>
           </div>
         </td>
-        <td class="pattern-cell">
+        <td class="date-cell">
           <div class="decision-fields" data-decision-section="true_positive">
             <input data-index="${index}" data-field="action_due_date" aria-label="조치 예정일" placeholder="YYYY-MM-DD">
           </div>
@@ -478,6 +471,7 @@
       row.setAttribute('data-hydrated', 'true');
       setFieldValues(row, index);
       applyDecisionVisibility(row);
+      applyScopeVisibility(row);
       hydratedRows.set(index, row);
     }
     function dehydrateRow(row) {
@@ -494,6 +488,7 @@
       if (row) {
         setFieldValues(row, index);
         applyDecisionVisibility(row);
+        applyScopeVisibility(row);
       }
     }
     function resetRowObserver() {
@@ -553,7 +548,12 @@
       const field = input.getAttribute('data-field');
       updateFormState(index, field, input.value);
       if (field === 'decision') {
-        applyDecisionVisibility(input.closest('tr'));
+        const row = input.closest('tr');
+        applyDecisionVisibility(row);
+        applyScopeVisibility(row);
+      }
+      if (field === 'allowlist_scope') {
+        applyScopeVisibility(input.closest('tr'));
       }
     }
     tbody.addEventListener('input', handleFormEvent);
