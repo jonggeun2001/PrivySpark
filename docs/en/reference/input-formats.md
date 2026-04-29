@@ -35,6 +35,7 @@ The text/CSV fallback exists because extension-based filtering alone would rejec
 ## Grouping and Scan Units
 - The base scan unit is a file.
 - Inputs are grouped first by `(directory, format)`.
+- Before that grouping, Hive/Spark layout directories such as `key=value` partitions, `bucket_00000` or `bucket-00000` bucket folders, and `__HIVE_DEFAULT_LIST_BUCKETING_DIR_NAME__` skew/list-bucketing folders are normalized to the nearest non-layout parent within the input root.
 - A representative-file schema sample and exact split are then used to refine `schemaSignature` and split groups again if necessary.
 - Only multi-file groups with confirmed identical schemas can be promoted to a directory-level identifier.
 - Archive entries and workbook sheets always keep their logical identifiers.
