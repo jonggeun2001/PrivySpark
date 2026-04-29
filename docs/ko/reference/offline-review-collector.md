@@ -36,7 +36,7 @@
 
 `review.html`은 담당자 입력 도구입니다. response JSON과 collector state는 이 경로에 저장하지 않습니다.
 
-scan output과 HTML 전달 경로를 분리해야 하는 운영 환경에서는 scan 실행 시 `--review-html-path <ABS_PATH_OR_URI>`를 지정합니다. 이때 HTML은 지정한 파일 경로에 생성되고 기본 `<scan-output>/review/review.html`은 만들지 않습니다.
+scan output과 HTML 전달 경로를 분리해야 하는 운영 환경에서는 scan 실행 시 `--review-html-dir <ABS_PATH_OR_URI>`를 지정합니다. 이때 HTML은 지정한 디렉토리의 `review.html`로 생성되고 기본 `<scan-output>/review/review.html`은 만들지 않습니다.
 
 누적 response와 state는 별도 root에서 관리합니다.
 
@@ -69,7 +69,7 @@ privyspark scan \
   --review-state-root <review-state-root>
 ```
 
-`--review-state-root`를 받은 scan은 내부적으로 `<review-state-root>/current/allowlist.jsonl`을 적용하고, 기본 `<scan-output>/review/review.html`을 추가 생성합니다. `--review-html-path`가 있으면 해당 파일 경로에 HTML을 생성합니다. `action_plan.jsonl`은 suppress에 쓰지 않고 collector의 `finding_status.jsonl` 계산에 사용합니다.
+`--review-state-root`를 받은 scan은 내부적으로 `<review-state-root>/current/allowlist.jsonl`을 적용하고, 기본 `<scan-output>/review/review.html`을 추가 생성합니다. `--review-html-dir`를 지정하면 해당 디렉토리의 `review.html`에 HTML을 생성합니다. `action_plan.jsonl`은 suppress에 쓰지 않고 collector의 `finding_status.jsonl` 계산에 사용합니다.
 
 ## 식별자 정책
 사람이 관리하는 별도 campaign/task ID를 만들지 않습니다.
@@ -183,7 +183,7 @@ finding 요약에는 다음 필드를 표시합니다.
 
 ```text
 --review-sample-mode raw|masked|none
---review-html-path <ABS_PATH_OR_URI>
+--review-html-dir <ABS_PATH_OR_URI>
 ```
 
 권장 기본값은 `masked`입니다.
@@ -397,7 +397,7 @@ scan은 `<review-state-root>/current/allowlist.jsonl`을 읽어 오탐을 suppre
      --review-state-root <review-state-root>
    ```
 
-2. 생성된 `<scan-output>/review/review.html` 또는 `--review-html-path`로 지정한 HTML 파일을 담당자에게 전달합니다.
+2. 생성된 `<scan-output>/review/review.html` 또는 `--review-html-dir`로 지정한 디렉토리의 `review.html` 파일을 담당자에게 전달합니다.
 3. 담당자는 HTML에서 검출 샘플을 확인하고 response JSON을 생성합니다. 여러 정탐 finding을 삭제 처리해야 하면 `true_positive`로 선택한 뒤 일괄 삭제 계획 등록으로 같은 삭제 계획을 채울 수 있습니다.
 4. 사내 시스템은 response JSON을 `<review-state-root>/inbox`에 업로드합니다.
 5. collector를 실행합니다.

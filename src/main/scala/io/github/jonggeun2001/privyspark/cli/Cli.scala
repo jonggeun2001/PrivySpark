@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.report.OutputFormats
 import scopt.OParser
 import scopt.{DefaultOParserSetup, OEffect, OEffectSetup}
 
+import java.util.Locale
 import scala.collection.mutable.ArrayBuffer
 
 final case class CliConfig(
@@ -23,7 +24,7 @@ final case class CliConfig(
   ignoreFile: Option[String] = None,
   allowlist: Option[String] = None,
   reviewStateRoot: Option[String] = None,
-  reviewHtmlPath: Option[String] = None,
+  reviewHtmlDir: Option[String] = None,
   reviewSampleMode: String = "masked",
   suppressions: Seq[String] = Seq.empty,
   suppressionFile: Option[String] = None,
@@ -76,6 +77,25 @@ object Cli {
       val piiType = trimmed.substring(delimiterIndex + 1).trim
       if (columnName.nonEmpty && piiType.nonEmpty) None
       else Some("suppress must use column:pii_type with non-empty values")
+    }
+  }
+
+  private def validateReviewHtmlDir(value: String): Option[String] = {
+    val trimmed = Option(value).map(_.trim).getOrElse("")
+    if (trimmed.isEmpty) {
+      Some("review-html-dir must not be blank")
+    } else {
+      val normalized = trimmed.reverse.dropWhile(ch => ch == '/' || ch == '\\').reverse
+      val lastSlashIndex = math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
+      val leafName =
+        if (lastSlashIndex >= 0) normalized.substring(lastSlashIndex + 1)
+        else normalized
+      val lowerLeafName = leafName.toLowerCase(Locale.ROOT)
+      if (lowerLeafName.endsWith(".html") || lowerLeafName.endsWith(".htm")) {
+        Some("review-html-dir must be a directory path, not an HTML file path")
+      } else {
+        None
+      }
     }
   }
 
@@ -189,14 +209,11 @@ object Cli {
         .optional()
         .action((value, config) => config.copy(reviewStateRoot = Some(value)))
         .text("누적 offline review state root 경로"),
-      opt[String]("review-html-path")
+      opt[String]("review-html-dir")
         .optional()
-        .action((value, config) => config.copy(reviewHtmlPath = Some(value.trim)))
-        .validate { value =>
-          if (Option(value).exists(_.trim.nonEmpty)) success
-          else failure("review-html-path must not be blank")
-        }
-        .text("offline review HTML 파일 출력 경로(미지정 시 <output>/review/review.html)"),
+        .action((value, config) => config.copy(reviewHtmlDir = Some(value.trim)))
+        .validate(value => validateReviewHtmlDir(value).fold(success)(failure))
+        .text("offline review HTML 파일 출력 디렉토리(미지정 시 <output>/review, 파일명은 review.html 고정)"),
       opt[String]("review-sample-mode")
         .optional()
         .action((value, config) => config.copy(reviewSampleMode = value.trim.toLowerCase))
