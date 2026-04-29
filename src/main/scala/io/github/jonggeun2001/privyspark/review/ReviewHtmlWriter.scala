@@ -117,27 +117,32 @@ private[privyspark] object ReviewHtmlWriter {
     table { border-collapse: collapse; width: 100%; }
     th, td { border: 1px solid #d5d8dc; padding: 8px; vertical-align: top; }
     th { background: #f4f6f7; text-align: left; }
+    thead th { position: sticky; top: 0; z-index: 10; }
     .sort-button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
     .sort-button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
     .sort-indicator { min-width: 1em; }
     textarea, input, select { width: 100%; box-sizing: border-box; }
-    .table-wrap { overflow-x: auto; }
+    .table-wrap { overflow: auto; max-height: 70vh; }
     .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
     .field { display: block; margin-bottom: 8px; }
     .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
-    .hint { color: #566573; font-size: 12px; line-height: 1.45; margin: 6px 0 10px; white-space: pre-wrap; }
+    .decision-toggle { display: flex; gap: 6px; flex-wrap: wrap; }
+    .decision-button { border: 1px solid #aeb6bf; background: #fff; border-radius: 4px; cursor: pointer; font-weight: 600; padding: 6px 10px; }
+    .decision-button[aria-pressed="true"] { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+    .decision-button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
+    .decision-button:disabled { background: #f4f6f7; color: #85929e; cursor: not-allowed; }
+    .review-guide { background: #f8fafc; border: 1px solid #d5d8dc; padding: 12px 16px; margin: 16px 0; line-height: 1.5; }
+    .review-guide summary { cursor: pointer; font-weight: 700; }
+    .review-guide ul { margin: 8px 0 0; padding-left: 20px; }
+    .review-guide code { background: #eef2f7; padding: 1px 4px; border-radius: 3px; }
     .metric-cell { text-align: right; white-space: nowrap; }
-    .pattern-cell { min-width: 180px; }
+    .date-cell { min-width: 180px; }
     .reason-cell, .plan-cell { min-width: 220px; }
-    .scope-cell { min-width: 240px; }
     .placeholder-cell { min-height: 120px; color: #566573; background: #fbfcfc; }
     .placeholder-summary { display: block; min-height: 120px; }
-    .multi-value { white-space: pre-wrap; }
-    .finding-summary { margin-bottom: 8px; }
-    .finding-summary:last-child { margin-bottom: 0; }
-    .group-count { color: #566573; font-size: 12px; margin-top: 4px; }
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
+    .bulk-actions textarea { min-height: 3em; min-width: 240px; }
     .decision-fields[hidden], [data-decision-section][hidden] { display: none; }
   </style>
 </head>
@@ -145,29 +150,37 @@ private[privyspark] object ReviewHtmlWriter {
   <h1>PrivySpark Review</h1>
   <p>Scan path: <code id="scanPath"></code></p>
   <p><label>응답자 <input id="responder"></label></p>
-  <p class="bulk-actions">
-    <label>삭제 예정일 <input id="bulkDeleteDueDate" type="date"></label>
-    <button type="button" id="applyBulkDeletePlan">일괄 삭제 계획 등록</button>
-  </p>
+  <div class="bulk-actions">
+    <label>정탐 사유/계획 <textarea id="bulkTruePositivePlan" rows="2"></textarea></label>
+    <label>조치 예정일 <input id="bulkTruePositiveDueDate" type="date"></label>
+    <button type="button" id="applyBulkTruePositivePlan">정탐 사유/예정일 일괄 등록</button>
+    <label>오탐 사유 <textarea id="bulkFalsePositiveReason" rows="2"></textarea></label>
+    <button type="button" id="applyBulkFalsePositiveReason">오탐 사유 일괄 등록</button>
+  </div>
+  <details class="review-guide" open aria-label="검토 안내">
+    <summary>검토 안내</summary>
+    <ul>
+      <li>오탐은 다음 스캔에서 제외하고, 정탐은 제외하지 않고 조치 계획만 남깁니다.</li>
+      <li>오탐 응답은 <code>exact</code> 범위로만 생성합니다. 다음 스캔에서 동일 fingerprint가 다시 일치할 때만 제외됩니다.</li>
+      <li>checksum 등 fingerprint metadata가 부족한 row는 exact 오탐으로 수집할 수 없어 오탐 선택을 비활성화합니다. 정탐으로 처리하거나 metadata를 보강해 다시 스캔하세요.</li>
+      <li>정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>.</li>
+      <li>개인정보 유형은 화면에 한글로 표시합니다.</li>
+    </ul>
+  </details>
   <div class="table-wrap">
   <table id="findingsTable">
     <thead>
       <tr>
         <th scope="col" data-sort-key="path" aria-sort="none"><button type="button" class="sort-button">경로 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="hive" aria-sort="none"><button type="button" class="sort-button">Hive <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="column" aria-sort="none"><button type="button" class="sort-button">컬럼 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="pii" aria-sort="none"><button type="button" class="sort-button">PII <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="sampled_row_count" aria-sort="none"><button type="button" class="sort-button">sampled_row_count <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="match_count" aria-sort="none"><button type="button" class="sort-button">match_count <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="non_empty_match_ratio" aria-sort="none"><button type="button" class="sort-button">non_empty_match_ratio <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="sample" aria-sort="none"><button type="button" class="sort-button">샘플 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="hive" aria-sort="none"><button type="button" class="sort-button">Hive 테이블 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="column" aria-sort="none"><button type="button" class="sort-button">컬럼명 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="pii" aria-sort="none"><button type="button" class="sort-button">개인정보 유형 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="sampled_row_count" aria-sort="none"><button type="button" class="sort-button">샘플 행 수 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="match_count" aria-sort="none"><button type="button" class="sort-button">검출 건수 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="non_empty_match_ratio" aria-sort="none"><button type="button" class="sort-button">검출 비율 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="sample" aria-sort="none"><button type="button" class="sort-button">검출 샘플 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="decision" aria-sort="none"><button type="button" class="sort-button">판정 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="scope" aria-sort="none"><button type="button" class="sort-button">Allowlist Scope <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="false_positive_reason" aria-sort="none"><button type="button" class="sort-button">오탐 사유 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="file_identifier_pattern" aria-sort="none"><button type="button" class="sort-button">file_identifier_pattern <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="column_name_pattern" aria-sort="none"><button type="button" class="sort-button">column_name_pattern <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="pii_type_pattern" aria-sort="none"><button type="button" class="sort-button">pii_type_pattern <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="expires_at" aria-sort="none"><button type="button" class="sort-button">pattern expires_at <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="action_plan" aria-sort="none"><button type="button" class="sort-button">정탐 조치 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="action_due_date" aria-sort="none"><button type="button" class="sort-button">조치 예정일 <span class="sort-indicator" aria-hidden="true"></span></button></th>
       </tr>
@@ -187,21 +200,21 @@ private[privyspark] object ReviewHtmlWriter {
       '"': '&quot;',
       "'": '&#39;'
     }[ch]));
-    const BulkDeleteActionPlan = '삭제 처리';
-    const scopeGuidance = group => {
-      const exactHint = group.fingerprint_complete
-        ? 'exact: 이 경로의 finding들을 각각 제외합니다. 다음 스캔에서 dataset_path, file_identifier, column_name, pii_type, file_size, mtime, checksum fingerprint가 모두 다시 일치할 때만 suppress됩니다. 일반적으로 기본 선택입니다.'
-        : 'exact: 이 경로에는 checksum 등 fingerprint metadata가 부족한 finding이 있어 collector에서 일부 응답이 거부될 수 있습니다. pattern을 쓰거나 정탐으로 처리하세요.';
-      const patternFileHint = group.has_multiple_file_evidence
-        ? '여러 파일 증거가 있어 file_identifier_pattern 필수입니다.'
-        : 'file_identifier_pattern을 비우면 현재 대표 file_identifier를 사용합니다.';
-      return [
-        exactHint,
-        'pattern: 반복 오탐을 넓게 제외합니다. 사유와 expires_at(YYYY-MM-DD)이 필수이고 pattern 필드 중 하나 이상 필요합니다.',
-        patternFileHint,
-        '*는 glob 와일드카드입니다. pii_type=* 금지.'
-      ].join('\\n');
+    const PiiTypeLabels = {
+      phone_number: '전화번호',
+      email: '이메일',
+      resident_registration_number: '주민등록번호',
+      foreign_registration_number: '외국인등록번호',
+      driver_license_number: '운전면허번호',
+      address: '주소',
+      bank_account_number: '계좌번호',
+      credit_card_number: '신용카드번호',
+      passport_number: '여권번호',
+      ip_address: 'IP 주소'
     };
+    function displayPiiType(value) {
+      return PiiTypeLabels[value] || value;
+    }
     function formatResponseTimestamp(date) {
       const pad = value => String(value).padStart(2, '0');
       return String(date.getFullYear()) +
@@ -214,12 +227,7 @@ private[privyspark] object ReviewHtmlWriter {
     }
     const FormFieldDefaults = {
       decision: '',
-      allowlist_scope: 'exact',
       false_positive_reason: '',
-      file_identifier_pattern: '',
-      column_name_pattern: '',
-      pii_type_pattern: '',
-      expires_at: '',
       action_plan: '',
       action_due_date: ''
     };
@@ -227,54 +235,18 @@ private[privyspark] object ReviewHtmlWriter {
     const formState = new Map();
     const hydratedRows = new Map();
     const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
-    function uniqueValues(values) {
-      return Array.from(new Set(values.map(value => String(value ?? '').trim()).filter(Boolean)));
+    function defaultFormState() {
+      return Object.assign({}, FormFieldDefaults);
     }
-    function formatList(values) {
-      return uniqueValues(values).join('\\n');
-    }
-    function buildFindingGroups() {
-      const groups = [];
-      const groupByPath = new Map();
-      REVIEW_DATA.findings.forEach((finding, findingIndex) => {
-        const key = finding.file_identifier || `__finding_$${findingIndex}`;
-        let group = groupByPath.get(key);
-        if (!group) {
-          group = {
-            index: groups.length,
-            key,
-            file_identifier: finding.file_identifier,
-            finding_indexes: [],
-            findings: []
-          };
-          groupByPath.set(key, group);
-          groups.push(group);
-        }
-        group.finding_indexes.push(findingIndex);
-        group.findings.push(finding);
-      });
-      groups.forEach(group => {
-        group.hive_table_fqn = formatList(group.findings.map(finding => finding.hive_table_fqn));
-        group.column_name = formatList(group.findings.map(finding => finding.column_name));
-        group.pii_type = formatList(group.findings.map(finding => finding.pii_type));
-        group.match_count = group.findings.reduce((sum, finding) => sum + (Number(finding.match_count) || 0), 0);
-        group.sampled_row_count = Math.max(...group.findings.map(finding => Number(finding.sampled_row_count) || 0));
-        group.non_empty_match_ratio = Math.max(...group.findings.map(finding => Number(finding.non_empty_match_ratio) || 0));
-        group.fingerprint_complete = group.findings.every(finding => finding.fingerprint_complete);
-        group.has_multiple_file_evidence = group.findings.some(finding => finding.has_multiple_file_evidence);
-      });
-      return groups;
-    }
-    const FINDING_GROUPS = buildFindingGroups();
-    FINDING_GROUPS.forEach((_, index) => {
-      formState.set(index, Object.assign({}, FormFieldDefaults));
+    REVIEW_DATA.findings.forEach((finding, index) => {
+      formState.set(index, defaultFormState());
     });
     let sortState = { key: null, direction: 'asc' };
     let rowObserver = null;
     function getFormState(index) {
       const numericIndex = Number(index);
       if (!formState.has(numericIndex)) {
-        formState.set(numericIndex, Object.assign({}, FormFieldDefaults));
+        formState.set(numericIndex, defaultFormState());
       }
       return formState.get(numericIndex);
     }
@@ -294,49 +266,38 @@ private[privyspark] object ReviewHtmlWriter {
     function collectFormValues() {
       return formValuesSnapshot();
     }
-    function sampleSortText(group) {
-      return group.findings.map(finding =>
-        finding.evidence_samples.map(sample => [
-          finding.column_name,
-          finding.pii_type,
-          sample.file_identifier,
-          sample.sample_matched_fragment,
-          sample.sample_raw_value
-        ].join(' ')).join(' ')
-      ).join(' ');
+    function sampleSortText(finding) {
+      return finding.evidence_samples.map(sample => [
+        sample.sample_matched_fragment,
+        sample.sample_raw_value
+      ].join(' ')).join(' ');
     }
     function formSortText(index, fields) {
       const rowValues = getFormState(index);
       return fields.map(field => rowValues[field] || '').join(' ');
     }
     function getSortValue(index) {
-      const group = FINDING_GROUPS[index];
+      const finding = REVIEW_DATA.findings[index];
       switch (sortState.key) {
         case 'path':
-          return group.file_identifier;
+          return finding.file_identifier;
         case 'hive':
-          return group.hive_table_fqn;
+          return finding.hive_table_fqn;
         case 'column':
-          return group.column_name;
+          return finding.column_name;
         case 'pii':
-          return group.pii_type;
+          return displayPiiType(finding.pii_type);
         case 'sampled_row_count':
-          return Number(group.sampled_row_count) || 0;
+          return Number(finding.sampled_row_count) || 0;
         case 'match_count':
-          return Number(group.match_count) || 0;
+          return Number(finding.match_count) || 0;
         case 'non_empty_match_ratio':
-          return Number(group.non_empty_match_ratio) || 0;
+          return Number(finding.non_empty_match_ratio) || 0;
         case 'sample':
-          return sampleSortText(group);
+          return sampleSortText(finding);
         case 'decision':
           return formSortText(index, ['decision']);
-        case 'scope':
-          return formSortText(index, ['allowlist_scope']);
         case 'false_positive_reason':
-        case 'file_identifier_pattern':
-        case 'column_name_pattern':
-        case 'pii_type_pattern':
-        case 'expires_at':
         case 'action_plan':
         case 'action_due_date':
           return formSortText(index, [sortState.key]);
@@ -380,25 +341,43 @@ private[privyspark] object ReviewHtmlWriter {
           input.value = value;
         }
       });
+      updateDecisionButtons(row, index);
+    }
+    function updateDecisionButtons(row, index) {
+      const decision = getFormState(index).decision;
+      row.querySelectorAll('[data-decision-button]').forEach(button => {
+        button.setAttribute(
+          'aria-pressed',
+          String(button.getAttribute('data-decision-button') === decision)
+        );
+      });
     }
     function applyDecisionVisibility(row) {
-      const decisionInput = row.querySelector('[data-field="decision"]');
-      if (!decisionInput) {
+      if (!row) {
         return;
       }
-      const decision = decisionInput.value;
+      const decision = getFormState(Number(row.getAttribute('data-index'))).decision;
       row.querySelectorAll('[data-decision-section]').forEach(section => {
         section.hidden = section.getAttribute('data-decision-section') !== decision;
       });
     }
-    function applyBulkDeletePlan() {
-      const dueDate = document.getElementById('bulkDeleteDueDate').value;
+    function applyScopeVisibility(row) {
+      return row;
+    }
+    function applyBulkTruePositivePlan() {
+      const actionPlan = document.getElementById('bulkTruePositivePlan').value;
+      const dueDate = document.getElementById('bulkTruePositiveDueDate').value;
+      if (!actionPlan && !dueDate) {
+        return;
+      }
       const bulkSortKeys = new Set(['action_plan', 'action_due_date']);
       const shouldRefreshSort = bulkSortKeys.has(sortState.key);
       let changed = false;
       formState.forEach((values, index) => {
         if (values.decision === 'true_positive') {
-          values.action_plan = BulkDeleteActionPlan;
+          if (actionPlan) {
+            values.action_plan = actionPlan;
+          }
           if (dueDate) {
             values.action_due_date = dueDate;
           }
@@ -412,9 +391,35 @@ private[privyspark] object ReviewHtmlWriter {
         renderFindings();
       }
     }
+    function applyBulkFalsePositiveReason() {
+      const reason = document.getElementById('bulkFalsePositiveReason').value;
+      if (!reason) {
+        return;
+      }
+      const bulkSortKeys = new Set(['false_positive_reason']);
+      const shouldRefreshSort = bulkSortKeys.has(sortState.key);
+      let changed = false;
+      formState.forEach((values, index) => {
+        if (values.decision === 'false_positive') {
+          values.false_positive_reason = reason;
+          changed = true;
+          if (!shouldRefreshSort) {
+            updateHydratedRow(index);
+          }
+        }
+      });
+      if (changed && shouldRefreshSort) {
+        renderFindings();
+      }
+    }
     function sanitizeResponse(response) {
       if (response.decision === 'false_positive') {
         return Object.assign({}, response, {
+          allowlist_scope: 'exact',
+          file_identifier_pattern: null,
+          column_name_pattern: null,
+          pii_type_pattern: null,
+          expires_at: null,
           action_plan: null,
           action_due_date: null
         });
@@ -442,99 +447,49 @@ private[privyspark] object ReviewHtmlWriter {
       });
     }
     function renderPlaceholderRow(index) {
-      const group = FINDING_GROUPS[index];
+      const finding = REVIEW_DATA.findings[index];
       const summary = [
-        group.file_identifier,
-        group.hive_table_fqn,
-        group.column_name,
-        group.pii_type,
-        `$${group.findings.length} findings`
+        finding.file_identifier,
+        finding.hive_table_fqn,
+        finding.column_name,
+        displayPiiType(finding.pii_type)
       ].filter(Boolean).join(' / ');
-      const hiddenKeys = group.findings.map(finding =>
-        `<span hidden data-finding-key="$${escapeHtml(finding.finding_key)}">$${escapeHtml(finding.finding_key)}</span>`
-      ).join('');
-      return `<td colspan="17" class="placeholder-cell">$${hiddenKeys}<span class="placeholder-summary">$${escapeHtml(summary)}</span></td>`;
+      return `<td colspan="12" class="placeholder-cell"><span hidden data-finding-key="$${escapeHtml(finding.finding_key)}">$${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">$${escapeHtml(summary)}</span></td>`;
     }
-    function renderFindingSummaries(group) {
-      return group.findings.map(finding =>
-        `<div class="finding-summary">$${escapeHtml(finding.column_name)} / $${escapeHtml(finding.pii_type)}<div class="group-count">match_count=$${escapeHtml(finding.match_count)}, non_empty_match_ratio=$${escapeHtml(finding.non_empty_match_ratio)}</div></div>`
-      ).join('');
+    function renderSampleCell(finding) {
+      const samples = finding.evidence_samples.map(sample =>
+        escapeHtml(sample.sample_matched_fragment) + '\\n' +
+        escapeHtml(sample.sample_raw_value)
+      ).join('\\n---\\n');
+      return samples;
     }
-    function renderSampleCell(group) {
-      return group.findings.map(finding => {
-        const samples = finding.evidence_samples.map(sample =>
-          escapeHtml(sample.file_identifier) + '\\n' +
-          escapeHtml(sample.sample_matched_fragment) + '\\n' +
-          escapeHtml(sample.sample_raw_value)
-        ).join('\\n---\\n');
-        return `<div class="finding-summary">$${escapeHtml(finding.column_name)} / $${escapeHtml(finding.pii_type)}\\n$${samples}</div>`;
-      }).join('\\n---\\n');
-    }
-    function renderFindingCells(group, index) {
-      const hiddenKeys = group.findings.map(finding =>
-        `<span hidden data-finding-key="$${escapeHtml(finding.finding_key)}">$${escapeHtml(finding.finding_key)}</span>`
-      ).join('');
+    function renderFindingCells(finding, index) {
       return `
-        <td>$${escapeHtml(group.file_identifier)}$${hiddenKeys}<div class="group-count">$${escapeHtml(group.findings.length)} findings</div></td>
-        <td class="multi-value">$${escapeHtml(group.hive_table_fqn)}</td>
-        <td class="multi-value">$${escapeHtml(group.column_name)}</td>
-        <td class="multi-value">$${escapeHtml(group.pii_type)}</td>
-        <td class="metric-cell">$${escapeHtml(group.sampled_row_count)}</td>
-        <td class="metric-cell">$${escapeHtml(group.match_count)}</td>
-        <td class="metric-cell">$${escapeHtml(group.non_empty_match_ratio)}</td>
-        <td class="sample">$${renderFindingSummaries(group)}$${renderSampleCell(group)}</td>
+        <td>$${escapeHtml(finding.file_identifier)}<span hidden data-finding-key="$${escapeHtml(finding.finding_key)}">$${escapeHtml(finding.finding_key)}</span></td>
+        <td>$${escapeHtml(finding.hive_table_fqn)}</td>
+        <td>$${escapeHtml(finding.column_name)}</td>
+        <td>$${escapeHtml(displayPiiType(finding.pii_type))}</td>
+        <td class="metric-cell">$${escapeHtml(finding.sampled_row_count)}</td>
+        <td class="metric-cell">$${escapeHtml(finding.match_count)}</td>
+        <td class="metric-cell">$${escapeHtml(finding.non_empty_match_ratio)}</td>
+        <td class="sample">$${renderSampleCell(finding)}</td>
         <td>
-          <label class="field"><span>판정</span>
-            <select data-index="$${index}" data-field="decision">
-              <option value="">선택</option>
-              <option value="false_positive">오탐</option>
-              <option value="true_positive">정탐</option>
-            </select>
-          </label>
-          <div class="hint">오탐은 다음 스캔 suppress 대상입니다. 정탐은 suppress하지 않고 조치 계획을 남깁니다.</div>
-        </td>
-        <td class="scope-cell">
-          <div data-decision-section="false_positive">
-            <label class="field"><span>오탐 scope</span>
-              <select data-index="$${index}" data-field="allowlist_scope">
-                <option value="exact">exact</option>
-                <option value="pattern">pattern</option>
-              </select>
-            </label>
-            <div class="hint">$${escapeHtml(scopeGuidance(group))}</div>
+          <div class="decision-toggle" role="group" aria-label="판정">
+            <button type="button" class="decision-button" data-index="$${index}" data-decision-button="false_positive" aria-pressed="false"$${finding.fingerprint_complete ? '' : ' disabled'}>오탐</button>
+            <button type="button" class="decision-button" data-index="$${index}" data-decision-button="true_positive" aria-pressed="false">정탐</button>
           </div>
         </td>
         <td class="reason-cell">
           <div class="decision-fields" data-decision-section="false_positive">
-            <textarea data-index="$${index}" data-field="false_positive_reason" aria-label="오탐 사유" placeholder="오탐 판단 근거. exact와 pattern 모두 필수"></textarea>
-          </div>
-        </td>
-        <td class="pattern-cell">
-          <div class="decision-fields" data-decision-section="false_positive">
-            <input data-index="$${index}" data-field="file_identifier_pattern" aria-label="file_identifier_pattern" placeholder="예: project_db/customer/*">
-          </div>
-        </td>
-        <td class="pattern-cell">
-          <div class="decision-fields" data-decision-section="false_positive">
-            <input data-index="$${index}" data-field="column_name_pattern" aria-label="column_name_pattern" placeholder="예: temp_*">
-          </div>
-        </td>
-        <td class="pattern-cell">
-          <div class="decision-fields" data-decision-section="false_positive">
-            <input data-index="$${index}" data-field="pii_type_pattern" aria-label="pii_type_pattern" placeholder="예: driver_license_number (* 금지)">
-          </div>
-        </td>
-        <td class="pattern-cell">
-          <div class="decision-fields" data-decision-section="false_positive">
-            <input data-index="$${index}" data-field="expires_at" aria-label="pattern expires_at" placeholder="YYYY-MM-DD">
+            <textarea data-index="$${index}" data-field="false_positive_reason" aria-label="오탐 사유" placeholder="필수"></textarea>
           </div>
         </td>
         <td class="plan-cell">
           <div class="decision-fields" data-decision-section="true_positive">
-            <textarea data-index="$${index}" data-field="action_plan" aria-label="정탐 조치 계획" placeholder="정탐이면 필수. 예: 컬럼 마스킹, 삭제 처리"></textarea>
+            <textarea data-index="$${index}" data-field="action_plan" aria-label="정탐 조치 계획" placeholder="필수"></textarea>
           </div>
         </td>
-        <td class="pattern-cell">
+        <td class="date-cell">
           <div class="decision-fields" data-decision-section="true_positive">
             <input data-index="$${index}" data-field="action_due_date" aria-label="조치 예정일" placeholder="YYYY-MM-DD">
           </div>
@@ -545,11 +500,12 @@ private[privyspark] object ReviewHtmlWriter {
         return;
       }
       const index = Number(row.getAttribute('data-index'));
-      const group = FINDING_GROUPS[index];
-      row.innerHTML = renderFindingCells(group, index);
+      const finding = REVIEW_DATA.findings[index];
+      row.innerHTML = renderFindingCells(finding, index);
       row.setAttribute('data-hydrated', 'true');
       setFieldValues(row, index);
       applyDecisionVisibility(row);
+      applyScopeVisibility(row);
       hydratedRows.set(index, row);
     }
     function dehydrateRow(row) {
@@ -566,6 +522,7 @@ private[privyspark] object ReviewHtmlWriter {
       if (row) {
         setFieldValues(row, index);
         applyDecisionVisibility(row);
+        applyScopeVisibility(row);
       }
     }
     function resetRowObserver() {
@@ -595,7 +552,7 @@ private[privyspark] object ReviewHtmlWriter {
     function renderFindings() {
       resetRowObserver();
       const fragment = document.createDocumentFragment();
-      sortRows(FINDING_GROUPS.map((_, index) => index)).forEach(index => {
+      sortRows(REVIEW_DATA.findings.map((_, index) => index)).forEach(index => {
         const row = document.createElement('tr');
         row.setAttribute('data-index', String(index));
         row.setAttribute('data-hydrated', 'false');
@@ -616,6 +573,20 @@ private[privyspark] object ReviewHtmlWriter {
         renderFindings();
       });
     });
+    function handleDecisionClick(event) {
+      const button = event.target.closest('[data-decision-button]');
+      if (!button) {
+        return;
+      }
+      const index = button.getAttribute('data-index');
+      const decision = button.getAttribute('data-decision-button');
+      const currentDecision = getFormState(index).decision;
+      updateFormState(index, 'decision', currentDecision === decision ? '' : decision);
+      const row = button.closest('tr');
+      updateDecisionButtons(row, index);
+      applyDecisionVisibility(row);
+      applyScopeVisibility(row);
+    }
     function handleFormEvent(event) {
       if (!event.target.matches('[data-field]')) {
         return;
@@ -624,18 +595,18 @@ private[privyspark] object ReviewHtmlWriter {
       const index = input.getAttribute('data-index');
       const field = input.getAttribute('data-field');
       updateFormState(index, field, input.value);
-      if (field === 'decision') {
-        applyDecisionVisibility(input.closest('tr'));
-      }
     }
+    tbody.addEventListener('click', handleDecisionClick);
     tbody.addEventListener('input', handleFormEvent);
     tbody.addEventListener('change', handleFormEvent);
-    document.getElementById('applyBulkDeletePlan').addEventListener('click', applyBulkDeletePlan);
+    document.getElementById('applyBulkTruePositivePlan').addEventListener('click', applyBulkTruePositivePlan);
+    document.getElementById('applyBulkFalsePositiveReason').addEventListener('click', applyBulkFalsePositiveReason);
     renderFindings();
     document.getElementById('downloadResponse').addEventListener('click', () => {
       const values = collectFormValues();
-      const responses = FINDING_GROUPS.flatMap((group, groupIndex) =>
-        group.findings.map(finding => Object.assign({
+      const validationErrors = [];
+      const responses = REVIEW_DATA.findings.map((finding, index) => {
+        const response = Object.assign({
           finding_key: finding.finding_key,
           finding_hash: finding.finding_hash,
           file_identifier: finding.file_identifier,
@@ -644,15 +615,26 @@ private[privyspark] object ReviewHtmlWriter {
           file_identifier_pattern: null,
           column_name_pattern: null,
           pii_type_pattern: null
-        }, values[groupIndex] || {}))
-      ).map(sanitizeResponse).filter(response => response.decision);
+        }, values[index] || {});
+        if (response.decision === 'false_positive' && !finding.fingerprint_complete) {
+          validationErrors.push(
+            finding.file_identifier + ' / ' + finding.column_name + ' / ' + displayPiiType(finding.pii_type)
+          );
+        }
+        return response;
+      });
+      if (validationErrors.length > 0) {
+        alert(['fingerprint metadata가 부족한 finding은 exact 오탐으로 수집할 수 없습니다.'].concat(validationErrors).join('\\n'));
+        return;
+      }
+      const sanitizedResponses = responses.map(sanitizeResponse).filter(response => response.decision);
       const envelope = {
         schema_version: 1,
         scan_path: REVIEW_DATA.scan_path,
         scan_results_fingerprint: REVIEW_DATA.scan_results_fingerprint,
         responder: document.getElementById('responder').value.trim(),
         responded_at: new Date().toISOString(),
-        responses
+        responses: sanitizedResponses
       };
       const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);

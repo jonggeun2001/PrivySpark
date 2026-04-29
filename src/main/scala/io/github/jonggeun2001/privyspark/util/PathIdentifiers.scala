@@ -6,6 +6,13 @@ import org.apache.hadoop.fs.Path
 import scala.util.control.NonFatal
 
 private[privyspark] object PathIdentifiers {
+  private val HiveBucketDirectoryPattern = """(?i)^bucket[-_]\d+$""".r
+  private val HivePartitionDirectoryPattern = """^[^=/]+=[^/]*$""".r
+  private val HiveDefaultListBucketingDirectoryNames = Set(
+    "HIVE_DEFAULT_LIST_BUCKETING_DIR_NAME",
+    "__HIVE_DEFAULT_LIST_BUCKETING_DIR_NAME__"
+  )
+
   private def stripTrailingSlash(path: String): String = {
     val normalized = Option(path).getOrElse("").replace('\\', '/')
     if (normalized == "/") normalized else normalized.replaceAll("/+$", "")
@@ -63,6 +70,37 @@ private[privyspark] object PathIdentifiers {
         stripTrailingSlash(path)
     }
   }
+
+  def normalizeHiveLayoutGroupingPath(directoryPath: String, inputPath: String): String = {
+    val inputComparable = comparableGroupingPath(inputPath)
+
+    @annotation.tailrec
+    def loop(currentPath: String): String = {
+      val currentComparable = comparableGroupingPath(currentPath)
+      val current = new Path(currentPath)
+      val segment = current.getName
+      val parent = Option(current.getParent).map(_.toString)
+      if (
+        currentComparable == inputComparable ||
+        parent.isEmpty ||
+        !isHiveLayoutDirectorySegment(segment)
+      ) {
+        currentPath
+      } else {
+        loop(parent.get)
+      }
+    }
+
+    loop(directoryPath)
+  }
+
+  private def isHiveLayoutDirectorySegment(segment: String): Boolean =
+    segment match {
+      case HivePartitionDirectoryPattern() => true
+      case HiveBucketDirectoryPattern() => true
+      case name if HiveDefaultListBucketingDirectoryNames.contains(name.toUpperCase) => true
+      case _ => false
+    }
 
   def canonicalizePath(path: String): String = {
     val uri = new Path(path).toUri.normalize()

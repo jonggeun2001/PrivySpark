@@ -369,6 +369,75 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
+  test("scanDirectoryStructure groups hive partition bucket and skew layout directories as one path") {
+    val inputDir = Files.createTempDirectory("privyspark-hive-layout-group-")
+    val tableDir = Files.createDirectories(inputDir.resolve("events"))
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
+    val leftLayoutDir = Files.createDirectories(tableDir.resolve("dt=2026-04-28").resolve("bucket_00000"))
+    val rightLayoutDir = Files.createDirectories(
+      tableDir
+        .resolve("dt=2026-04-29")
+        .resolve("country=KR")
+        .resolve("__HIVE_DEFAULT_LIST_BUCKETING_DIR_NAME__")
+        .resolve("bucket-00001")
+    )
+
+    try {
+      import spark.implicits._
+
+      Seq(("alice@example.com", "click"))
+        .toDF("email", "event_type")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq(("bob@example.com", "view"))
+        .toDF("email", "event_type")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      Files.move(findDataFile(leftWriteDir, ".parquet").get, leftLayoutDir.resolve("part-a.parquet"))
+      Files.move(findDataFile(rightWriteDir, ".parquet").get, rightLayoutDir.resolve("part-b.parquet"))
+
+      val plan = DirectoryScanner.scanDirectoryStructure(
+        spark,
+        inputDir.toString,
+        inputDir.toString,
+        "2026-04-29T00:00:00Z"
+      )
+
+      val parquetGroups = plan.groups.filter(_.format == "parquet")
+      assert(plan.errors.isEmpty)
+      assert(parquetGroups.size == 1)
+      assert(parquetGroups.head.directoryPath.endsWith("/events"))
+      assert(parquetGroups.head.directoryIdentifierEligible)
+      assert(parquetGroups.head.logicalIdentifiersByKey.values.toSet == Set(
+        "events/dt=2026-04-28/bucket_00000/part-a.parquet",
+        "events/dt=2026-04-29/country=KR/__HIVE_DEFAULT_LIST_BUCKETING_DIR_NAME__/bucket-00001/part-b.parquet"
+      ))
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val (results, errors) = GroupScanner.scanGroup(
+        spark,
+        inputDir.toString,
+        parquetGroups.head,
+        rules,
+        sampleRatio = 1.0,
+        timestamp = "2026-04-29T00:00:00Z"
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(_.file_identifier).toSet == Set("events"))
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("events", "email", 2L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure emits debug logs for planning lifecycle") {
     val inputDir = Files.createTempDirectory("privyspark-debug-plan-")
 
