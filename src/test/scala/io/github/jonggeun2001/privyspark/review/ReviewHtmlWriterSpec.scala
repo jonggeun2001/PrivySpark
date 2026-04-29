@@ -128,6 +128,10 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("검토 안내"))
     assert(html.contains("개인정보 유형 패턴 <code>운전면허번호</code>"))
     assert(html.contains("개인정보 유형 패턴은 한글명 또는 원본 pii_type 값 모두 입력할 수 있습니다."))
+    assert(html.contains("여러 파일 증거가 있는 finding을 <code>pattern</code> 오탐으로 처리할 때는 경로 패턴이 필수입니다."))
+    assert(html.contains("const validationErrors = [];"))
+    assert(html.contains("finding.has_multiple_file_evidence"))
+    assert(html.contains("여러 파일 증거가 있는 pattern 오탐은 경로 패턴이 필요합니다."))
     assert(!html.contains("alice@example.com"))
     assert(html.contains("a***e@example.com"))
   }
@@ -229,6 +233,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("pattern"))
     assert(html.contains("project_db/customer/*"))
     assert(html.contains("개인정보 유형 패턴 <code>운전면허번호</code>"))
+    assert(html.contains("여러 파일 증거가 있는 finding을 <code>pattern</code> 오탐으로 처리할 때는 경로 패턴이 필수입니다."))
     assert(!html.contains("class=\"hint\""))
   }
 }
