@@ -23,6 +23,9 @@
     .decision-button[aria-pressed="true"] { background: #1f6feb; border-color: #1f6feb; color: #fff; }
     .decision-button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
     .decision-button:disabled { background: #f4f6f7; color: #85929e; cursor: not-allowed; }
+    .invalid-cell { background: #fff5f5; box-shadow: inset 0 0 0 2px #d93025; }
+    .invalid-cell input, .invalid-cell textarea, .decision-toggle[aria-invalid="true"] .decision-button { border-color: #d93025; }
+    .invalid-cell input:focus, .invalid-cell textarea:focus, .decision-toggle[aria-invalid="true"] .decision-button:focus { outline: 2px solid #d93025; outline-offset: 2px; }
     .review-guide { background: #f8fafc; border: 1px solid #d5d8dc; padding: 12px 16px; margin: 16px 0; line-height: 1.5; }
     .review-guide summary { cursor: pointer; font-weight: 700; }
     .review-guide ul { margin: 8px 0 0; padding-left: 20px; }
@@ -193,6 +196,7 @@
     const FormFieldNames = Object.keys(FormFieldDefaults);
     const formState = new Map();
     const hydratedRows = new Map();
+    const validationState = new Map();
     const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
     function defaultFormState() {
       return Object.assign({}, FormFieldDefaults);
@@ -214,6 +218,9 @@
         return;
       }
       getFormState(index)[field] = value;
+    }
+    function isBlank(value) {
+      return String(value ?? '').trim() === '';
     }
     function formValuesSnapshot() {
       const values = {};
@@ -323,6 +330,106 @@
     function applyScopeVisibility(row) {
       return row;
     }
+    function validationTarget(row, field) {
+      return field === 'decision'
+        ? row.querySelector('[data-validation-field="decision"]')
+        : row.querySelector('[data-field="' + field + '"]');
+    }
+    function validationFocusTarget(row, field) {
+      if (field === 'decision') {
+        return row.querySelector('[data-decision-button]:not(:disabled)') || row.querySelector('[data-decision-button]');
+      }
+      return row.querySelector('[data-field="' + field + '"]');
+    }
+    function applyValidationState(row, index) {
+      if (!row) {
+        return;
+      }
+      row.querySelectorAll('.invalid-cell').forEach(cell => cell.classList.remove('invalid-cell'));
+      row.querySelectorAll('[aria-invalid="true"]').forEach(field => field.setAttribute('aria-invalid', 'false'));
+      const fields = validationState.get(Number(index));
+      if (!fields) {
+        return;
+      }
+      fields.forEach(field => {
+        const target = validationTarget(row, field);
+        if (!target) {
+          return;
+        }
+        target.setAttribute('aria-invalid', 'true');
+        const cell = target.closest('td') || target;
+        cell.classList.add('invalid-cell');
+      });
+    }
+    function setValidationState(errors) {
+      validationState.clear();
+      errors.forEach(error => {
+        const fields = validationState.get(error.index) || new Set();
+        fields.add(error.field);
+        validationState.set(error.index, fields);
+      });
+      hydratedRows.forEach((row, index) => applyValidationState(row, index));
+    }
+    function clearValidationField(index, field) {
+      const numericIndex = Number(index);
+      const fields = validationState.get(numericIndex);
+      if (!fields) {
+        return;
+      }
+      fields.delete(field);
+      if (fields.size === 0) {
+        validationState.delete(numericIndex);
+      }
+      applyValidationState(hydratedRows.get(numericIndex), numericIndex);
+    }
+    function validateResponses(responses) {
+      const errors = [];
+      responses.forEach((response, index) => {
+        if (!response.decision) {
+          errors.push({ index, field: 'decision', message: '판정을 선택하세요.' });
+        } else if (response.decision === 'false_positive') {
+          if (isBlank(response.false_positive_reason)) {
+            errors.push({ index, field: 'false_positive_reason', message: '오탐 사유를 입력하세요.' });
+          }
+        } else if (response.decision === 'true_positive') {
+          if (isBlank(response.action_plan)) {
+            errors.push({ index, field: 'action_plan', message: '정탐 조치 계획을 입력하세요.' });
+          }
+          if (isBlank(response.action_due_date)) {
+            errors.push({ index, field: 'action_due_date', message: '조치 예정일을 입력하세요.' });
+          }
+        }
+      });
+      return errors;
+    }
+    function focusFirstValidationError(error) {
+      if (!error) {
+        return;
+      }
+      const row = tbody.querySelector('tr[data-index="' + error.index + '"]');
+      if (!row) {
+        return;
+      }
+      hydrateRow(row);
+      applyValidationState(row, error.index);
+      const target = validationFocusTarget(row, error.field);
+      const scrollTarget = validationTarget(row, error.field) || target || row;
+      scrollTarget.scrollIntoView({ block: 'center', inline: 'center' });
+      if (target && typeof target.focus === 'function') {
+        target.focus();
+      }
+    }
+    function firstValidationErrorInDisplayOrder(errors) {
+      const rows = Array.from(tbody.querySelectorAll('tr[data-index]'));
+      for (const row of rows) {
+        const index = Number(row.getAttribute('data-index'));
+        const error = errors.find(candidate => candidate.index === index);
+        if (error) {
+          return error;
+        }
+      }
+      return errors[0];
+    }
     function applyBulkTruePositivePlan() {
       const actionPlan = document.getElementById('bulkTruePositivePlan').value;
       const dueDate = document.getElementById('bulkTruePositiveDueDate').value;
@@ -336,9 +443,11 @@
         if (values.decision === 'true_positive') {
           if (actionPlan) {
             values.action_plan = actionPlan;
+            clearValidationField(index, 'action_plan');
           }
           if (dueDate) {
             values.action_due_date = dueDate;
+            clearValidationField(index, 'action_due_date');
           }
           changed = true;
           if (!shouldRefreshSort) {
@@ -361,6 +470,7 @@
       formState.forEach((values, index) => {
         if (values.decision === 'false_positive') {
           values.false_positive_reason = reason;
+          clearValidationField(index, 'false_positive_reason');
           changed = true;
           if (!shouldRefreshSort) {
             updateHydratedRow(index);
@@ -439,7 +549,7 @@
         <td class="metric-cell">${escapeHtml(finding.non_empty_match_ratio)}</td>
         <td class="sample">${renderSampleCell(finding)}</td>
         <td>
-          <div class="decision-toggle" role="group" aria-label="판정">
+          <div class="decision-toggle" role="group" aria-label="판정" data-validation-field="decision" aria-invalid="false">
             <button type="button" class="decision-button" data-index="${index}" data-decision-button="false_positive" aria-pressed="false"${finding.fingerprint_complete ? '' : ' disabled'}>오탐</button>
             <button type="button" class="decision-button" data-index="${index}" data-decision-button="true_positive" aria-pressed="false">정탐</button>
           </div>
@@ -456,7 +566,7 @@
         </td>
         <td class="date-cell">
           <div class="decision-fields" data-decision-section="true_positive">
-            <input data-index="${index}" data-field="action_due_date" aria-label="조치 예정일" placeholder="YYYY-MM-DD">
+            <input data-index="${index}" data-field="action_due_date" type="date" aria-label="조치 예정일" placeholder="YYYY-MM-DD">
           </div>
         </td>`;
     }
@@ -471,6 +581,7 @@
       setFieldValues(row, index);
       applyDecisionVisibility(row);
       applyScopeVisibility(row);
+      applyValidationState(row, index);
       hydratedRows.set(index, row);
     }
     function dehydrateRow(row) {
@@ -488,6 +599,7 @@
         setFieldValues(row, index);
         applyDecisionVisibility(row);
         applyScopeVisibility(row);
+        applyValidationState(row, index);
       }
     }
     function resetRowObserver() {
@@ -547,10 +659,15 @@
       const decision = button.getAttribute('data-decision-button');
       const currentDecision = getFormState(index).decision;
       updateFormState(index, 'decision', currentDecision === decision ? '' : decision);
+      clearValidationField(index, 'decision');
+      clearValidationField(index, 'false_positive_reason');
+      clearValidationField(index, 'action_plan');
+      clearValidationField(index, 'action_due_date');
       const row = button.closest('tr');
       updateDecisionButtons(row, index);
       applyDecisionVisibility(row);
       applyScopeVisibility(row);
+      applyValidationState(row, index);
     }
     function handleFormEvent(event) {
       if (!event.target.matches('[data-field]')) {
@@ -560,6 +677,9 @@
       const index = input.getAttribute('data-index');
       const field = input.getAttribute('data-field');
       updateFormState(index, field, input.value);
+      if (!isBlank(input.value)) {
+        clearValidationField(index, field);
+      }
     }
     tbody.addEventListener('click', handleDecisionClick);
     tbody.addEventListener('input', handleFormEvent);
@@ -585,6 +705,13 @@
         }
         return response;
       });
+      const responseValidationErrors = validateResponses(responses);
+      if (responseValidationErrors.length > 0) {
+        setValidationState(responseValidationErrors);
+        focusFirstValidationError(firstValidationErrorInDisplayOrder(responseValidationErrors));
+        return;
+      }
+      setValidationState([]);
       if (validationErrors.length > 0) {
         alert(['fingerprint metadata가 부족한 finding은 exact 오탐으로 수집할 수 없습니다.'].concat(validationErrors).join('\n'));
         return;
