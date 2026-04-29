@@ -5,7 +5,7 @@
 - Open it directly in a browser.
 - Click a table header to sort findings; click the same header again to reverse the order.
 - Table headers stay fixed while scrolling, and the shared guidance block can be collapsed or expanded.
-- The table keeps form state outside the DOM and hydrates only rows near the viewport, so the example matches the generated `review.html` behavior for large finding sets.
+- The table keeps form state outside the DOM, hydrates only rows near the viewport, and uses fixed column widths so scrolling does not resize columns while rows hydrate.
 - Review location, Hive table, column, PII type, and metrics in separate Korean-labeled columns; findings with the same path remain separate rows so each PII type can be judged independently.
 - PII types are displayed as Korean names such as `이메일` and `운전면허번호`; downloaded JSON keeps the collector's raw `pii_type` values.
 - Select decisions with the false-positive and true-positive buttons. The top guidance block contains the shared examples instead of repeating hints in every row.
