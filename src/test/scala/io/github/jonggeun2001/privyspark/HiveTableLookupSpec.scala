@@ -1,13 +1,56 @@
 package io.github.jonggeun2001.privyspark.hive
 
 import org.junit.runner.RunWith
+import org.apache.spark.SparkConf
+import org.apache.spark.sql.SparkSession
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.sql.{Connection, DriverManager}
+import java.util.Properties
 
 @RunWith(classOf[JUnitRunner])
 class HiveTableLookupSpec extends AnyFunSuite {
+  test("resolveDriverClass defaults to MariaDB when unset") {
+    val conf = new SparkConf(false)
+
+    val driverClass = HiveMetastoreJdbcConfig.resolveDriverClass(conf, None)
+
+    assert(driverClass == HiveMetastoreJdbcConfig.DefaultDriverClass)
+  }
+
+  test("resolveDriverClass prefers Spark conf when CLI value is unset") {
+    val conf = new SparkConf(false)
+      .set(HiveMetastoreJdbcConfig.DriverClassConfKey, "com.mysql.cj.jdbc.Driver")
+
+    val driverClass = HiveMetastoreJdbcConfig.resolveDriverClass(conf, None)
+
+    assert(driverClass == "com.mysql.cj.jdbc.Driver")
+  }
+
+  test("resolveDriverClass prefers CLI value over Spark conf") {
+    val conf = new SparkConf(false)
+      .set(HiveMetastoreJdbcConfig.DriverClassConfKey, "com.mysql.cj.jdbc.Driver")
+
+    val driverClass = HiveMetastoreJdbcConfig.resolveDriverClass(conf, Some("org.h2.Driver"))
+
+    assert(driverClass == "org.h2.Driver")
+  }
+
+  test("resolveDriverClass rejects blank Spark conf values") {
+    val conf = new SparkConf(false)
+      .set(HiveMetastoreJdbcConfig.DriverClassConfKey, "   ")
+
+    val error = intercept[IllegalArgumentException] {
+      HiveMetastoreJdbcConfig.resolveDriverClass(conf, None)
+    }
+
+    assert(error.getMessage.contains(HiveMetastoreJdbcConfig.DriverClassConfKey))
+    assert(error.getMessage.contains("must not be blank"))
+  }
+
   test("empty index returns blank fqn without throwing") {
     assert(HiveTableLookupIndex.Empty.lookup("/warehouse/sales/orders.parquet") == "")
     assert(HiveTableLookupIndex.Empty.lookup("") == "")
@@ -97,6 +140,40 @@ class HiveTableLookupSpec extends AnyFunSuite {
       ))
     } finally {
       connection.close()
+    }
+  }
+
+  test("buildLookupIndex loads the configured JDBC driver class") {
+    Class.forName("org.h2.Driver")
+    val spark = SparkSession.builder()
+      .appName("HiveTableLookupSpec")
+      .master("local[1]")
+      .config("spark.ui.enabled", "false")
+      .config("spark.driver.allowMultipleContexts", "true")
+      .getOrCreate()
+    val passwordPath = Files.createTempFile("privyspark-hive-password-", ".txt")
+    Files.write(passwordPath, "secret\n".getBytes(StandardCharsets.UTF_8))
+    val jdbcUrl = s"jdbc:h2:mem:privyspark_hive_lookup_configured_driver_${System.nanoTime()};DB_CLOSE_DELAY=-1"
+    val properties = new Properties()
+    properties.setProperty("user", "sa")
+    properties.setProperty("password", "secret")
+    val connection = DriverManager.getConnection(jdbcUrl, properties)
+    try {
+      createMetastoreSubset(connection)
+      execute(connection, "INSERT INTO DBS (DB_ID, NAME) VALUES (1, 'finance')")
+      execute(connection, "INSERT INTO SDS (SD_ID, LOCATION) VALUES (10, 'hdfs://nn/warehouse/finance.db/cards')")
+      execute(connection, "INSERT INTO TBLS (TBL_ID, DB_ID, SD_ID, TBL_NAME, TBL_TYPE) VALUES (100, 1, 10, 'cards', 'EXTERNAL_TABLE')")
+
+      val index = HiveTableLookup.buildLookupIndex(
+        spark,
+        Some(HiveMetastoreJdbcConfig(jdbcUrl, "sa", passwordPath.toString, "org.h2.Driver"))
+      )
+
+      assert(index.lookup("hdfs://nn/warehouse/finance.db/cards/part-00000.parquet") == "finance.cards")
+    } finally {
+      connection.close()
+      spark.stop()
+      Files.deleteIfExists(passwordPath)
     }
   }
 

@@ -28,9 +28,10 @@
 - `--review-sample-mode <raw|masked|none>`: sample display mode for `review.html`, default `masked`
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
 - `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
-- `--hive-metastore-jdbc-url <JDBC_URL>`: Hive Metastore underlying MariaDB JDBC URL, for example `jdbc:mariadb://hms-db.internal:3306/metastore`
+- `--hive-metastore-jdbc-url <JDBC_URL>`: Hive Metastore JDBC URL, for example `jdbc:mariadb://hms-db.internal:3306/metastore`
 - `--hive-metastore-user <USER>`: metastore read-only user
 - `--hive-metastore-password-file <ABS_PATH_OR_URI>`: file whose first line contains the password. `hdfs://`, `s3a://`, `file://`, and absolute paths are supported
+- `--hive-metastore-jdbc-driver-class <CLASS>`: Hive Metastore JDBC driver class. When the CLI value is omitted, PrivySpark uses the `spark.privyspark.hiveMetastore.jdbcDriverClass` Spark conf; when both are omitted, it defaults to `org.mariadb.jdbc.Driver`
 
 ## `review apply` CLI Arguments
 - `--scan-results <ABS_PATH_OR_URI>`: edited `scan_results` input path. `csv`, `parquet`, and `xlsx` (`scan_results` sheet) are supported.
@@ -66,9 +67,9 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 
 ## Hive Table Lookup
 - Hive table lookup is enabled only when `--hive-metastore-jdbc-url`, `--hive-metastore-user`, and `--hive-metastore-password-file` are all provided. Supplying only one or two options is a CLI error. Supplying none logs `hive_lookup_inactive`, and `hive_table_fqn` remains `""`.
-- When enabled, the driver queries Hive Metastore `DBS`/`TBLS`/`SDS` once through MariaDB JDBC and broadcasts a table-level `LOCATION` prefix index. If a result row's physical input path falls under a table prefix, `scan_results.hive_table_fqn` is filled with `db.table`.
+- When enabled, the driver queries Hive Metastore `DBS`/`TBLS`/`SDS` once through the configured JDBC driver class and broadcasts a table-level `LOCATION` prefix index. If a result row's physical input path falls under a table prefix, `scan_results.hive_table_fqn` is filled with `db.table`.
 - The password file is read through Hadoop `FileSystem`. Shared URIs such as `hdfs://` do not require extra YARN `--files` distribution. Client-local files must still be distributed first with `--files` or `PRIVYSPARK_SPARK_FILES`, then referenced by the distributed alias.
-- The MariaDB JDBC driver is not packaged in the Shadow JAR. To use Hive table lookup, install the driver on the cluster common classpath, or submit it through Spark `--jars` by setting `PRIVYSPARK_JARS=/path/to/mariadb-java-client.jar`. In environments that allow Maven package resolution, `PRIVYSPARK_PACKAGES=org.mariadb.jdbc:mariadb-java-client:3.4.1` is also supported.
+- JDBC driver JARs are not packaged in the Shadow JAR. The default driver class is `org.mariadb.jdbc.Driver`; set `--hive-metastore-jdbc-driver-class` or Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass` when using another driver. CLI values take precedence over Spark conf. To use Hive table lookup, install the driver on the cluster common classpath, or submit it through Spark `--jars` by setting `PRIVYSPARK_JARS=/path/to/driver.jar`. In environments that allow Maven package resolution, `PRIVYSPARK_PACKAGES=org.mariadb.jdbc:mariadb-java-client:3.4.1` is also supported.
 - If the URL does not define timeouts, defaults are `connectTimeout=5000` and `socketTimeout=30000`.
 - If JDBC connection, password-file reading, or metastore query fails, PrivySpark logs `hive_lookup_disabled` and continues with an empty mapping. Successful index creation logs `hive_lookup_ready size=<N>`.
 - Archive entries and Excel sheets are looked up by the host archive/workbook path after stripping `<archive>!<entry>` and `<workbook>#<sheet>` suffixes.

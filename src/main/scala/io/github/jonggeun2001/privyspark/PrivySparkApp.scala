@@ -229,7 +229,12 @@ object PrivySparkApp {
       jdbcUrl <- config.hiveMetastoreJdbcUrl
       user <- config.hiveMetastoreUser
       passwordFile <- config.hiveMetastorePasswordFile
-    } yield HiveMetastoreJdbcConfig(jdbcUrl, user, passwordFile)
+    } yield HiveMetastoreJdbcConfig(
+      jdbcUrl,
+      user,
+      passwordFile,
+      HiveMetastoreJdbcConfig.resolveDriverClass(spark.sparkContext.getConf, config.hiveMetastoreJdbcDriverClass)
+    )
     val hiveLookupBroadcast = HiveTableLookup.buildAndBroadcast(spark, hiveMetastoreConfig)
     DriverLogger.debug(
       "ruleset_loaded",
