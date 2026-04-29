@@ -124,7 +124,7 @@ GitHub Release에는 `privyspark-<tag>-review-response-viewer.html`도 함께 �
 
 HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 테이블 헤더는 스크롤 중에도 고정됩니다. 같은 `file_identifier` 경로에서 여러 PII가 검출되더라도 개인정보 유형별 판정이 다를 수 있으므로 각 finding은 별도 row로 표시합니다.
 
-브라우저 렌더링 비용을 낮추기 위해 `review.html`은 입력 상태를 DOM이 아닌 페이지 내부 상태에 보관하고, 화면 근처의 row만 실제 입력 필드로 hydrate합니다. 화면 밖 row는 가벼운 placeholder로 유지되지만, 입력한 판정/사유/조치 계획은 response JSON 생성 시 전체 finding 기준으로 포함됩니다. 정렬과 일괄 삭제 계획 적용도 이 내부 상태를 기준으로 처리하므로 화면에 보이지 않는 row의 입력값이 누락되지 않습니다.
+브라우저 렌더링 비용을 낮추기 위해 `review.html`은 입력 상태를 DOM이 아닌 페이지 내부 상태에 보관하고, 화면 근처의 row만 실제 입력 필드로 hydrate합니다. 화면 밖 row는 가벼운 placeholder로 유지되지만, 입력한 판정/사유/조치 계획은 response JSON 생성 시 전체 finding 기준으로 포함됩니다. 정렬과 일괄 사유/계획 적용도 이 내부 상태를 기준으로 처리하므로 화면에 보이지 않는 row의 입력값이 누락되지 않습니다.
 
 결정 값은 다음 중 하나입니다.
 - `false_positive`: 실제 개인정보가 아니므로 다음 스캔에서 suppress합니다.
@@ -133,14 +133,14 @@ HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을
 HTML 표는 검토자가 빠르게 훑을 수 있도록 주요 값을 별도 컬럼으로 보여줍니다.
 - `경로`, `Hive 테이블`, `컬럼명`, `개인정보 유형`: 검출 위치와 PII 타입을 각각 독립 컬럼으로 표시합니다. `개인정보 유형`은 `email`, `driver_license_number` 같은 내부 값을 `이메일`, `운전면허번호`처럼 한글명으로 표시합니다. `finding_key`는 response 생성과 검증에는 사용하지만 화면에는 hidden 값으로만 보관합니다.
 - `샘플 행 수`, `검출 건수`, `검출 비율`: 검토 판단에 필요한 핵심 지표를 개별 컬럼으로 표시합니다. `confidence`는 response JSON 검증용 데이터에는 남지만 표의 지표 컬럼에는 노출하지 않습니다.
-- `판정`: 오탐/정탐 판정만 선택합니다.
+- `판정`: 오탐/정탐 버튼으로 판정을 선택합니다.
 - `오탐 사유`, `정탐 조치 계획`, `조치 예정일`: 기존 사유/계획 입력 영역을 필드별 컬럼으로 나눠 입력합니다.
 
 반복되는 입력 힌트는 row마다 표시하지 않고 표 상단의 접기/펼치기 가능한 `검토 안내`에 한 번만 표시합니다. `review.html`에서 생성하는 오탐 응답은 `allowlist_scope=exact`로 고정하며, 별도의 오탐 제외 범위 선택 컬럼이나 pattern 입력 필드를 표시하지 않습니다. 화면에 표시되는 개인정보 유형은 한글명이지만 response JSON의 `pii_type`은 collector가 쓰는 원본 타입 값을 유지합니다.
 
 판정 선택 전에는 사유/계획 입력 영역을 숨깁니다. `false_positive`를 선택하면 오탐 사유만 표시하고, `true_positive`를 선택하면 조치 계획과 조치 예정일만 표시합니다.
 
-삭제 처리 대상 정탐이 여러 건이면 상단의 삭제 예정일을 입력한 뒤 `일괄 삭제 계획 등록`을 누릅니다. 이 버튼은 현재 `true_positive`로 선택된 finding에 `action_plan=삭제 처리`와 입력한 조치 예정일을 채웁니다.
+정탐 대상이 여러 건이면 상단의 정탐 사유/계획과 조치 예정일을 입력한 뒤 `정탐 사유/예정일 일괄 등록`을 누릅니다. 이 버튼은 현재 `true_positive`로 선택된 finding에 입력한 `action_plan`과 `action_due_date`를 채웁니다. 오탐 대상이 여러 건이면 오탐 사유를 입력한 뒤 `오탐 사유 일괄 등록`을 눌러 현재 `false_positive`로 선택된 finding의 `false_positive_reason`을 한 번에 채웁니다.
 
 오탐 입력 필수값:
 - 오탐 사유
@@ -167,7 +167,7 @@ finding 요약에는 다음 필드를 표시합니다.
 
 `finding_key`, `finding_hash`, `match_ratio`, `confidence`는 HTML 내부 데이터와 response 검증에는 사용하지만 검토 표의 일반 표시 컬럼으로는 노출하지 않습니다.
 
-상세 영역에는 evidence sample을 표시합니다.
+검출 샘플 컬럼에는 evidence sample의 값만 표시합니다. 컬럼명과 개인정보 유형은 별도 컬럼에 이미 있으므로 샘플 칸에는 반복 표시하지 않습니다.
 - `sample_matched_fragment`
 - `sample_raw_value`
 - `match_count`
