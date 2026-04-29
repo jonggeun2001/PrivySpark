@@ -8,11 +8,11 @@
 - The table keeps form state outside the DOM and hydrates only rows near the viewport, so the example matches the generated `review.html` behavior for large finding sets.
 - Review location, Hive table, column, PII type, and metrics in separate Korean-labeled columns; findings with the same path remain separate rows so each PII type can be judged independently.
 - PII types are displayed as Korean names such as `이메일` and `운전면허번호`; downloaded JSON keeps the collector's raw `pii_type` values.
-- Select decisions for one or more findings. The top guidance block contains the shared examples instead of repeating hints in every row.
-- The detection sample column shows matched fragments and raw sample context, while the path stays in the separate path column.
+- Select decisions with the false-positive and true-positive buttons. The top guidance block contains the shared examples instead of repeating hints in every row.
+- The detection sample column shows only matched fragments and raw sample context; path, column, and PII type stay in their separate columns.
 - False-positive responses always use `allowlist_scope=exact`; the scope selector column is not shown.
 - False-positive fields and true-positive action-plan fields are split into individual columns and shown based on the selected decision.
-- Use the bulk delete-plan button to fill `action_plan=삭제 처리` and a shared due date for findings already marked `true_positive`.
+- Use the bulk true-positive button to fill `action_plan` and `action_due_date` for findings already marked `true_positive`, or the bulk false-positive button to fill `false_positive_reason` for findings already marked `false_positive`.
 - Click the download button to create a `response-YYYYMMDD-HHMMSS.json` file.
 - The downloaded JSON contains one response object per finding, so it can be consumed by the existing collector schema.
 - The sample data is synthetic and masked; production `review.html` files are generated under `<scan-output>/review/review.html`.

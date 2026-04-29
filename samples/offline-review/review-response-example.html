@@ -18,6 +18,11 @@
     .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
     .field { display: block; margin-bottom: 8px; }
     .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
+    .decision-toggle { display: flex; gap: 6px; flex-wrap: wrap; }
+    .decision-button { border: 1px solid #aeb6bf; background: #fff; border-radius: 4px; cursor: pointer; font-weight: 600; padding: 6px 10px; }
+    .decision-button[aria-pressed="true"] { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+    .decision-button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
+    .decision-button:disabled { background: #f4f6f7; color: #85929e; cursor: not-allowed; }
     .review-guide { background: #f8fafc; border: 1px solid #d5d8dc; padding: 12px 16px; margin: 16px 0; line-height: 1.5; }
     .review-guide summary { cursor: pointer; font-weight: 700; }
     .review-guide ul { margin: 8px 0 0; padding-left: 20px; }
@@ -27,10 +32,9 @@
     .reason-cell, .plan-cell { min-width: 220px; }
     .placeholder-cell { min-height: 120px; color: #566573; background: #fbfcfc; }
     .placeholder-summary { display: block; min-height: 120px; }
-    .finding-summary { margin-bottom: 8px; }
-    .finding-summary:last-child { margin-bottom: 0; }
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
+    .bulk-actions textarea { min-height: 3em; min-width: 240px; }
     .decision-fields[hidden], [data-decision-section][hidden] { display: none; }
   </style>
 </head>
@@ -38,10 +42,13 @@
   <h1>PrivySpark Review Response Example</h1>
   <p>Scan path: <code id="scanPath"></code></p>
   <p><label>응답자 <input id="responder"></label></p>
-  <p class="bulk-actions">
-    <label>삭제 예정일 <input id="bulkDeleteDueDate" type="date"></label>
-    <button type="button" id="applyBulkDeletePlan">일괄 삭제 계획 등록</button>
-  </p>
+  <div class="bulk-actions">
+    <label>정탐 사유/계획 <textarea id="bulkTruePositivePlan" rows="2"></textarea></label>
+    <label>조치 예정일 <input id="bulkTruePositiveDueDate" type="date"></label>
+    <button type="button" id="applyBulkTruePositivePlan">정탐 사유/예정일 일괄 등록</button>
+    <label>오탐 사유 <textarea id="bulkFalsePositiveReason" rows="2"></textarea></label>
+    <button type="button" id="applyBulkFalsePositiveReason">오탐 사유 일괄 등록</button>
+  </div>
   <details class="review-guide" open aria-label="검토 안내">
     <summary>검토 안내</summary>
     <ul>
@@ -152,7 +159,6 @@
       '"': '&quot;',
       "'": '&#39;'
     }[ch]));
-    const BulkDeleteActionPlan = '삭제 처리';
     const PiiTypeLabels = {
       phone_number: '전화번호',
       email: '이메일',
@@ -221,8 +227,6 @@
     }
     function sampleSortText(finding) {
       return finding.evidence_samples.map(sample => [
-        finding.column_name,
-        displayPiiType(finding.pii_type),
         sample.sample_matched_fragment,
         sample.sample_raw_value
       ].join(' ')).join(' ');
@@ -296,13 +300,22 @@
           input.value = value;
         }
       });
+      updateDecisionButtons(row, index);
+    }
+    function updateDecisionButtons(row, index) {
+      const decision = getFormState(index).decision;
+      row.querySelectorAll('[data-decision-button]').forEach(button => {
+        button.setAttribute(
+          'aria-pressed',
+          String(button.getAttribute('data-decision-button') === decision)
+        );
+      });
     }
     function applyDecisionVisibility(row) {
-      const decisionInput = row.querySelector('[data-field="decision"]');
-      if (!decisionInput) {
+      if (!row) {
         return;
       }
-      const decision = decisionInput.value;
+      const decision = getFormState(Number(row.getAttribute('data-index'))).decision;
       row.querySelectorAll('[data-decision-section]').forEach(section => {
         section.hidden = section.getAttribute('data-decision-section') !== decision;
       });
@@ -310,17 +323,44 @@
     function applyScopeVisibility(row) {
       return row;
     }
-    function applyBulkDeletePlan() {
-      const dueDate = document.getElementById('bulkDeleteDueDate').value;
+    function applyBulkTruePositivePlan() {
+      const actionPlan = document.getElementById('bulkTruePositivePlan').value;
+      const dueDate = document.getElementById('bulkTruePositiveDueDate').value;
+      if (!actionPlan && !dueDate) {
+        return;
+      }
       const bulkSortKeys = new Set(['action_plan', 'action_due_date']);
       const shouldRefreshSort = bulkSortKeys.has(sortState.key);
       let changed = false;
       formState.forEach((values, index) => {
         if (values.decision === 'true_positive') {
-          values.action_plan = BulkDeleteActionPlan;
+          if (actionPlan) {
+            values.action_plan = actionPlan;
+          }
           if (dueDate) {
             values.action_due_date = dueDate;
           }
+          changed = true;
+          if (!shouldRefreshSort) {
+            updateHydratedRow(index);
+          }
+        }
+      });
+      if (changed && shouldRefreshSort) {
+        renderFindings();
+      }
+    }
+    function applyBulkFalsePositiveReason() {
+      const reason = document.getElementById('bulkFalsePositiveReason').value;
+      if (!reason) {
+        return;
+      }
+      const bulkSortKeys = new Set(['false_positive_reason']);
+      const shouldRefreshSort = bulkSortKeys.has(sortState.key);
+      let changed = false;
+      formState.forEach((values, index) => {
+        if (values.decision === 'false_positive') {
+          values.false_positive_reason = reason;
           changed = true;
           if (!shouldRefreshSort) {
             updateHydratedRow(index);
@@ -380,7 +420,7 @@
         escapeHtml(sample.sample_matched_fragment) + '\n' +
         escapeHtml(sample.sample_raw_value)
       ).join('\n---\n');
-      return `<div class="finding-summary">${escapeHtml(finding.column_name)} / ${escapeHtml(displayPiiType(finding.pii_type))}</div>${samples}`;
+      return samples;
     }
     function renderFindingCells(finding, index) {
       return `
@@ -393,13 +433,10 @@
         <td class="metric-cell">${escapeHtml(finding.non_empty_match_ratio)}</td>
         <td class="sample">${renderSampleCell(finding)}</td>
         <td>
-          <label class="field"><span>판정</span>
-            <select data-index="${index}" data-field="decision">
-              <option value="">선택</option>
-              <option value="false_positive"${finding.fingerprint_complete ? '' : ' disabled'}>오탐</option>
-              <option value="true_positive">정탐</option>
-            </select>
-          </label>
+          <div class="decision-toggle" role="group" aria-label="판정">
+            <button type="button" class="decision-button" data-index="${index}" data-decision-button="false_positive" aria-pressed="false"${finding.fingerprint_complete ? '' : ' disabled'}>오탐</button>
+            <button type="button" class="decision-button" data-index="${index}" data-decision-button="true_positive" aria-pressed="false">정탐</button>
+          </div>
         </td>
         <td class="reason-cell">
           <div class="decision-fields" data-decision-section="false_positive">
@@ -495,6 +532,20 @@
         renderFindings();
       });
     });
+    function handleDecisionClick(event) {
+      const button = event.target.closest('[data-decision-button]');
+      if (!button) {
+        return;
+      }
+      const index = button.getAttribute('data-index');
+      const decision = button.getAttribute('data-decision-button');
+      const currentDecision = getFormState(index).decision;
+      updateFormState(index, 'decision', currentDecision === decision ? '' : decision);
+      const row = button.closest('tr');
+      updateDecisionButtons(row, index);
+      applyDecisionVisibility(row);
+      applyScopeVisibility(row);
+    }
     function handleFormEvent(event) {
       if (!event.target.matches('[data-field]')) {
         return;
@@ -503,15 +554,12 @@
       const index = input.getAttribute('data-index');
       const field = input.getAttribute('data-field');
       updateFormState(index, field, input.value);
-      if (field === 'decision') {
-        const row = input.closest('tr');
-        applyDecisionVisibility(row);
-        applyScopeVisibility(row);
-      }
     }
+    tbody.addEventListener('click', handleDecisionClick);
     tbody.addEventListener('input', handleFormEvent);
     tbody.addEventListener('change', handleFormEvent);
-    document.getElementById('applyBulkDeletePlan').addEventListener('click', applyBulkDeletePlan);
+    document.getElementById('applyBulkTruePositivePlan').addEventListener('click', applyBulkTruePositivePlan);
+    document.getElementById('applyBulkFalsePositiveReason').addEventListener('click', applyBulkFalsePositiveReason);
     renderFindings();
     document.getElementById('downloadResponse').addEventListener('click', () => {
       const values = collectFormValues();
