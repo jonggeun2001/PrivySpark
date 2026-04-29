@@ -51,6 +51,7 @@
 - The default is the input-relative path.
 - Promotion to a directory-level identifier only happens when exact split confirms identical schemas, there are no pre-scan errors, and directory-level aggregation is allowed for the multi-file group.
 - The input-root directory group uses `.`.
+- Partition, bucket, and skew/list-bucketing layout directories are treated as layout metadata for grouping, so eligible rows identify the normalized table path rather than each physical layout subdirectory.
 - Archive entries use `<archive>!<entry>`.
 - Excel sheets use `<workbook>#<sheet>`.
 - Single-file directories below the input root may promote to directory identifiers when the same safety checks pass.
