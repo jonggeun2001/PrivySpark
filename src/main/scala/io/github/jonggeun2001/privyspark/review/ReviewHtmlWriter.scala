@@ -453,10 +453,11 @@ private[privyspark] object ReviewHtmlWriter {
       }
       hydrateRow(row);
       applyValidationState(row, error.index);
-      row.scrollIntoView({ block: 'center', inline: 'nearest' });
       const target = validationFocusTarget(row, error.field);
+      const scrollTarget = validationTarget(row, error.field) || target || row;
+      scrollTarget.scrollIntoView({ block: 'center', inline: 'center' });
       if (target && typeof target.focus === 'function') {
-        target.focus({ preventScroll: true });
+        target.focus();
       }
     }
     function firstValidationErrorInDisplayOrder(errors) {
