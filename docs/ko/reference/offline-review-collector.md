@@ -199,6 +199,8 @@ finding 요약에는 다음 필드를 표시합니다.
 
 response JSON은 하나의 파일 안에 여러 finding 응답을 담을 수 있는 envelope 구조입니다. 담당자가 HTML에서 여러 항목을 한 번에 검토하면 `responses` 배열에 여러 응답이 들어갑니다. 화면에 표시되는 개인정보 유형은 한글명이지만 response JSON의 `pii_type`은 collector가 쓰는 원본 타입 값을 유지합니다.
 
+`review.html`이 생성하는 response JSON은 선택한 판정에 필요한 필드만 포함합니다. 사용하지 않는 pattern, 오탐 사유, 정탐 조치 필드는 `null`로 채우지 않고 생략하며, collector는 생략된 선택 필드를 빈 값과 동일하게 처리합니다.
+
 ```json
 {
   "schema_version": 1,
@@ -215,13 +217,7 @@ response JSON은 하나의 파일 안에 여러 finding 응답을 담을 수 있
       "pii_type": "driver_license_number",
       "decision": "false_positive",
       "false_positive_reason": "내부 주문번호 포맷이 운전면허번호 규칙과 충돌",
-      "allowlist_scope": "exact",
-      "file_identifier_pattern": null,
-      "column_name_pattern": null,
-      "pii_type_pattern": null,
-      "expires_at": null,
-      "action_plan": null,
-      "action_due_date": null
+      "allowlist_scope": "exact"
     },
     {
       "finding_key": "sha256...",
@@ -230,12 +226,6 @@ response JSON은 하나의 파일 안에 여러 finding 응답을 담을 수 있
       "column_name": "email",
       "pii_type": "email",
       "decision": "true_positive",
-      "false_positive_reason": null,
-      "allowlist_scope": null,
-      "file_identifier_pattern": null,
-      "column_name_pattern": null,
-      "pii_type_pattern": null,
-      "expires_at": null,
       "action_plan": "컬럼 마스킹 적용 후 접근권한 재점검",
       "action_due_date": "2026-05-10"
     }
@@ -258,9 +248,7 @@ pattern allowlist response 예시는 다음과 같습니다.
   "file_identifier_pattern": "project_db/customer/*",
   "column_name_pattern": "temp_*",
   "pii_type_pattern": "driver_license_number",
-  "expires_at": "2026-07-31",
-  "action_plan": null,
-  "action_due_date": null
+  "expires_at": "2026-07-31"
 }
 ```
 

@@ -371,29 +371,35 @@
         renderFindings();
       }
     }
+    function compactResponseFields(response) {
+      return Object.fromEntries(Object.entries(response).filter(([, value]) =>
+        value !== null && value !== undefined && value !== ''
+      ));
+    }
+    function responseBase(response) {
+      return {
+        finding_key: response.finding_key,
+        finding_hash: response.finding_hash,
+        file_identifier: response.file_identifier,
+        column_name: response.column_name,
+        pii_type: response.pii_type,
+        decision: response.decision
+      };
+    }
     function sanitizeResponse(response) {
       if (response.decision === 'false_positive') {
-        return Object.assign({}, response, {
+        return compactResponseFields(Object.assign(responseBase(response), {
+          false_positive_reason: response.false_positive_reason,
           allowlist_scope: 'exact',
-          file_identifier_pattern: null,
-          column_name_pattern: null,
-          pii_type_pattern: null,
-          expires_at: null,
-          action_plan: null,
-          action_due_date: null
-        });
+        }));
       }
       if (response.decision === 'true_positive') {
-        return Object.assign({}, response, {
-          false_positive_reason: null,
-          allowlist_scope: null,
-          file_identifier_pattern: null,
-          column_name_pattern: null,
-          pii_type_pattern: null,
-          expires_at: null
-        });
+        return compactResponseFields(Object.assign(responseBase(response), {
+          action_plan: response.action_plan,
+          action_due_date: response.action_due_date
+        }));
       }
-      return response;
+      return compactResponseFields(response);
     }
     function updateSortHeaders() {
       document.querySelectorAll('#findingsTable th[data-sort-key]').forEach(th => {
@@ -570,10 +576,7 @@
           finding_hash: finding.finding_hash,
           file_identifier: finding.file_identifier,
           column_name: finding.column_name,
-          pii_type: finding.pii_type,
-          file_identifier_pattern: null,
-          column_name_pattern: null,
-          pii_type_pattern: null
+          pii_type: finding.pii_type
         }, values[index] || {});
         if (response.decision === 'false_positive' && !finding.fingerprint_complete) {
           validationErrors.push(
