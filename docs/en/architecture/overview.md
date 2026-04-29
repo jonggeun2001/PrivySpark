@@ -12,7 +12,7 @@
 - `RulesetLoader.scala`: built-in/external ruleset loading, suppression loading, and regex validation
 - `util/DriverLogger.scala`: driver log level parsing and structured log format
 - `detect/DetectionAggregator.scala`: metric aggregation and fallback strategies
-- `hive/HiveTableLookup.scala`: Hive Metastore MariaDB JDBC enumeration, table `LOCATION` normalization, longest-prefix lookup indexing, and broadcast creation
+- `hive/HiveTableLookup.scala`: Hive Metastore JDBC enumeration, table `LOCATION` normalization, longest-prefix lookup indexing, and broadcast creation
 - `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: input expansion, grouping, and scan execution
 - `report/ReportWriter.scala`: final report writing and format-specific outputs
 - `PrivySparkApp.scala`: input expansion, grouping, exact split, scan orchestration, progress/final report writing
@@ -25,7 +25,7 @@
 ## Processing Flow
 1. validate input path
 2. load ruleset, pre-validate regexes, and merge ruleset/CLI suppressions
-3. when all Hive JDBC lookup options are provided, query Hive Metastore MariaDB `DBS`/`TBLS`/`SDS` once on the driver and create a broadcast index of table `LOCATION` values
+3. when all Hive JDBC lookup options are provided, query Hive Metastore `DBS`/`TBLS`/`SDS` once on the driver through the configured JDBC driver class and create a broadcast index of table `LOCATION` values
 4. collect physical files and apply ignore-pattern filtering
 5. expand archive entries and workbook sheets from workbook metadata, pass through direct compressed text-style inputs, probe magic bytes, detect CSV dialects, normalize text fallback, and filter ignored archive entries
 6. build first-pass groups by `(directory, format)`
@@ -46,7 +46,7 @@
 - Suppression is applied during `DetectionAggregator.buildMetrics`, before metric planning, so excluded `(column, pii_type)` pairs never materialize result rows.
 - Directory discovery uses breadth-first traversal and parallelizes `listStatus` per BFS level, capped by the safety ceiling `64`.
 - After file discovery, effective pre-scan parallelism is bounded by the discovered file count and the safety ceiling `64`.
-- Hive lookup uses MariaDB JDBC rather than Spark Catalog/`enableHiveSupport()` and enumerates only table-level `LOCATION` values. If options are omitted or lookup fails, it falls back to an empty mapping. `hive_table_fqn` is intentionally excluded from review snapshot comparison payloads.
+- Hive lookup uses the configured JDBC driver class rather than Spark Catalog/`enableHiveSupport()` and enumerates only table-level `LOCATION` values. CLI `--hive-metastore-jdbc-driver-class` takes precedence over Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`; when both are omitted, the default driver class is `org.mariadb.jdbc.Driver`. If options are omitted or lookup fails, it falls back to an empty mapping. `hive_table_fqn` is intentionally excluded from review snapshot comparison payloads.
 - `xlsx` pre-scan lightly parses workbook metadata and header row XML on the driver to plan visible sheets and schema signatures. Sheet body row/cell reads are deferred to the executor-side StAX scan path.
 - `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.
 - `--file-sample-ratio` applies to both batch scans and file-fallback scans, but only when a group has more files than `--file-sample-min-files`; when it does apply, PrivySpark uniformly samples at least one file using `ceil(fileCount * ratio)`.

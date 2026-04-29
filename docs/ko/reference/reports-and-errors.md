@@ -40,7 +40,7 @@
 
 ## `hive_table_fqn` 규칙
 - `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다.
-- 활성화되면 driver가 Hive Metastore underlying MariaDB의 `DBS`/`TBLS`/`SDS` 테이블을 JDBC로 1회 조회하고, table-level `LOCATION`을 정규화 URI prefix 인덱스로 broadcast 합니다.
+- 활성화되면 driver가 설정된 JDBC driver class로 Hive Metastore `DBS`/`TBLS`/`SDS` 테이블을 1회 조회하고, table-level `LOCATION`을 정규화 URI prefix 인덱스로 broadcast 합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다. CLI 값이 Spark conf보다 우선합니다.
 - 결과 row의 입력 파일 경로가 등록된 table `LOCATION` 하위에 있으면 `db.table` 형식으로 `hive_table_fqn`을 채웁니다.
 - 여러 table `LOCATION`이 겹치면 정규화된 URI 기준 longest-prefix match를 사용합니다. 같은 길이의 중복 prefix는 deterministic 정렬 결과를 사용합니다.
 - archive entry와 Excel sheet 식별자는 `<archive>!<entry>`, `<workbook>#<sheet>`에서 host archive/workbook path만 떼어 lookup 합니다.

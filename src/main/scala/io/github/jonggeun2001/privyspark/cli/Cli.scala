@@ -30,7 +30,8 @@ final case class CliConfig(
   suppressionFile: Option[String] = None,
   hiveMetastoreJdbcUrl: Option[String] = None,
   hiveMetastoreUser: Option[String] = None,
-  hiveMetastorePasswordFile: Option[String] = None
+  hiveMetastorePasswordFile: Option[String] = None,
+  hiveMetastoreJdbcDriverClass: Option[String] = None
 ) {
   def effectiveOutputFormats: Seq[String] = OutputFormats.normalizeAll(outputFormats)
 }
@@ -244,7 +245,7 @@ object Cli {
           if (Option(value).exists(_.trim.nonEmpty)) success
           else failure("hive-metastore-jdbc-url must not be blank")
         }
-        .text("Hive Metastore MariaDB JDBC URL"),
+        .text("Hive Metastore JDBC URL"),
       opt[String]("hive-metastore-user")
         .optional()
         .action((value, config) => config.copy(hiveMetastoreUser = Some(value.trim)))
@@ -252,7 +253,7 @@ object Cli {
           if (Option(value).exists(_.trim.nonEmpty)) success
           else failure("hive-metastore-user must not be blank")
         }
-        .text("Hive Metastore MariaDB read-only user"),
+        .text("Hive Metastore read-only user"),
       opt[String]("hive-metastore-password-file")
         .optional()
         .action((value, config) => config.copy(hiveMetastorePasswordFile = Some(value.trim)))
@@ -261,6 +262,14 @@ object Cli {
           else failure("hive-metastore-password-file must not be blank")
         }
         .text("Hive Metastore password file path or URI"),
+      opt[String]("hive-metastore-jdbc-driver-class")
+        .optional()
+        .action((value, config) => config.copy(hiveMetastoreJdbcDriverClass = Some(value.trim)))
+        .validate { value =>
+          if (Option(value).exists(_.trim.nonEmpty)) success
+          else failure("hive-metastore-jdbc-driver-class must not be blank")
+        }
+        .text("Hive Metastore JDBC driver class name; falls back to spark.privyspark.hiveMetastore.jdbcDriverClass, then org.mariadb.jdbc.Driver"),
       checkConfig { config =>
         val configured = Seq(config.hiveMetastoreJdbcUrl, config.hiveMetastoreUser, config.hiveMetastorePasswordFile).count(_.nonEmpty)
         if (configured == 0 || configured == 3) success
