@@ -10,9 +10,8 @@
 - PII types are displayed as Korean names such as `이메일` and `운전면허번호`; downloaded JSON keeps the collector's raw `pii_type` values.
 - Select decisions for one or more findings. The top guidance block contains the shared examples instead of repeating hints in every row.
 - The detection sample column shows matched fragments and raw sample context, while the path stays in the separate path column.
-- Use the false-positive scope column only for false positives: `exact` for fingerprint-checked findings, `pattern` for repeated false positives. Pattern fields and expiry date appear inside that scope column when `pattern` is selected.
-- The example blocks JSON generation when a multi-file finding uses `pattern` without a path pattern, matching collector validation.
-- False-positive reason and true-positive action-plan fields are shown based on the selected decision.
+- False-positive responses always use `allowlist_scope=exact`; the scope selector column is not shown.
+- False-positive fields and true-positive action-plan fields are split into individual columns and shown based on the selected decision.
 - Use the bulk delete-plan button to fill `action_plan=삭제 처리` and a shared due date for findings already marked `true_positive`.
 - Click the download button to create a `response-YYYYMMDD-HHMMSS.json` file.
 - The downloaded JSON contains one response object per finding, so it can be consumed by the existing collector schema.

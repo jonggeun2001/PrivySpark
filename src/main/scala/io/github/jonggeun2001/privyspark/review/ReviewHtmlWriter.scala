@@ -131,16 +131,15 @@ private[privyspark] object ReviewHtmlWriter {
     .review-guide ul { margin: 8px 0 0; padding-left: 20px; }
     .review-guide code { background: #eef2f7; padding: 1px 4px; border-radius: 3px; }
     .metric-cell { text-align: right; white-space: nowrap; }
-    .reason-cell, .plan-cell { min-width: 220px; }
-    .scope-cell { min-width: 320px; }
     .date-cell { min-width: 180px; }
+    .reason-cell, .plan-cell { min-width: 220px; }
     .placeholder-cell { min-height: 120px; color: #566573; background: #fbfcfc; }
     .placeholder-summary { display: block; min-height: 120px; }
     .finding-summary { margin-bottom: 8px; }
     .finding-summary:last-child { margin-bottom: 0; }
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
-    .decision-fields[hidden], [data-decision-section][hidden], [data-scope-section][hidden] { display: none; }
+    .decision-fields[hidden], [data-decision-section][hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -155,11 +154,10 @@ private[privyspark] object ReviewHtmlWriter {
     <summary>검토 안내</summary>
     <ul>
       <li>오탐은 다음 스캔에서 제외하고, 정탐은 제외하지 않고 조치 계획만 남깁니다.</li>
-      <li>오탐 제외 범위는 동일 fingerprint만 제외하는 <code>exact</code>가 기본입니다. checksum 등 fingerprint metadata가 부족한 row는 <code>pattern</code> 또는 정탐으로 처리하세요.</li>
-      <li><code>pattern</code>은 반복 오탐용입니다. 예: 경로 패턴 <code>project_db/customer/*</code>, 컬럼명 패턴 <code>temp_*</code>, 개인정보 유형 패턴 <code>운전면허번호</code>, 만료일 <code>2026-12-31</code>. <code>*</code>는 glob 와일드카드이고 전체 개인정보 유형 wildcard는 허용하지 않습니다.</li>
-      <li>여러 파일 증거가 있는 finding을 <code>pattern</code> 오탐으로 처리할 때는 경로 패턴이 필수입니다.</li>
+      <li>오탐 응답은 <code>exact</code> 범위로만 생성합니다. 다음 스캔에서 동일 fingerprint가 다시 일치할 때만 제외됩니다.</li>
+      <li>checksum 등 fingerprint metadata가 부족한 row는 exact 오탐으로 수집할 수 없어 오탐 선택을 비활성화합니다. 정탐으로 처리하거나 metadata를 보강해 다시 스캔하세요.</li>
       <li>정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>.</li>
-      <li>개인정보 유형은 화면에 한글로 표시합니다. 개인정보 유형 패턴은 한글명 또는 원본 pii_type 값 모두 입력할 수 있습니다.</li>
+      <li>개인정보 유형은 화면에 한글로 표시합니다.</li>
     </ul>
   </details>
   <div class="table-wrap">
@@ -175,7 +173,6 @@ private[privyspark] object ReviewHtmlWriter {
         <th scope="col" data-sort-key="non_empty_match_ratio" aria-sort="none"><button type="button" class="sort-button">검출 비율 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="sample" aria-sort="none"><button type="button" class="sort-button">검출 샘플 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="decision" aria-sort="none"><button type="button" class="sort-button">판정 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="scope" aria-sort="none"><button type="button" class="sort-button">오탐 제외 범위 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="false_positive_reason" aria-sort="none"><button type="button" class="sort-button">오탐 사유 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="action_plan" aria-sort="none"><button type="button" class="sort-button">정탐 조치 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="action_due_date" aria-sort="none"><button type="button" class="sort-button">조치 예정일 <span class="sort-indicator" aria-hidden="true"></span></button></th>
@@ -209,16 +206,9 @@ private[privyspark] object ReviewHtmlWriter {
       passport_number: '여권번호',
       ip_address: 'IP 주소'
     };
-    const PiiTypeRawByLabel = Object.fromEntries(
-      Object.entries(PiiTypeLabels).map(([raw, label]) => [label, raw])
-    );
     function displayPiiType(value) {
       return PiiTypeLabels[value] || value;
     }
-    function normalizePiiTypePattern(value) {
-      const normalized = String(value ?? '').trim();
-      return PiiTypeRawByLabel[normalized] || normalized;
-    };
     function formatResponseTimestamp(date) {
       const pad = value => String(value).padStart(2, '0');
       return String(date.getFullYear()) +
@@ -231,12 +221,7 @@ private[privyspark] object ReviewHtmlWriter {
     }
     const FormFieldDefaults = {
       decision: '',
-      allowlist_scope: 'exact',
       false_positive_reason: '',
-      file_identifier_pattern: '',
-      column_name_pattern: '',
-      pii_type_pattern: '',
-      expires_at: '',
       action_plan: '',
       action_due_date: ''
     };
@@ -244,22 +229,18 @@ private[privyspark] object ReviewHtmlWriter {
     const formState = new Map();
     const hydratedRows = new Map();
     const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
-    function defaultFormState(finding) {
-      const defaults = Object.assign({}, FormFieldDefaults);
-      if (finding && !finding.fingerprint_complete) {
-        defaults.allowlist_scope = 'pattern';
-      }
-      return defaults;
+    function defaultFormState() {
+      return Object.assign({}, FormFieldDefaults);
     }
     REVIEW_DATA.findings.forEach((finding, index) => {
-      formState.set(index, defaultFormState(finding));
+      formState.set(index, defaultFormState());
     });
     let sortState = { key: null, direction: 'asc' };
     let rowObserver = null;
     function getFormState(index) {
       const numericIndex = Number(index);
       if (!formState.has(numericIndex)) {
-        formState.set(numericIndex, defaultFormState(REVIEW_DATA.findings[numericIndex]));
+        formState.set(numericIndex, defaultFormState());
       }
       return formState.get(numericIndex);
     }
@@ -312,8 +293,6 @@ private[privyspark] object ReviewHtmlWriter {
           return sampleSortText(finding);
         case 'decision':
           return formSortText(index, ['decision']);
-        case 'scope':
-          return formSortText(index, ['allowlist_scope']);
         case 'false_positive_reason':
         case 'action_plan':
         case 'action_due_date':
@@ -370,11 +349,7 @@ private[privyspark] object ReviewHtmlWriter {
       });
     }
     function applyScopeVisibility(row) {
-      const scopeInput = row.querySelector('[data-field="allowlist_scope"]');
-      const showPatternFields = scopeInput && scopeInput.value === 'pattern';
-      row.querySelectorAll('[data-scope-section="pattern"]').forEach(section => {
-        section.hidden = !showPatternFields;
-      });
+      return row;
     }
     function applyBulkDeletePlan() {
       const dueDate = document.getElementById('bulkDeleteDueDate').value;
@@ -400,6 +375,11 @@ private[privyspark] object ReviewHtmlWriter {
     function sanitizeResponse(response) {
       if (response.decision === 'false_positive') {
         return Object.assign({}, response, {
+          allowlist_scope: 'exact',
+          file_identifier_pattern: null,
+          column_name_pattern: null,
+          pii_type_pattern: null,
+          expires_at: null,
           action_plan: null,
           action_due_date: null
         });
@@ -434,7 +414,7 @@ private[privyspark] object ReviewHtmlWriter {
         finding.column_name,
         displayPiiType(finding.pii_type)
       ].filter(Boolean).join(' / ');
-      return `<td colspan="13" class="placeholder-cell"><span hidden data-finding-key="$${escapeHtml(finding.finding_key)}">$${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">$${escapeHtml(summary)}</span></td>`;
+      return `<td colspan="12" class="placeholder-cell"><span hidden data-finding-key="$${escapeHtml(finding.finding_key)}">$${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">$${escapeHtml(summary)}</span></td>`;
     }
     function renderSampleCell(finding) {
       const samples = finding.evidence_samples.map(sample =>
@@ -457,34 +437,10 @@ private[privyspark] object ReviewHtmlWriter {
           <label class="field"><span>판정</span>
             <select data-index="$${index}" data-field="decision">
               <option value="">선택</option>
-              <option value="false_positive">오탐</option>
+              <option value="false_positive"$${finding.fingerprint_complete ? '' : ' disabled'}>오탐</option>
               <option value="true_positive">정탐</option>
             </select>
           </label>
-        </td>
-        <td class="scope-cell">
-          <div data-decision-section="false_positive">
-            <label class="field"><span>오탐 제외 범위</span>
-              <select data-index="$${index}" data-field="allowlist_scope">
-                <option value="exact"$${finding.fingerprint_complete ? '' : ' disabled'}>exact</option>
-                <option value="pattern">pattern</option>
-              </select>
-            </label>
-            <div data-scope-section="pattern">
-              <label class="field"><span>경로 패턴</span>
-                <input data-index="$${index}" data-field="file_identifier_pattern" aria-label="경로 패턴" placeholder="선택">
-              </label>
-              <label class="field"><span>컬럼명 패턴</span>
-                <input data-index="$${index}" data-field="column_name_pattern" aria-label="컬럼명 패턴" placeholder="선택">
-              </label>
-              <label class="field"><span>개인정보 유형 패턴</span>
-                <input data-index="$${index}" data-field="pii_type_pattern" aria-label="개인정보 유형 패턴" placeholder="선택">
-              </label>
-              <label class="field"><span>패턴 만료일</span>
-                <input data-index="$${index}" data-field="expires_at" aria-label="패턴 만료일" placeholder="YYYY-MM-DD">
-              </label>
-            </div>
-          </div>
         </td>
         <td class="reason-cell">
           <div class="decision-fields" data-decision-section="false_positive">
@@ -593,9 +549,6 @@ private[privyspark] object ReviewHtmlWriter {
         applyDecisionVisibility(row);
         applyScopeVisibility(row);
       }
-      if (field === 'allowlist_scope') {
-        applyScopeVisibility(input.closest('tr'));
-      }
     }
     tbody.addEventListener('input', handleFormEvent);
     tbody.addEventListener('change', handleFormEvent);
@@ -615,13 +568,7 @@ private[privyspark] object ReviewHtmlWriter {
           column_name_pattern: null,
           pii_type_pattern: null
         }, values[index] || {});
-        response.pii_type_pattern = normalizePiiTypePattern(response.pii_type_pattern);
-        if (
-          response.decision === 'false_positive' &&
-          response.allowlist_scope === 'pattern' &&
-          finding.has_multiple_file_evidence &&
-          !String(response.file_identifier_pattern ?? '').trim()
-        ) {
+        if (response.decision === 'false_positive' && !finding.fingerprint_complete) {
           validationErrors.push(
             finding.file_identifier + ' / ' + finding.column_name + ' / ' + displayPiiType(finding.pii_type)
           );
@@ -629,7 +576,7 @@ private[privyspark] object ReviewHtmlWriter {
         return response;
       });
       if (validationErrors.length > 0) {
-        alert(['여러 파일 증거가 있는 pattern 오탐은 경로 패턴이 필요합니다.'].concat(validationErrors).join('\\n'));
+        alert(['fingerprint metadata가 부족한 finding은 exact 오탐으로 수집할 수 없습니다.'].concat(validationErrors).join('\\n'));
         return;
       }
       const sanitizedResponses = responses.map(sanitizeResponse).filter(response => response.decision);

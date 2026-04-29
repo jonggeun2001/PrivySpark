@@ -134,19 +134,17 @@ HTML 표는 검토자가 빠르게 훑을 수 있도록 주요 값을 별도 컬
 - `경로`, `Hive 테이블`, `컬럼명`, `개인정보 유형`: 검출 위치와 PII 타입을 각각 독립 컬럼으로 표시합니다. `개인정보 유형`은 `email`, `driver_license_number` 같은 내부 값을 `이메일`, `운전면허번호`처럼 한글명으로 표시합니다. `finding_key`는 response 생성과 검증에는 사용하지만 화면에는 hidden 값으로만 보관합니다.
 - `샘플 행 수`, `검출 건수`, `검출 비율`: 검토 판단에 필요한 핵심 지표를 개별 컬럼으로 표시합니다. `confidence`는 response JSON 검증용 데이터에는 남지만 표의 지표 컬럼에는 노출하지 않습니다.
 - `판정`: 오탐/정탐 판정만 선택합니다.
-- `오탐 제외 범위`: 오탐일 때만 `exact` 또는 `pattern`을 선택합니다. `pattern`을 선택하면 같은 셀 안에서 `경로 패턴`, `컬럼명 패턴`, `개인정보 유형 패턴`, `패턴 만료일`을 입력합니다.
-- `오탐 사유`, `정탐 조치 계획`, `조치 예정일`: 사유/계획 입력 영역을 필드별 컬럼으로 나눠 입력합니다.
+- `오탐 사유`, `정탐 조치 계획`, `조치 예정일`: 기존 사유/계획 입력 영역을 필드별 컬럼으로 나눠 입력합니다.
 
-반복되는 입력 힌트는 row마다 표시하지 않고 표 상단의 접기/펼치기 가능한 `검토 안내`에 한 번만 표시합니다. 개인정보 유형 패턴은 한글명 또는 원본 `pii_type` 값으로 입력할 수 있으며, HTML은 다운로드 시 한글명을 원본 `pii_type` 값으로 변환해 collector 스키마를 유지합니다. 여러 파일 증거가 있는 finding을 `pattern` 오탐으로 처리할 때 경로 패턴을 비우면 HTML이 response JSON 생성을 막아 collector reject를 줄입니다.
+반복되는 입력 힌트는 row마다 표시하지 않고 표 상단의 접기/펼치기 가능한 `검토 안내`에 한 번만 표시합니다. `review.html`에서 생성하는 오탐 응답은 `allowlist_scope=exact`로 고정하며, 별도의 오탐 제외 범위 선택 컬럼이나 pattern 입력 필드를 표시하지 않습니다. 화면에 표시되는 개인정보 유형은 한글명이지만 response JSON의 `pii_type`은 collector가 쓰는 원본 타입 값을 유지합니다.
 
-판정 선택 전에는 사유/계획 입력 영역을 숨깁니다. `false_positive`를 선택하면 오탐 사유와 오탐 제외 범위를 표시하고, 제외 범위를 `pattern`으로 선택했을 때만 pattern 필드를 표시합니다. `true_positive`를 선택하면 조치 계획과 조치 예정일만 표시합니다.
+판정 선택 전에는 사유/계획 입력 영역을 숨깁니다. `false_positive`를 선택하면 오탐 사유만 표시하고, `true_positive`를 선택하면 조치 계획과 조치 예정일만 표시합니다.
 
 삭제 처리 대상 정탐이 여러 건이면 상단의 삭제 예정일을 입력한 뒤 `일괄 삭제 계획 등록`을 누릅니다. 이 버튼은 현재 `true_positive`로 선택된 finding에 `action_plan=삭제 처리`와 입력한 조치 예정일을 채웁니다.
 
 오탐 입력 필수값:
 - 오탐 사유
-- allowlist scope: `exact` 또는 `pattern`
-- `pattern`인 경우 `file_identifier_pattern`, `column_name_pattern`, `pii_type_pattern` 중 하나 이상과 만료일
+- HTML이 자동으로 넣는 allowlist scope: `exact`
 
 정탐 입력 필수값:
 - 조치 계획
@@ -199,7 +197,7 @@ finding 요약에는 다음 필드를 표시합니다.
 ## Response JSON
 담당자가 HTML에서 제출 버튼을 누르면 response JSON 파일을 다운로드합니다. HTML 파일 자체를 회신받아 파싱하지 않습니다.
 
-response JSON은 하나의 파일 안에 여러 finding 응답을 담을 수 있는 envelope 구조입니다. 담당자가 HTML에서 여러 항목을 한 번에 검토하면 `responses` 배열에 여러 응답이 들어갑니다. 화면에 표시되는 개인정보 유형은 한글명이지만 response JSON의 `pii_type`과 `pii_type_pattern`은 collector가 쓰는 원본 타입 값을 유지합니다.
+response JSON은 하나의 파일 안에 여러 finding 응답을 담을 수 있는 envelope 구조입니다. 담당자가 HTML에서 여러 항목을 한 번에 검토하면 `responses` 배열에 여러 응답이 들어갑니다. 화면에 표시되는 개인정보 유형은 한글명이지만 response JSON의 `pii_type`은 collector가 쓰는 원본 타입 값을 유지합니다.
 
 ```json
 {
@@ -302,7 +300,7 @@ reject 사유 예시:
 ### Exact allowlist
 `allowlist_scope=exact`는 기존 allowlist 의미를 유지합니다.
 
-HTML에서는 일반 담당자 기본 선택지로 안내합니다. 단, finding의 fingerprint metadata가 완전하지 않으면 collector가 exact allowlist 응답을 거부하므로 HTML 힌트에 그 사실을 표시합니다.
+HTML에서는 오탐 응답을 항상 exact로 생성합니다. 단, finding의 fingerprint metadata가 완전하지 않으면 collector가 exact allowlist 응답을 거부할 수 있으므로 HTML 안내에 그 사실을 표시합니다.
 
 매칭 기준:
 - `dataset_path`
@@ -318,7 +316,7 @@ HTML에서는 일반 담당자 기본 선택지로 안내합니다. 단, finding
 ### Pattern allowlist
 `allowlist_scope=pattern`은 반복 오탐을 줄이기 위한 확장입니다.
 
-HTML에서는 반복 오탐용 확장 선택지로 안내합니다. pattern은 fingerprint 검증을 하지 못하므로 `false_positive_reason`, `expires_at`, 하나 이상의 pattern 필드를 요구합니다. 여러 파일 증거가 있는 finding은 collector가 `file_identifier_pattern`도 요구할 수 있으므로 표 상단 검토 안내에서 pattern 입력 예시를 함께 제공합니다.
+`review.html`은 pattern allowlist 응답을 생성하지 않습니다. 외부에서 만든 response JSON으로 pattern을 사용할 때는 fingerprint 검증을 하지 못하므로 `false_positive_reason`, `expires_at`, 하나 이상의 pattern 필드를 요구합니다. 여러 파일 증거가 있는 finding은 collector가 `file_identifier_pattern`도 요구할 수 있습니다.
 
 예시:
 
@@ -435,7 +433,7 @@ scan은 `<review-state-root>/current/allowlist.jsonl`을 읽어 오탐을 suppre
 
 오프라인 collector 흐름은 이보다 넓은 운영 모델입니다.
 - 입력은 response JSON입니다.
-- 오탐 exact allowlist와 pattern allowlist를 모두 생성합니다.
+- `review.html` 기본 흐름은 오탐 exact allowlist를 생성하고, collector는 외부 response JSON의 pattern allowlist도 처리할 수 있습니다.
 - 정탐 action plan을 누적합니다.
 - 여러 스캔에 걸친 누적 state를 유지합니다.
 
