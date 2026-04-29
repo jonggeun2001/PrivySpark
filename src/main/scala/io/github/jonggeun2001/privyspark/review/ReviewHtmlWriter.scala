@@ -130,6 +130,8 @@ private[privyspark] object ReviewHtmlWriter {
     .pattern-cell { min-width: 180px; }
     .reason-cell, .plan-cell { min-width: 220px; }
     .scope-cell { min-width: 240px; }
+    .placeholder-cell { min-height: 120px; color: #566573; background: #fbfcfc; }
+    .placeholder-summary { display: block; min-height: 120px; }
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
     .decision-fields[hidden], [data-decision-section][hidden] { display: none; }
@@ -206,16 +208,48 @@ private[privyspark] object ReviewHtmlWriter {
         pad(date.getMinutes()) +
         pad(date.getSeconds());
     }
+    const FormFieldDefaults = {
+      decision: '',
+      allowlist_scope: 'exact',
+      false_positive_reason: '',
+      file_identifier_pattern: '',
+      column_name_pattern: '',
+      pii_type_pattern: '',
+      expires_at: '',
+      action_plan: '',
+      action_due_date: ''
+    };
+    const FormFieldNames = Object.keys(FormFieldDefaults);
+    const formState = new Map();
+    const hydratedRows = new Map();
+    const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
+    REVIEW_DATA.findings.forEach((_, index) => {
+      formState.set(index, Object.assign({}, FormFieldDefaults));
+    });
     let sortState = { key: null, direction: 'asc' };
-    function collectFormValues() {
+    let rowObserver = null;
+    function getFormState(index) {
+      const numericIndex = Number(index);
+      if (!formState.has(numericIndex)) {
+        formState.set(numericIndex, Object.assign({}, FormFieldDefaults));
+      }
+      return formState.get(numericIndex);
+    }
+    function updateFormState(index, field, value) {
+      if (!FormFieldNames.includes(field)) {
+        return;
+      }
+      getFormState(index)[field] = value;
+    }
+    function formValuesSnapshot() {
       const values = {};
-      document.querySelectorAll('[data-index]').forEach(input => {
-        const index = input.getAttribute('data-index');
-        const field = input.getAttribute('data-field');
-        values[index] = values[index] || {};
-        values[index][field] = input.value;
+      formState.forEach((state, index) => {
+        values[index] = Object.assign({}, state);
       });
       return values;
+    }
+    function collectFormValues() {
+      return formValuesSnapshot();
     }
     function sampleSortText(finding) {
       return finding.evidence_samples.map(sample => [
@@ -224,12 +258,12 @@ private[privyspark] object ReviewHtmlWriter {
         sample.sample_raw_value
       ].join(' ')).join(' ');
     }
-    function formSortText(values, index, fields) {
-      const rowValues = values[index] || {};
+    function formSortText(index, fields) {
+      const rowValues = getFormState(index);
       return fields.map(field => rowValues[field] || '').join(' ');
     }
-    function getSortValue(row, values) {
-      const finding = row.finding;
+    function getSortValue(index) {
+      const finding = REVIEW_DATA.findings[index];
       switch (sortState.key) {
         case 'path':
           return finding.file_identifier;
@@ -248,9 +282,9 @@ private[privyspark] object ReviewHtmlWriter {
         case 'sample':
           return sampleSortText(finding);
         case 'decision':
-          return formSortText(values, row.index, ['decision']);
+          return formSortText(index, ['decision']);
         case 'scope':
-          return formSortText(values, row.index, ['allowlist_scope']);
+          return formSortText(index, ['allowlist_scope']);
         case 'false_positive_reason':
         case 'file_identifier_pattern':
         case 'column_name_pattern':
@@ -258,9 +292,9 @@ private[privyspark] object ReviewHtmlWriter {
         case 'expires_at':
         case 'action_plan':
         case 'action_due_date':
-          return formSortText(values, row.index, [sortState.key]);
+          return formSortText(index, [sortState.key]);
         default:
-          return row.index;
+          return index;
       }
     }
     function compareSortValues(left, right) {
@@ -279,47 +313,57 @@ private[privyspark] object ReviewHtmlWriter {
       if (typeof left === 'number' && typeof right === 'number') {
         return left - right;
       }
-      return String(left ?? '').localeCompare(String(right ?? ''), 'ko-KR', {
-        numeric: true,
-        sensitivity: 'base'
-      });
+      return collator.compare(String(left ?? ''), String(right ?? ''));
     }
-    function sortRows(rows, values) {
+    function sortRows(rows) {
       if (!sortState.key) {
-        return rows;
+        return rows.slice();
       }
       const direction = sortState.direction === 'desc' ? -1 : 1;
+      const sortKeys = new Map(rows.map(index => [index, getSortValue(index)]));
       return rows.slice().sort((left, right) => {
-        const result = compareSortValues(getSortValue(left, values), getSortValue(right, values));
-        return result === 0 ? left.index - right.index : result * direction;
+        const result = compareSortValues(sortKeys.get(left), sortKeys.get(right));
+        return result === 0 ? left - right : result * direction;
       });
     }
-    function setFieldValues(row, index, savedValues) {
-      Object.entries(savedValues[index] || {}).forEach(([field, value]) => {
-        const input = row.querySelector('[data-index="' + index + '"][data-field="' + field + '"]');
+    function setFieldValues(row, index) {
+      Object.entries(getFormState(index)).forEach(([field, value]) => {
+        const input = row.querySelector('[data-field="' + field + '"]');
         if (input) {
           input.value = value;
         }
       });
     }
     function applyDecisionVisibility(row) {
-      const decision = row.querySelector('[data-field="decision"]').value;
+      const decisionInput = row.querySelector('[data-field="decision"]');
+      if (!decisionInput) {
+        return;
+      }
+      const decision = decisionInput.value;
       row.querySelectorAll('[data-decision-section]').forEach(section => {
         section.hidden = section.getAttribute('data-decision-section') !== decision;
       });
     }
     function applyBulkDeletePlan() {
-      const values = collectFormValues();
       const dueDate = document.getElementById('bulkDeleteDueDate').value;
-      Object.keys(values).forEach(index => {
-        if (values[index].decision === 'true_positive') {
-          values[index].action_plan = BulkDeleteActionPlan;
+      const bulkSortKeys = new Set(['action_plan', 'action_due_date']);
+      const shouldRefreshSort = bulkSortKeys.has(sortState.key);
+      let changed = false;
+      formState.forEach((values, index) => {
+        if (values.decision === 'true_positive') {
+          values.action_plan = BulkDeleteActionPlan;
           if (dueDate) {
-            values[index].action_due_date = dueDate;
+            values.action_due_date = dueDate;
+          }
+          changed = true;
+          if (!shouldRefreshSort) {
+            updateHydratedRow(index);
           }
         }
       });
-      renderFindings(values);
+      if (changed && shouldRefreshSort) {
+        renderFindings();
+      }
     }
     function sanitizeResponse(response) {
       if (response.decision === 'false_positive') {
@@ -350,14 +394,18 @@ private[privyspark] object ReviewHtmlWriter {
         }
       });
     }
-    function renderFindings(savedValues = {}) {
-      tbody.innerHTML = '';
-      const rows = REVIEW_DATA.findings.map((finding, index) => ({ finding, index }));
-      sortRows(rows, savedValues).forEach(rowData => {
-        const finding = rowData.finding;
-        const index = rowData.index;
-        const row = document.createElement('tr');
-        row.innerHTML = `
+    function renderPlaceholderRow(index) {
+      const finding = REVIEW_DATA.findings[index];
+      const summary = [
+        finding.file_identifier,
+        finding.hive_table_fqn,
+        finding.column_name,
+        finding.pii_type
+      ].filter(Boolean).join(' / ');
+      return `<td colspan="17" class="placeholder-cell"><span hidden data-finding-key="$${escapeHtml(finding.finding_key)}">$${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">$${escapeHtml(summary)}</span></td>`;
+    }
+    function renderFindingCells(finding, index) {
+      return `
         <td>$${escapeHtml(finding.file_identifier)}<span hidden data-finding-key="$${escapeHtml(finding.finding_key)}">$${escapeHtml(finding.finding_key)}</span></td>
         <td>$${escapeHtml(finding.hive_table_fqn)}</td>
         <td>$${escapeHtml(finding.column_name)}</td>
@@ -422,28 +470,97 @@ private[privyspark] object ReviewHtmlWriter {
             <input data-index="$${index}" data-field="action_due_date" aria-label="조치 예정일" placeholder="YYYY-MM-DD">
           </div>
         </td>`;
-        setFieldValues(row, index, savedValues);
+    }
+    function hydrateRow(row) {
+      if (!row || row.getAttribute('data-hydrated') === 'true') {
+        return;
+      }
+      const index = Number(row.getAttribute('data-index'));
+      const finding = REVIEW_DATA.findings[index];
+      row.innerHTML = renderFindingCells(finding, index);
+      row.setAttribute('data-hydrated', 'true');
+      setFieldValues(row, index);
+      applyDecisionVisibility(row);
+      hydratedRows.set(index, row);
+    }
+    function dehydrateRow(row) {
+      if (!row || row.getAttribute('data-hydrated') !== 'true') {
+        return;
+      }
+      const index = Number(row.getAttribute('data-index'));
+      row.innerHTML = renderPlaceholderRow(index);
+      row.setAttribute('data-hydrated', 'false');
+      hydratedRows.delete(index);
+    }
+    function updateHydratedRow(index) {
+      const row = hydratedRows.get(Number(index));
+      if (row) {
+        setFieldValues(row, index);
         applyDecisionVisibility(row);
-        tbody.appendChild(row);
+      }
+    }
+    function resetRowObserver() {
+      hydratedRows.clear();
+      if (rowObserver) {
+        rowObserver.disconnect();
+      }
+      rowObserver = 'IntersectionObserver' in window
+        ? new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              hydrateRow(entry.target);
+            } else {
+              dehydrateRow(entry.target);
+            }
+          });
+        }, { root: null, rootMargin: '1000px 0px', threshold: 0 })
+        : null;
+    }
+    function observeRow(row) {
+      if (rowObserver) {
+        rowObserver.observe(row);
+      } else {
+        hydrateRow(row);
+      }
+    }
+    function renderFindings() {
+      resetRowObserver();
+      const fragment = document.createDocumentFragment();
+      sortRows(REVIEW_DATA.findings.map((_, index) => index)).forEach(index => {
+        const row = document.createElement('tr');
+        row.setAttribute('data-index', String(index));
+        row.setAttribute('data-hydrated', 'false');
+        row.innerHTML = renderPlaceholderRow(index);
+        fragment.appendChild(row);
       });
+      tbody.replaceChildren(fragment);
+      tbody.querySelectorAll('tr[data-index]').forEach(observeRow);
       updateSortHeaders();
     }
     document.querySelectorAll('#findingsTable th[data-sort-key] button').forEach(button => {
       button.addEventListener('click', () => {
         const key = button.closest('th').getAttribute('data-sort-key');
-        const savedValues = collectFormValues();
         sortState = {
           key,
           direction: sortState.key === key && sortState.direction === 'asc' ? 'desc' : 'asc'
         };
-        renderFindings(savedValues);
+        renderFindings();
       });
     });
-    tbody.addEventListener('change', event => {
-      if (event.target.matches('[data-field="decision"]')) {
-        applyDecisionVisibility(event.target.closest('tr'));
+    function handleFormEvent(event) {
+      if (!event.target.matches('[data-field]')) {
+        return;
       }
-    });
+      const input = event.target;
+      const index = input.getAttribute('data-index');
+      const field = input.getAttribute('data-field');
+      updateFormState(index, field, input.value);
+      if (field === 'decision') {
+        applyDecisionVisibility(input.closest('tr'));
+      }
+    }
+    tbody.addEventListener('input', handleFormEvent);
+    tbody.addEventListener('change', handleFormEvent);
     document.getElementById('applyBulkDeletePlan').addEventListener('click', applyBulkDeletePlan);
     renderFindings();
     document.getElementById('downloadResponse').addEventListener('click', () => {

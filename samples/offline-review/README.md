@@ -4,6 +4,7 @@
 
 - Open it directly in a browser.
 - Click a table header to sort findings; click the same header again to reverse the order.
+- The table keeps form state outside the DOM and hydrates only rows near the viewport, so the example matches the generated `review.html` behavior for large finding sets.
 - Review location, Hive table, column, PII type, and metrics in separate columns; the finding key is retained as hidden data for response generation.
 - Select decisions for one or more findings.
 - Use the separate Allowlist Scope column only for false positives: `exact` for a single fingerprint-checked finding, `pattern` for repeated false positives with a reason, expiry date, and pattern fields.
