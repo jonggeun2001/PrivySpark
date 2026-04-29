@@ -51,6 +51,42 @@ class HiveTableLookupSpec extends AnyFunSuite {
     assert(error.getMessage.contains("must not be blank"))
   }
 
+  test("connectionProperties applies default timeouts only to MariaDB or MySQL compatible drivers") {
+    val mariaDbProps = HiveTableLookup.connectionProperties(
+      HiveMetastoreJdbcConfig("jdbc:mariadb://hms-db.internal:3306/metastore", "metastore_ro", "/pw"),
+      "secret"
+    )
+    val mysqlProps = HiveTableLookup.connectionProperties(
+      HiveMetastoreJdbcConfig("jdbc:mysql://hms-db.internal:3306/metastore", "metastore_ro", "/pw", "com.mysql.cj.jdbc.Driver"),
+      "secret"
+    )
+    val postgresProps = HiveTableLookup.connectionProperties(
+      HiveMetastoreJdbcConfig("jdbc:postgresql://hms-db.internal:5432/metastore", "metastore_ro", "/pw", "org.postgresql.Driver"),
+      "secret"
+    )
+
+    assert(mariaDbProps.getProperty("connectTimeout") == "5000")
+    assert(mariaDbProps.getProperty("socketTimeout") == "30000")
+    assert(mysqlProps.getProperty("connectTimeout") == "5000")
+    assert(mysqlProps.getProperty("socketTimeout") == "30000")
+    assert(postgresProps.getProperty("connectTimeout") == null)
+    assert(postgresProps.getProperty("socketTimeout") == null)
+  }
+
+  test("connectionProperties keeps URL timeout values authoritative") {
+    val props = HiveTableLookup.connectionProperties(
+      HiveMetastoreJdbcConfig(
+        "jdbc:mariadb://hms-db.internal:3306/metastore?connectTimeout=111&socketTimeout=222",
+        "metastore_ro",
+        "/pw"
+      ),
+      "secret"
+    )
+
+    assert(props.getProperty("connectTimeout") == null)
+    assert(props.getProperty("socketTimeout") == null)
+  }
+
   test("empty index returns blank fqn without throwing") {
     assert(HiveTableLookupIndex.Empty.lookup("/warehouse/sales/orders.parquet") == "")
     assert(HiveTableLookupIndex.Empty.lookup("") == "")

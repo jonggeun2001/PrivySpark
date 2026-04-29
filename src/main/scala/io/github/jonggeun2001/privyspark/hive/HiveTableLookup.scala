@@ -207,17 +207,28 @@ object HiveTableLookup {
   private[hive] def normalizePathForLookup(rawPath: String): Option[String] =
     normalizeUriString(stripCompositeIdentifier(rawPath))
 
-  private def connectionProperties(config: HiveMetastoreJdbcConfig, password: String): Properties = {
+  private[hive] def connectionProperties(config: HiveMetastoreJdbcConfig, password: String): Properties = {
     val props = new Properties()
     props.setProperty("user", config.user)
     props.setProperty("password", password)
-    if (!urlHasProperty(config.jdbcUrl, "connectTimeout")) {
-      props.setProperty("connectTimeout", "5000")
-    }
-    if (!urlHasProperty(config.jdbcUrl, "socketTimeout")) {
-      props.setProperty("socketTimeout", "30000")
+    if (usesMariaDbCompatibleTimeouts(config)) {
+      if (!urlHasProperty(config.jdbcUrl, "connectTimeout")) {
+        props.setProperty("connectTimeout", "5000")
+      }
+      if (!urlHasProperty(config.jdbcUrl, "socketTimeout")) {
+        props.setProperty("socketTimeout", "30000")
+      }
     }
     props
+  }
+
+  private[hive] def usesMariaDbCompatibleTimeouts(config: HiveMetastoreJdbcConfig): Boolean = {
+    val driverClass = Option(config.driverClass).map(_.trim.toLowerCase).getOrElse("")
+    val jdbcUrl = Option(config.jdbcUrl).map(_.trim.toLowerCase).getOrElse("")
+    driverClass.startsWith("org.mariadb.") ||
+      driverClass.startsWith("com.mysql.") ||
+      jdbcUrl.startsWith("jdbc:mariadb:") ||
+      jdbcUrl.startsWith("jdbc:mysql:")
   }
 
   private def urlHasProperty(jdbcUrl: String, propertyName: String): Boolean = {
