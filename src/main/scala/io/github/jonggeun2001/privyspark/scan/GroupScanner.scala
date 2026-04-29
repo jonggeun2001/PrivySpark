@@ -7,7 +7,7 @@ import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 
-import scala.util.Random
+import scala.util.hashing.MurmurHash3
 
 private[privyspark] object GroupScanner {
   def scanGroups(
@@ -154,12 +154,18 @@ private[privyspark] object GroupScanner {
       hiveLookup = hiveLookup
     )
 
-  def selectSampledFileKeys(fileKeys: Seq[String], fileSampleRatio: Double): Seq[String] = {
+  def selectSampledFileKeys(fileKeys: Seq[String], fileSampleRatio: Double, samplingContext: String = ""): Seq[String] = {
     require(fileKeys.nonEmpty, "fileKeys must not be empty")
     require(fileSampleRatio > 0.0 && fileSampleRatio <= 1.0, "fileSampleRatio must be > 0.0 and <= 1.0")
 
     val sampleSize = math.max(1, math.min(fileKeys.size, math.ceil(fileKeys.size * fileSampleRatio).toInt))
-    val selectedKeySet = Random.shuffle(fileKeys.indices.toVector).take(sampleSize).map(fileKeys).toSet
+    val selectedKeySet = fileKeys
+      .sortBy(fileKey => (stableSampleHash(samplingContext, fileKey), fileKey))
+      .take(sampleSize)
+      .toSet
     fileKeys.filter(selectedKeySet.contains)
   }
+
+  private def stableSampleHash(samplingContext: String, fileKey: String): Long =
+    java.lang.Integer.toUnsignedLong(MurmurHash3.stringHash(s"${Option(samplingContext).getOrElse("")}\u0000$fileKey"))
 }

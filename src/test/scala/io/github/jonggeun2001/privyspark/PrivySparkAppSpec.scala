@@ -1585,6 +1585,16 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(sampledKeys.forall(Set("a", "b", "c", "d").contains))
   }
 
+  test("selectSampledFileKeys is stable for the same file set") {
+    val fileKeys = Seq("part-0001.csv", "part-0002.csv", "part-0003.csv", "part-0004.csv", "part-0005.csv")
+    val sampledRuns = (1 to 20).map(_ => GroupScanner.selectSampledFileKeys(fileKeys, 0.4, "reviews"))
+    val reversedInputSample = GroupScanner.selectSampledFileKeys(fileKeys.reverse, 0.4, "reviews").toSet
+
+    assert(sampledRuns.distinct.size == 1)
+    assert(sampledRuns.head.size == 2)
+    assert(sampledRuns.head.toSet == reversedInputSample)
+  }
+
   test("scanGroupBatch retries when a transiently missing file becomes readable") {
     val inputDir = Files.createTempDirectory("privyspark-group-batch-retry-")
     val file = inputDir.resolve("part-0001.csv")
@@ -3341,6 +3351,54 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       assert(reviewSnapshotLines.size == 1)
       assert(reviewSnapshotLines.exists(_.contains(s"file=${matchedFile.toString}")))
       assert(!reviewSnapshotLines.exists(_.contains(cleanFile.toString)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroupByFile keeps file-sampled directory review scope stable") {
+    val inputDir = Files.createTempDirectory("privyspark-group-file-review-sampled-scope-")
+
+    try {
+      val files = (1 to 8).map { index =>
+        val file = inputDir.resolve(f"part-$index%04d.csv")
+        writeText(file,
+          "name,email\n" +
+            s"user$index,user$index@example.com\n")
+        file
+      }
+
+      val group = ScanGroup(
+        directoryPath = inputDir.toString,
+        format = "csv",
+        schemaSignature = "name|email",
+        filePaths = files.map(_.toString),
+        useDirectoryIdentifier = true
+      )
+
+      val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
+      val snapshots = (1 to 6).map { _ =>
+        val (results, errors) = GroupScanner.scanGroupByFile(
+          spark,
+          inputDir.toString,
+          group,
+          rules,
+          sampleRatio = 1.0,
+          timestamp = "2026-04-20T00:20:00Z",
+          fileParallelism = 1,
+          fileSampleRatio = Some(0.375),
+          fileSampleMinFiles = 1
+        )
+
+        assert(errors.isEmpty)
+        assert(results.size == 1)
+        assert(results.head.file_identifier == ".")
+        assert(results.head.review_scope_file_identifiers.nonEmpty)
+        assert(results.head.review_scope_file_fingerprints.nonEmpty)
+        results.head.review_scope_file_identifiers -> results.head.review_scope_file_fingerprints
+      }
+
+      assert(snapshots.distinct.size == 1)
     } finally {
       deleteRecursively(inputDir)
     }

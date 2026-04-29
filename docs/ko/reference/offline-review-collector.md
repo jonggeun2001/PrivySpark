@@ -124,7 +124,7 @@ GitHub Release에는 `privyspark-<tag>-review-response-viewer.html`도 함께 �
 
 HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 테이블 헤더는 스크롤 중에도 고정됩니다. 같은 `file_identifier` 경로에서 여러 PII가 검출되더라도 개인정보 유형별 판정이 다를 수 있으므로 각 finding은 별도 row로 표시합니다.
 
-브라우저 렌더링 비용을 낮추기 위해 `review.html`은 입력 상태를 DOM이 아닌 페이지 내부 상태에 보관하고, 화면 근처의 row만 실제 입력 필드로 hydrate합니다. 화면 밖 row는 가벼운 placeholder로 유지되지만, 입력한 판정/사유/조치 계획은 response JSON 생성 시 전체 finding 기준으로 포함됩니다. 정렬과 일괄 사유/계획 적용도 이 내부 상태를 기준으로 처리하므로 화면에 보이지 않는 row의 입력값이 누락되지 않습니다.
+브라우저 렌더링 비용을 낮추기 위해 `review.html`은 입력 상태를 DOM이 아닌 페이지 내부 상태에 보관하고, 화면 근처의 row만 실제 입력 필드로 hydrate합니다. 화면 밖 row는 가벼운 placeholder로 유지되지만, 입력한 판정/사유/조치 계획은 response JSON 생성 시 전체 finding 기준으로 포함됩니다. 정렬과 일괄 사유/계획 적용도 이 내부 상태를 기준으로 처리하므로 화면에 보이지 않는 row의 입력값이 누락되지 않습니다. 테이블은 고정 layout과 `colgroup` 기반 컬럼 폭을 사용해 row hydrate/dehydrate 중에도 스크롤 위치에 따라 컬럼 폭이 다시 계산되지 않도록 유지합니다.
 
 결정 값은 다음 중 하나입니다.
 - `false_positive`: 실제 개인정보가 아니므로 다음 스캔에서 suppress합니다.

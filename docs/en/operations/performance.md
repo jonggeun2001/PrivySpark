@@ -29,7 +29,7 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 - `--file-sample-ratio` can be more effective than `--sample-ratio` for small-file-heavy inputs because it reduces the number of files read at all.
 - The default `--file-sample-min-files 10` means small groups are not sampled. Lower the threshold if you want file sampling to kick in for smaller groups.
 
-Uniform random file sampling is not only a performance feature. It also preserves file-level concentration risk better than size-weighted sampling, which would over-bias large files.
+Stable hash-ranked file sampling is not only a performance feature. It keeps the sampled scope repeatable for the same group and file set while preserving file-level concentration risk better than size-weighted sampling, which would over-bias large files.
 
 ## When `scan_directory_structure_start` Is Slow
 This phase is usually driver-side work:

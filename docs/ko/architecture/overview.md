@@ -49,8 +49,9 @@
 - Hive lookup은 Spark Catalog/`enableHiveSupport()`를 사용하지 않고 설정된 JDBC driver class로 table-level `LOCATION`만 열거합니다. CLI `--hive-metastore-jdbc-driver-class`가 Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`보다 우선하고, 둘 다 없으면 기본 driver class `org.mariadb.jdbc.Driver`를 사용합니다. 옵션 미지정 또는 조회 실패 시 빈 매핑으로 진행합니다. 결과 비교용 review snapshot payload에는 `hive_table_fqn`을 포함하지 않습니다.
 - `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 계획합니다. sheet body row/cell 읽기는 executor-side StAX scan 단계로 넘깁니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.
-- `--file-sample-ratio`는 batch scan과 file fallback scan에서 적용하고, 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 균등 무작위 추출합니다.
+- `--file-sample-ratio`는 batch scan과 file fallback scan에서 적용하고, 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 안정적인 해시 순위로 선택합니다.
 - 실제 file sampling이 적용된 그룹에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.
+- file sampling이 적용된 group review row의 `review_scope_file_identifiers`, `review_scope_file_fingerprints`는 전체 디렉토리가 아니라 실제 선택된 파일 subset만 기준으로 기록됩니다.
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
 - 최종 출력 계약은 기본 `parquet/scan_results`, `parquet/scan_errors`이고, CLI `--output-format`에 따라 `csv/...`, `excel/*.xlsx`가 추가됩니다.
