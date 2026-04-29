@@ -96,12 +96,13 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 ## 샘플링
 - `--sample-ratio`는 비결정적 row sampling입니다.
 - `sampleRatio >= 1.0`이면 row sampling 없이 전체 행을 사용합니다.
-- `--file-sample-ratio`는 batch scan 경로와 file fallback scan 경로에서 그룹 내부 파일을 균등 무작위로 추출합니다.
+- `--file-sample-ratio`는 batch scan 경로와 file fallback scan 경로에서 그룹 내부 파일을 안정적인 해시 순위 subset으로 선택합니다.
 - file sampling은 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용합니다. 임계값 이하 그룹은 전체 파일을 그대로 스캔합니다.
 - 샘플 파일 수는 `ceil(fileCount * fileSampleRatio)`이며, sampling이 적용된 그룹에서는 최소 1개 파일을 항상 선택합니다.
 - `--file-sample-ratio`가 실제로 적용되고 동시에 `--sample-ratio < 1.0`이면 row sampling을 무시하고 `group_scan_row_sampling_ignored` warning 로그를 남깁니다.
+- file-sampled group row의 review fingerprint는 실제 선택되어 스캔된 sampled file scope만 대상으로 기록됩니다.
 
-균등 무작위 파일 추출을 택한 이유는 특정 데이터가 한 파일에 몰려 있을 가능성을 과소평가하지 않기 위해서입니다. 파일 크기 가중치 방식은 큰 파일을 더 자주 뽑아 concentration risk를 강화할 수 있습니다.
+안정적인 해시 순위 파일 샘플링은 같은 그룹/파일 집합에서 같은 subset을 유지하므로 데이터가 바뀌지 않았는데 review scope가 실행마다 흔들리는 문제를 막습니다. 다만 파일 크기 가중치는 쓰지 않습니다. 특정 데이터가 한 파일에 몰려 있을 가능성을 파일 단위로 보존해야 하며, 파일 크기 가중치 방식은 큰 파일을 더 자주 뽑아 concentration risk를 강화할 수 있습니다.
 
 ## Driver 로그
 - `PRIVYSPARK_DEBUG`, `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG`, `-Dprivyspark.debug`로 driver 로그 레벨을 설정할 수 있습니다.

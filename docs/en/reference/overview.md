@@ -22,9 +22,9 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 
 ## Sampling and Scan Units
 - `--sample-ratio` is row sampling.
-- `--file-sample-ratio` uniformly samples files inside both batch scans and file-fallback scans.
+- `--file-sample-ratio` selects a stable hash-ranked subset of files inside both batch scans and file-fallback scans.
 - File sampling only applies when the group has more files than `--file-sample-min-files`.
-- File sampling is a separate option so row sampling semantics stay intact while still reducing file reads for small-file-heavy groups and reflecting the operational concern that certain data may be concentrated in a single file.
+- File sampling is a separate option so row sampling semantics stay intact while still reducing file reads for small-file-heavy groups and reflecting the operational concern that certain data may be concentrated in a single file. Review fingerprints for file-sampled groups cover only the sampled file scope.
 
 ## Outputs
 - Result report: `scan_results`

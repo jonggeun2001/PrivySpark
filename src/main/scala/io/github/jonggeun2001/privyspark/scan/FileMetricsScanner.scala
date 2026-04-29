@@ -173,7 +173,11 @@ private[privyspark] object FileMetricsScanner {
   ): Seq[String] = {
     fileSampleRatio match {
       case Some(ratio) if group.filePaths.size > fileSampleMinFiles =>
-        val sampledKeys = GroupScanner.selectSampledFileKeys(group.filePaths, ratio)
+        val sampledKeys = GroupScanner.selectSampledFileKeys(
+          group.filePaths,
+          ratio,
+          s"${group.directoryPath}\u0000${group.format}\u0000${group.schemaSignature}"
+        )
         if (sampledKeys.size < group.filePaths.size) {
           if (sampleRatio < 1.0) {
             DriverLogger.warn(

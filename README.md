@@ -16,7 +16,7 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 판별하고, 안정적인 구분자와 헤더/데이터 구조가 확인되는 UTF-8 텍스트만 내부 `csv` 포맷으로 승격합니다. 그 외 바이너리처럼 보이지 않는 UTF-8 또는 EUC-KR 텍스트는 내부 `text` 포맷으로 정규화해 스캔합니다.
 - 0바이트 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 건너뜁니다.
 - password-protected archive, multi-volume RAR, RAR5 archive는 `scan_errors`에 명시적으로 기록합니다.
-- row sampling(`--sample-ratio`)과 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있고, `--file-sample-min-files`로 파일 샘플링을 적용할 최소 그룹 크기(기본 `10`)를 조정할 수 있습니다.
+- row sampling(`--sample-ratio`)과 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있고, file sampling은 같은 그룹/파일 집합에서 안정적인 해시 기반 subset을 선택합니다. `--file-sample-min-files`로 파일 샘플링을 적용할 최소 그룹 크기(기본 `10`)를 조정할 수 있습니다.
 - `--ignore`, `--ignore-file`로 gitignore 스타일 glob 패턴을 지정해 파일/아카이브 엔트리를 pre-scan 전에 제외할 수 있습니다.
 - ruleset `suppressions:` 또는 `--suppress`, `--suppression-file`로 특정 `(column, pii_type)` 조합만 결과에서 제외할 수 있습니다.
 - `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 기본 `<output>/review/review.html`을 생성할 수 있습니다. `--review-html-dir`을 지정하면 해당 디렉토리 아래 `review.html`로 출력 위치를 바꿀 수 있습니다. 회수한 response JSON은 `privyspark review collect`로 누적 allowlist/action plan에 반영합니다.
@@ -64,7 +64,7 @@ bin/privyspark-submit \
   --hive-metastore-jdbc-driver-class org.mariadb.jdbc.Driver
 ```
 
-`--file-sample-ratio`는 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용됩니다. 실제 파일 샘플링이 적용된 그룹에서는 `--sample-ratio < 1.0` row sampling을 무시하고 warning 로그를 남깁니다.
+`--file-sample-ratio`는 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용됩니다. 같은 그룹/파일 집합에서는 해시 기반 선택 결과가 반복 실행마다 유지되며, 실제 파일 샘플링이 적용된 그룹에서는 `--sample-ratio < 1.0` row sampling을 무시하고 warning 로그를 남깁니다. 이때 review fingerprint scope는 실제 선택되어 스캔된 파일 subset을 기준으로 기록됩니다.
 
 `xlsx` 실제 scan은 Spark executor task 안에서 StAX 기반 sheet row 스트리머로 처리합니다. `--excel-max-rows-in-memory`는 과거 spark-excel scan reader 호환용으로만 받으며, 명시하면 warning 로그를 남기고 실제 scan에는 사용하지 않습니다.
 
