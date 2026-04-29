@@ -34,14 +34,14 @@ private[privyspark] object ReviewHtmlWriter {
     scanPath: String,
     results: Seq[ScanResult],
     sampleMode: String,
-    reviewHtmlPath: Option[String]
+    reviewHtmlDir: Option[String]
   ): Unit = {
     val normalizedSampleMode = normalizeSampleMode(sampleMode).getOrElse(DefaultSampleMode)
     val findings = ReviewFindingBuilder.fromScanResultsIterator(
       results.iterator,
       ReviewFindingBuilder.DefaultMaxEvidenceSamples
     )
-    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlPath)
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlDir)
   }
 
   def write(
@@ -59,14 +59,14 @@ private[privyspark] object ReviewHtmlWriter {
     scanPath: String,
     resultDf: DataFrame,
     sampleMode: String,
-    reviewHtmlPath: Option[String]
+    reviewHtmlDir: Option[String]
   ): Unit = {
     val normalizedSampleMode = normalizeSampleMode(sampleMode).getOrElse(DefaultSampleMode)
     val findings = ReviewFindingBuilder.fromScanResultsIterator(
       ScanResultsReader.iterateScanResults(resultDf, ordered = true),
       ReviewFindingBuilder.DefaultMaxEvidenceSamples
     )
-    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlPath)
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlDir)
   }
 
   private def writeFindings(
@@ -75,11 +75,11 @@ private[privyspark] object ReviewHtmlWriter {
     scanPath: String,
     findings: Seq[ReviewFinding],
     sampleMode: String,
-    reviewHtmlPath: Option[String]
+    reviewHtmlDir: Option[String]
   ): Unit = {
     val scanResultsFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
     val html = renderHtml(scanPath, scanResultsFingerprint, findings, sampleMode)
-    val htmlPath = resolveHtmlPath(outputRoot, reviewHtmlPath)
+    val htmlPath = resolveHtmlPath(outputRoot, reviewHtmlDir)
     val fs = htmlPath.getFileSystem(conf)
     Option(htmlPath.getParent).foreach(fs.mkdirs)
     val writer = new BufferedWriter(new OutputStreamWriter(fs.create(htmlPath, true), StandardCharsets.UTF_8))
@@ -90,11 +90,11 @@ private[privyspark] object ReviewHtmlWriter {
     }
   }
 
-  private def resolveHtmlPath(outputRoot: String, reviewHtmlPath: Option[String]): Path =
-    reviewHtmlPath
+  private def resolveHtmlPath(outputRoot: String, reviewHtmlDir: Option[String]): Path =
+    reviewHtmlDir
       .map(_.trim)
       .filter(_.nonEmpty)
-      .map(new Path(_))
+      .map(directory => new Path(new Path(directory), "review.html"))
       .getOrElse(new Path(new Path(outputRoot), "review/review.html"))
 
   private def renderHtml(

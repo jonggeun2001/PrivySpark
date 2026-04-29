@@ -30,7 +30,7 @@ class CliSpec extends AnyFunSuite {
     assert(config.ignoreFile.isEmpty)
     assert(config.allowlist.isEmpty)
     assert(config.reviewStateRoot.isEmpty)
-    assert(config.reviewHtmlPath.isEmpty)
+    assert(config.reviewHtmlDir.isEmpty)
     assert(config.reviewSampleMode == "masked")
     assert(config.suppressions.isEmpty)
     assert(config.suppressionFile.isEmpty)
@@ -79,8 +79,8 @@ class CliSpec extends AnyFunSuite {
         "/etc/privyspark/allowlist.jsonl",
         "--review-state-root",
         "/var/lib/privyspark/review-state",
-        "--review-html-path",
-        "/var/lib/privyspark/reviews/latest-review.html",
+        "--review-html-dir",
+        "/var/lib/privyspark/reviews",
         "--review-sample-mode",
         "raw",
         "--ignore-file",
@@ -117,7 +117,7 @@ class CliSpec extends AnyFunSuite {
     assert(config.ignorePatterns == Seq("_SUCCESS", "backup/**"))
     assert(config.allowlist.contains("/etc/privyspark/allowlist.jsonl"))
     assert(config.reviewStateRoot.contains("/var/lib/privyspark/review-state"))
-    assert(config.reviewHtmlPath.contains("/var/lib/privyspark/reviews/latest-review.html"))
+    assert(config.reviewHtmlDir.contains("/var/lib/privyspark/reviews"))
     assert(config.reviewSampleMode == "raw")
     assert(config.ignoreFile.contains("/etc/privyspark/ignore.txt"))
     assert(config.hiveMetastoreJdbcUrl.contains("jdbc:mariadb://hms-db.internal:3306/metastore"))
@@ -189,6 +189,8 @@ class CliSpec extends AnyFunSuite {
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd:"))
     val blankSuppressionFile =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppression-file", "   "))
+    val reviewHtmlDirWithFileName =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--review-html-dir", "/data/review.html"))
     val invalidReviewSampleMode =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--review-sample-mode", "verbose"))
 
@@ -209,6 +211,8 @@ class CliSpec extends AnyFunSuite {
     assert(missingSuppressionColumn.isEmpty)
     assert(missingSuppressionPiiType.isEmpty)
     assert(blankSuppressionFile.isEmpty)
+    assert(reviewHtmlDirWithFileName.command.isEmpty)
+    assert(reviewHtmlDirWithFileName.errors.exists(_.contains("review-html-dir must be a directory path")))
     assert(invalidReviewSampleMode.isEmpty)
   }
 

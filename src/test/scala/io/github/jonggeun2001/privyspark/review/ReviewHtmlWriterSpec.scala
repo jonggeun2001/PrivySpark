@@ -88,10 +88,10 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("a***e@example.com"))
   }
 
-  test("write can place review html at a configured file path outside scan output") {
+  test("write can place review.html under a configured directory outside scan output") {
     val outputRoot = Files.createTempDirectory("privyspark-review-html-output-")
     val customRoot = Files.createTempDirectory("privyspark-review-html-custom-")
-    val customHtmlPath = customRoot.resolve("owner-review.html")
+    val customHtmlPath = customRoot.resolve("review.html")
     val result = ScanResult(
       dataset_path = "/data/project",
       scan_timestamp = "2026-04-27T10:00:00Z",
@@ -115,7 +115,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
       "/data/project",
       Seq(result),
       sampleMode = "none",
-      reviewHtmlPath = Some(customHtmlPath.toString)
+      reviewHtmlDir = Some(customRoot.toString)
     )
 
     val defaultHtmlPath = outputRoot.resolve("review").resolve("review.html")

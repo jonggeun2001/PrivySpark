@@ -24,7 +24,7 @@
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
 - `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html` by default
-- `--review-html-path <ABS_PATH_OR_URI>`: offline review HTML file output path. Defaults to `<output>/review/review.html`
+- `--review-html-dir <ABS_PATH_OR_URI>`: offline review HTML output directory. Defaults to `<output>/review`, with the filename fixed to `review.html`
 - `--review-sample-mode <raw|masked|none>`: sample display mode for `review.html`, default `masked`
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
 - `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
