@@ -120,7 +120,7 @@ collector는 response JSON의 `scan_results_fingerprint`가 현재 `--scan-resul
 
 GitHub Release에는 `privyspark-<tag>-review-response-example.html` 예시 파일을 함께 제공합니다. 이 파일은 더미 finding으로 response JSON 다운로드 흐름을 확인하기 위한 샘플이며, 실제 운영 검토에는 각 스캔이 생성한 `<scan-output>/review/review.html`을 사용합니다.
 
-GitHub Release에는 `privyspark-<tag>-review-response-viewer.html`도 함께 제공합니다. 운영자는 회수한 `privyspark-response.json`을 이 파일로 로컬에서 열어 envelope 메타데이터, schema/fingerprint 유무, finding별 판정과 allowlist/action plan 입력값을 확인할 수 있습니다. 이 파일은 JSON 확인용이며 collector state를 갱신하지 않습니다.
+GitHub Release에는 `privyspark-<tag>-review-response-viewer.html`도 함께 제공합니다. 운영자는 회수한 `response-YYYYMMDD-HHMMSS.json`을 이 파일로 로컬에서 열어 envelope 메타데이터, schema/fingerprint 유무, finding별 판정과 allowlist/action plan 입력값을 확인할 수 있습니다. 이 파일은 JSON 확인용이며 collector state를 갱신하지 않습니다.
 
 HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 각 finding에 대해 하나의 결정을 입력합니다.
 
@@ -132,6 +132,10 @@ HTML 표는 판정과 allowlist scope를 별도 컬럼으로 보여줍니다.
 - `Decision`: 오탐/정탐 판정만 선택합니다.
 - `Allowlist Scope`: 오탐일 때만 `exact` 또는 `pattern`을 선택합니다.
 - `Reason / Plan`: 오탐 사유, pattern 필드, 정탐 조치 계획을 입력합니다.
+
+판정 선택 전에는 사유/계획 입력 영역을 숨깁니다. `false_positive`를 선택하면 오탐 사유와 pattern 필드만 표시하고, `true_positive`를 선택하면 조치 계획과 조치 예정일만 표시합니다.
+
+삭제 처리 대상 정탐이 여러 건이면 상단의 삭제 예정일을 입력한 뒤 `일괄 삭제 계획 등록`을 누릅니다. 이 버튼은 현재 `true_positive`로 선택된 finding에 `action_plan=삭제 처리`와 입력한 조치 예정일을 채웁니다.
 
 오탐 입력 필수값:
 - 오탐 사유
@@ -394,7 +398,7 @@ scan은 `<review-state-root>/current/allowlist.jsonl`을 읽어 오탐을 suppre
    ```
 
 2. 생성된 `<scan-output>/review/review.html` 또는 `--review-html-path`로 지정한 HTML 파일을 담당자에게 전달합니다.
-3. 담당자는 HTML에서 검출 샘플을 확인하고 response JSON을 생성합니다.
+3. 담당자는 HTML에서 검출 샘플을 확인하고 response JSON을 생성합니다. 여러 정탐 finding을 삭제 처리해야 하면 `true_positive`로 선택한 뒤 일괄 삭제 계획 등록으로 같은 삭제 계획을 채울 수 있습니다.
 4. 사내 시스템은 response JSON을 `<review-state-root>/inbox`에 업로드합니다.
 5. collector를 실행합니다.
 
