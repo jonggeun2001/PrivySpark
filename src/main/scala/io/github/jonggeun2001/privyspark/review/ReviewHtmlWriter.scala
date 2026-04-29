@@ -121,10 +121,14 @@ private[privyspark] object ReviewHtmlWriter {
     .sort-button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
     .sort-indicator { min-width: 1em; }
     textarea, input, select { width: 100%; box-sizing: border-box; }
+    .table-wrap { overflow-x: auto; }
     .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
     .field { display: block; margin-bottom: 8px; }
     .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
     .hint { color: #566573; font-size: 12px; line-height: 1.45; margin: 6px 0 10px; white-space: pre-wrap; }
+    .metric-cell { text-align: right; white-space: nowrap; }
+    .pattern-cell { min-width: 180px; }
+    .reason-cell, .plan-cell { min-width: 220px; }
     .scope-cell { min-width: 240px; }
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
@@ -139,20 +143,32 @@ private[privyspark] object ReviewHtmlWriter {
     <label>삭제 예정일 <input id="bulkDeleteDueDate" type="date"></label>
     <button type="button" id="applyBulkDeletePlan">일괄 삭제 계획 등록</button>
   </p>
+  <div class="table-wrap">
   <table id="findingsTable">
     <thead>
       <tr>
-        <th scope="col" data-sort-key="path" aria-sort="none"><button type="button" class="sort-button">경로 / Hive <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="column" aria-sort="none"><button type="button" class="sort-button">컬럼 / PII <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="metrics" aria-sort="none"><button type="button" class="sort-button">지표 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="path" aria-sort="none"><button type="button" class="sort-button">경로 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="hive" aria-sort="none"><button type="button" class="sort-button">Hive <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="column" aria-sort="none"><button type="button" class="sort-button">컬럼 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="pii" aria-sort="none"><button type="button" class="sort-button">PII <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="sampled_row_count" aria-sort="none"><button type="button" class="sort-button">sampled_row_count <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="match_count" aria-sort="none"><button type="button" class="sort-button">match_count <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="non_empty_match_ratio" aria-sort="none"><button type="button" class="sort-button">non_empty_match_ratio <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="sample" aria-sort="none"><button type="button" class="sort-button">샘플 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="decision" aria-sort="none"><button type="button" class="sort-button">판정 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="scope" aria-sort="none"><button type="button" class="sort-button">Allowlist Scope <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="reason" aria-sort="none"><button type="button" class="sort-button">사유 / 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="false_positive_reason" aria-sort="none"><button type="button" class="sort-button">오탐 사유 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="file_identifier_pattern" aria-sort="none"><button type="button" class="sort-button">file_identifier_pattern <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="column_name_pattern" aria-sort="none"><button type="button" class="sort-button">column_name_pattern <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="pii_type_pattern" aria-sort="none"><button type="button" class="sort-button">pii_type_pattern <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="expires_at" aria-sort="none"><button type="button" class="sort-button">pattern expires_at <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="action_plan" aria-sort="none"><button type="button" class="sort-button">정탐 조치 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="action_due_date" aria-sort="none"><button type="button" class="sort-button">조치 예정일 <span class="sort-indicator" aria-hidden="true"></span></button></th>
       </tr>
     </thead>
     <tbody></tbody>
   </table>
+  </div>
   <p><button type="button" id="downloadResponse">응답 파일 생성</button></p>
   <script>
     const REVIEW_DATA = $safeReviewData;
@@ -216,27 +232,33 @@ private[privyspark] object ReviewHtmlWriter {
       const finding = row.finding;
       switch (sortState.key) {
         case 'path':
-          return [finding.file_identifier, finding.hive_table_fqn, finding.finding_key];
+          return finding.file_identifier;
+        case 'hive':
+          return finding.hive_table_fqn;
         case 'column':
-          return [finding.column_name, finding.pii_type];
-        case 'metrics':
-          return [Number(finding.match_count) || 0, Number(finding.confidence) || 0];
+          return finding.column_name;
+        case 'pii':
+          return finding.pii_type;
+        case 'sampled_row_count':
+          return Number(finding.sampled_row_count) || 0;
+        case 'match_count':
+          return Number(finding.match_count) || 0;
+        case 'non_empty_match_ratio':
+          return Number(finding.non_empty_match_ratio) || 0;
         case 'sample':
           return sampleSortText(finding);
         case 'decision':
           return formSortText(values, row.index, ['decision']);
         case 'scope':
           return formSortText(values, row.index, ['allowlist_scope']);
-        case 'reason':
-          return formSortText(values, row.index, [
-            'false_positive_reason',
-            'file_identifier_pattern',
-            'column_name_pattern',
-            'pii_type_pattern',
-            'expires_at',
-            'action_plan',
-            'action_due_date'
-          ]);
+        case 'false_positive_reason':
+        case 'file_identifier_pattern':
+        case 'column_name_pattern':
+        case 'pii_type_pattern':
+        case 'expires_at':
+        case 'action_plan':
+        case 'action_due_date':
+          return formSortText(values, row.index, [sortState.key]);
         default:
           return row.index;
       }
@@ -336,9 +358,13 @@ private[privyspark] object ReviewHtmlWriter {
         const index = rowData.index;
         const row = document.createElement('tr');
         row.innerHTML = `
-        <td>$${escapeHtml(finding.file_identifier)}<br><small>$${escapeHtml(finding.hive_database)}.$${escapeHtml(finding.hive_table)}</small><br><small>$${escapeHtml(finding.finding_key)}</small></td>
-        <td>$${escapeHtml(finding.column_name)}<br>$${escapeHtml(finding.pii_type)}</td>
-        <td>count=$${escapeHtml(finding.match_count)}<br>confidence=$${escapeHtml(finding.confidence)}</td>
+        <td>$${escapeHtml(finding.file_identifier)}<span hidden data-finding-key="$${escapeHtml(finding.finding_key)}">$${escapeHtml(finding.finding_key)}</span></td>
+        <td>$${escapeHtml(finding.hive_table_fqn)}</td>
+        <td>$${escapeHtml(finding.column_name)}</td>
+        <td>$${escapeHtml(finding.pii_type)}</td>
+        <td class="metric-cell">$${escapeHtml(finding.sampled_row_count)}</td>
+        <td class="metric-cell">$${escapeHtml(finding.match_count)}</td>
+        <td class="metric-cell">$${escapeHtml(finding.non_empty_match_ratio)}</td>
         <td class="sample">$${finding.evidence_samples.map(sample => escapeHtml(sample.file_identifier) + '\\n' + escapeHtml(sample.sample_matched_fragment) + '\\n' + escapeHtml(sample.sample_raw_value)).join('\\n---\\n')}</td>
         <td>
           <label class="field"><span>판정</span>
@@ -361,31 +387,39 @@ private[privyspark] object ReviewHtmlWriter {
             <div class="hint">$${escapeHtml(scopeGuidance(finding))}</div>
           </div>
         </td>
-        <td>
+        <td class="reason-cell">
           <div class="decision-fields" data-decision-section="false_positive">
-            <label class="field"><span>오탐 사유</span>
-              <textarea data-index="$${index}" data-field="false_positive_reason" placeholder="오탐 판단 근거. exact와 pattern 모두 필수"></textarea>
-            </label>
-            <label class="field"><span>file_identifier_pattern</span>
-              <input data-index="$${index}" data-field="file_identifier_pattern" placeholder="예: project_db/customer/*">
-            </label>
-            <label class="field"><span>column_name_pattern</span>
-              <input data-index="$${index}" data-field="column_name_pattern" placeholder="예: temp_*">
-            </label>
-            <label class="field"><span>pii_type_pattern</span>
-              <input data-index="$${index}" data-field="pii_type_pattern" placeholder="예: driver_license_number (* 금지)">
-            </label>
-            <label class="field"><span>pattern expires_at</span>
-              <input data-index="$${index}" data-field="expires_at" placeholder="YYYY-MM-DD">
-            </label>
+            <textarea data-index="$${index}" data-field="false_positive_reason" aria-label="오탐 사유" placeholder="오탐 판단 근거. exact와 pattern 모두 필수"></textarea>
           </div>
+        </td>
+        <td class="pattern-cell">
+          <div class="decision-fields" data-decision-section="false_positive">
+            <input data-index="$${index}" data-field="file_identifier_pattern" aria-label="file_identifier_pattern" placeholder="예: project_db/customer/*">
+          </div>
+        </td>
+        <td class="pattern-cell">
+          <div class="decision-fields" data-decision-section="false_positive">
+            <input data-index="$${index}" data-field="column_name_pattern" aria-label="column_name_pattern" placeholder="예: temp_*">
+          </div>
+        </td>
+        <td class="pattern-cell">
+          <div class="decision-fields" data-decision-section="false_positive">
+            <input data-index="$${index}" data-field="pii_type_pattern" aria-label="pii_type_pattern" placeholder="예: driver_license_number (* 금지)">
+          </div>
+        </td>
+        <td class="pattern-cell">
+          <div class="decision-fields" data-decision-section="false_positive">
+            <input data-index="$${index}" data-field="expires_at" aria-label="pattern expires_at" placeholder="YYYY-MM-DD">
+          </div>
+        </td>
+        <td class="plan-cell">
           <div class="decision-fields" data-decision-section="true_positive">
-            <label class="field"><span>정탐 조치 계획</span>
-              <textarea data-index="$${index}" data-field="action_plan" placeholder="정탐이면 필수. 예: 컬럼 마스킹, 삭제 처리"></textarea>
-            </label>
-            <label class="field"><span>조치 예정일</span>
-              <input data-index="$${index}" data-field="action_due_date" placeholder="YYYY-MM-DD">
-            </label>
+            <textarea data-index="$${index}" data-field="action_plan" aria-label="정탐 조치 계획" placeholder="정탐이면 필수. 예: 컬럼 마스킹, 삭제 처리"></textarea>
+          </div>
+        </td>
+        <td class="pattern-cell">
+          <div class="decision-fields" data-decision-section="true_positive">
+            <input data-index="$${index}" data-field="action_due_date" aria-label="조치 예정일" placeholder="YYYY-MM-DD">
           </div>
         </td>`;
         setFieldValues(row, index, savedValues);
