@@ -75,8 +75,8 @@ object PrivySparkApp {
           exitWith(2)
           return
         }
-        if (config.reviewHtmlPath.exists(path => !PathValidator.isAbsolute(path))) {
-          emitAbsolutePathError("--review-html-path", config.reviewHtmlPath.get)
+        if (config.reviewHtmlDir.exists(path => !PathValidator.isAbsolute(path))) {
+          emitAbsolutePathError("--review-html-dir", config.reviewHtmlDir.get)
           exitWith(2)
           return
         }
@@ -206,7 +206,7 @@ object PrivySparkApp {
       "ignore_file" -> config.ignoreFile.getOrElse("none"),
       "allowlist" -> config.allowlist.getOrElse("none"),
       "review_state_root" -> config.reviewStateRoot.getOrElse("none"),
-      "review_html_path" -> config.reviewHtmlPath.getOrElse("default"),
+      "review_html_dir" -> config.reviewHtmlDir.getOrElse("default"),
       "review_sample_mode" -> config.reviewSampleMode,
       "allowlist_entries" -> allowlistMatcher.size,
       "suppressions" -> config.suppressions.size,
@@ -229,7 +229,12 @@ object PrivySparkApp {
       jdbcUrl <- config.hiveMetastoreJdbcUrl
       user <- config.hiveMetastoreUser
       passwordFile <- config.hiveMetastorePasswordFile
-    } yield HiveMetastoreJdbcConfig(jdbcUrl, user, passwordFile)
+    } yield HiveMetastoreJdbcConfig(
+      jdbcUrl,
+      user,
+      passwordFile,
+      HiveMetastoreJdbcConfig.resolveDriverClass(spark.sparkContext.getConf, config.hiveMetastoreJdbcDriverClass)
+    )
     val hiveLookupBroadcast = HiveTableLookup.buildAndBroadcast(spark, hiveMetastoreConfig)
     DriverLogger.debug(
       "ruleset_loaded",
@@ -329,7 +334,7 @@ object PrivySparkApp {
               config.inputPath,
               resultDf,
               config.reviewSampleMode,
-              config.reviewHtmlPath
+              config.reviewHtmlDir
             )
           }
         }

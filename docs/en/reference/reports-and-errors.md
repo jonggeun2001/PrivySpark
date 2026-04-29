@@ -40,7 +40,7 @@
 
 ## `hive_table_fqn` Rules
 - Lookup is enabled only when `--hive-metastore-jdbc-url`, `--hive-metastore-user`, and `--hive-metastore-password-file` are all provided.
-- When enabled, the driver queries the Hive Metastore underlying MariaDB `DBS`/`TBLS`/`SDS` tables once through JDBC and broadcasts a normalized URI-prefix index of table-level `LOCATION` values.
+- When enabled, the driver queries Hive Metastore `DBS`/`TBLS`/`SDS` tables once through the configured JDBC driver class and broadcasts a normalized URI-prefix index of table-level `LOCATION` values. The default driver class is `org.mariadb.jdbc.Driver`; set `--hive-metastore-jdbc-driver-class` or Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass` to override it. CLI values take precedence over Spark conf.
 - If a result row's input file path is under a registered table `LOCATION`, PrivySpark writes the matched `db.table` value into `hive_table_fqn`.
 - When table `LOCATION` values overlap, PrivySpark uses normalized-URI longest-prefix matching. Duplicate prefixes of the same length use deterministic ordering.
 - Archive entry and Excel sheet identifiers are looked up by their host archive/workbook path, stripping `<archive>!<entry>` and `<workbook>#<sheet>` suffixes.

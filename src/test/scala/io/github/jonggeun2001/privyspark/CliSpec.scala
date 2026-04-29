@@ -30,13 +30,14 @@ class CliSpec extends AnyFunSuite {
     assert(config.ignoreFile.isEmpty)
     assert(config.allowlist.isEmpty)
     assert(config.reviewStateRoot.isEmpty)
-    assert(config.reviewHtmlPath.isEmpty)
+    assert(config.reviewHtmlDir.isEmpty)
     assert(config.reviewSampleMode == "masked")
     assert(config.suppressions.isEmpty)
     assert(config.suppressionFile.isEmpty)
     assert(config.hiveMetastoreJdbcUrl.isEmpty)
     assert(config.hiveMetastoreUser.isEmpty)
     assert(config.hiveMetastorePasswordFile.isEmpty)
+    assert(config.hiveMetastoreJdbcDriverClass.isEmpty)
     assert(config.effectiveOutputFormats == Seq("parquet"))
   }
 
@@ -79,8 +80,8 @@ class CliSpec extends AnyFunSuite {
         "/etc/privyspark/allowlist.jsonl",
         "--review-state-root",
         "/var/lib/privyspark/review-state",
-        "--review-html-path",
-        "/var/lib/privyspark/reviews/latest-review.html",
+        "--review-html-dir",
+        "/var/lib/privyspark/reviews",
         "--review-sample-mode",
         "raw",
         "--ignore-file",
@@ -91,6 +92,8 @@ class CliSpec extends AnyFunSuite {
         "privyspark_ro",
         "--hive-metastore-password-file",
         "hdfs:///etc/secrets/metastore.pw",
+        "--hive-metastore-jdbc-driver-class",
+        "com.mysql.cj.jdbc.Driver",
         "--suppress",
         "prdctcd:driver_license_number",
         "--suppress",
@@ -117,12 +120,13 @@ class CliSpec extends AnyFunSuite {
     assert(config.ignorePatterns == Seq("_SUCCESS", "backup/**"))
     assert(config.allowlist.contains("/etc/privyspark/allowlist.jsonl"))
     assert(config.reviewStateRoot.contains("/var/lib/privyspark/review-state"))
-    assert(config.reviewHtmlPath.contains("/var/lib/privyspark/reviews/latest-review.html"))
+    assert(config.reviewHtmlDir.contains("/var/lib/privyspark/reviews"))
     assert(config.reviewSampleMode == "raw")
     assert(config.ignoreFile.contains("/etc/privyspark/ignore.txt"))
     assert(config.hiveMetastoreJdbcUrl.contains("jdbc:mariadb://hms-db.internal:3306/metastore"))
     assert(config.hiveMetastoreUser.contains("privyspark_ro"))
     assert(config.hiveMetastorePasswordFile.contains("hdfs:///etc/secrets/metastore.pw"))
+    assert(config.hiveMetastoreJdbcDriverClass.contains("com.mysql.cj.jdbc.Driver"))
     assert(config.suppressions == Seq("prdctcd:driver_license_number", "foo:email", "ns:email:email"))
     assert(config.suppressionFile.contains("/etc/privyspark/suppressions.txt"))
   }
@@ -189,6 +193,10 @@ class CliSpec extends AnyFunSuite {
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppress", "prdctcd:"))
     val blankSuppressionFile =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--suppression-file", "   "))
+    val blankHiveJdbcDriverClass =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--hive-metastore-jdbc-driver-class", "   "))
+    val reviewHtmlDirWithFileName =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--review-html-dir", "/data/review.html"))
     val invalidReviewSampleMode =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--review-sample-mode", "verbose"))
 
@@ -209,6 +217,10 @@ class CliSpec extends AnyFunSuite {
     assert(missingSuppressionColumn.isEmpty)
     assert(missingSuppressionPiiType.isEmpty)
     assert(blankSuppressionFile.isEmpty)
+    assert(blankHiveJdbcDriverClass.command.isEmpty)
+    assert(blankHiveJdbcDriverClass.errors.exists(_.contains("hive-metastore-jdbc-driver-class must not be blank")))
+    assert(reviewHtmlDirWithFileName.command.isEmpty)
+    assert(reviewHtmlDirWithFileName.errors.exists(_.contains("review-html-dir must be a directory path")))
     assert(invalidReviewSampleMode.isEmpty)
   }
 

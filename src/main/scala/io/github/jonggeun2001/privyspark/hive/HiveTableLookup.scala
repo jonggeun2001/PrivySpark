@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark.hive
 
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.SparkConf
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 
@@ -18,8 +19,28 @@ import scala.util.control.NonFatal
 final case class HiveMetastoreJdbcConfig(
   jdbcUrl: String,
   user: String,
-  passwordFile: String
+  passwordFile: String,
+  driverClass: String = HiveMetastoreJdbcConfig.DefaultDriverClass
 )
+
+object HiveMetastoreJdbcConfig {
+  val DefaultDriverClass = "org.mariadb.jdbc.Driver"
+  val DriverClassConfKey = "spark.privyspark.hiveMetastore.jdbcDriverClass"
+
+  def resolveDriverClass(conf: SparkConf, configured: Option[String]): String = {
+    configured
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .getOrElse {
+        conf.getOption(DriverClassConfKey) match {
+          case Some(value) if value.trim.nonEmpty => value.trim
+          case Some(_) =>
+            throw new IllegalArgumentException(s"$DriverClassConfKey must not be blank")
+          case None => DefaultDriverClass
+        }
+      }
+  }
+}
 
 final case class HiveTableLookupIndex(entries: Vector[(String, String)]) extends Serializable {
   @transient private lazy val normalizedEntries: Vector[(String, String)] =
@@ -69,7 +90,6 @@ object HiveTableLookupIndex {
 object HiveTableLookup {
   val Empty: HiveTableLookupIndex = HiveTableLookupIndex.Empty
 
-  private val MariaDbDriverClass = "org.mariadb.jdbc.Driver"
   private val MaxPasswordFileBytes = 1024L * 1024L
   private val TableLocationSql =
     """SELECT D.NAME, T.TBL_NAME, S.LOCATION
@@ -98,11 +118,11 @@ object HiveTableLookup {
       case Some(jdbcConfig) =>
         try {
           val password = readPasswordFile(spark, jdbcConfig.passwordFile)
-          Class.forName(MariaDbDriverClass)
+          Class.forName(jdbcConfig.driverClass)
           val connection = DriverManager.getConnection(jdbcConfig.jdbcUrl, connectionProperties(jdbcConfig, password))
           try {
             val index = buildIndex(queryLocations(connection))
-            DriverLogger.info("hive_lookup_ready", "size" -> index.size)
+            DriverLogger.info("hive_lookup_ready", "size" -> index.size, "driver_class" -> jdbcConfig.driverClass)
             index
           } finally {
             connection.close()
@@ -111,6 +131,7 @@ object HiveTableLookup {
           case NonFatal(e) =>
             DriverLogger.warn(
               "hive_lookup_disabled",
+              "driver_class" -> jdbcConfig.driverClass,
               "exception" -> e.getClass.getSimpleName,
               "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
             )
@@ -186,17 +207,28 @@ object HiveTableLookup {
   private[hive] def normalizePathForLookup(rawPath: String): Option[String] =
     normalizeUriString(stripCompositeIdentifier(rawPath))
 
-  private def connectionProperties(config: HiveMetastoreJdbcConfig, password: String): Properties = {
+  private[hive] def connectionProperties(config: HiveMetastoreJdbcConfig, password: String): Properties = {
     val props = new Properties()
     props.setProperty("user", config.user)
     props.setProperty("password", password)
-    if (!urlHasProperty(config.jdbcUrl, "connectTimeout")) {
-      props.setProperty("connectTimeout", "5000")
-    }
-    if (!urlHasProperty(config.jdbcUrl, "socketTimeout")) {
-      props.setProperty("socketTimeout", "30000")
+    if (usesMariaDbCompatibleTimeouts(config)) {
+      if (!urlHasProperty(config.jdbcUrl, "connectTimeout")) {
+        props.setProperty("connectTimeout", "5000")
+      }
+      if (!urlHasProperty(config.jdbcUrl, "socketTimeout")) {
+        props.setProperty("socketTimeout", "30000")
+      }
     }
     props
+  }
+
+  private[hive] def usesMariaDbCompatibleTimeouts(config: HiveMetastoreJdbcConfig): Boolean = {
+    val driverClass = Option(config.driverClass).map(_.trim.toLowerCase).getOrElse("")
+    val jdbcUrl = Option(config.jdbcUrl).map(_.trim.toLowerCase).getOrElse("")
+    driverClass.startsWith("org.mariadb.") ||
+      driverClass.startsWith("com.mysql.") ||
+      jdbcUrl.startsWith("jdbc:mariadb:") ||
+      jdbcUrl.startsWith("jdbc:mysql:")
   }
 
   private def urlHasProperty(jdbcUrl: String, propertyName: String): Boolean = {
