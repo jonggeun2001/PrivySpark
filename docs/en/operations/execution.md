@@ -96,12 +96,13 @@ These settings do not directly guarantee executor fan-out. Actual executor distr
 ## Sampling
 - `--sample-ratio` is non-deterministic row sampling.
 - When `sampleRatio >= 1.0`, no row sampling is applied.
-- `--file-sample-ratio` uniformly samples files inside both batch scan and file-fallback group scans.
+- `--file-sample-ratio` selects a stable hash-ranked subset of files inside both batch scan and file-fallback group scans.
 - File sampling only applies when the group has more files than `--file-sample-min-files`. Groups at or below the threshold still scan every file.
 - When sampling applies, the sampled file count is `ceil(fileCount * fileSampleRatio)` with a minimum of one file.
 - When file sampling actually applies and `--sample-ratio < 1.0` is also provided, row sampling is ignored for that group and `group_scan_row_sampling_ignored` is logged.
+- Review fingerprints for file-sampled group rows cover only the sampled files that were actually scanned.
 
-Uniform random file sampling was chosen because the operational concern was file-level concentration risk. Size-weighted sampling would bias toward large files and could amplify concentration instead of reflecting it.
+Stable hash-ranked file sampling keeps the same subset for the same group and file set, which prevents review scopes from drifting between runs when data has not changed. It still avoids size weighting because the operational concern is file-level concentration risk; size-weighted sampling would bias toward large files and could amplify concentration instead of reflecting it.
 
 ## Driver Logging
 - Driver log level can be configured through `PRIVYSPARK_DEBUG`, `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG`, or `-Dprivyspark.debug`.

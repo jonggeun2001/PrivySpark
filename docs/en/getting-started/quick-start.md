@@ -67,7 +67,7 @@ bin/privyspark-submit \
   --ignore "backup/**"
 ```
 
-`--file-sample-ratio` only applies when a group has more files than `--file-sample-min-files`. Once file sampling actually applies to a group, `--sample-ratio < 1.0` is ignored for that group and a warning is logged. This avoids changing the sampling basis twice.
+`--file-sample-ratio` only applies when a group has more files than `--file-sample-min-files`. For the same group and file set, file sampling uses a stable hash-ranked subset across runs. Once file sampling actually applies to a group, `--sample-ratio < 1.0` is ignored for that group and a warning is logged. This avoids changing the sampling basis twice, and review fingerprints cover only the sampled files that were actually scanned.
 
 `--excel-max-rows-in-memory` is accepted only for compatibility with the previous spark-excel scan reader path. Actual `xlsx` scans now use the executor-side StAX streamer, so explicitly setting this option logs a warning and does not affect scan reads.
 

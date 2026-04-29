@@ -29,7 +29,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - `--file-sample-ratio`는 읽는 파일 수 자체를 줄이므로, 작은 파일이 매우 많을 때 `--sample-ratio`보다 직접적인 효과가 날 수 있습니다.
 - 기본 `--file-sample-min-files 10` 때문에 작은 그룹은 sampling 대상이 아닙니다. 더 작은 그룹에도 file sampling을 적용하려면 임계값을 낮춰야 합니다.
 
-균등 무작위 파일 샘플링을 둔 이유는 성능만이 아니라 데이터 concentration risk를 보존하기 위해서입니다. 특정 데이터가 한 파일에 몰린 경우를 운영적으로 배제하지 않는다는 요구가 있었기 때문에, 파일 크기 가중치 대신 각 파일을 같은 확률로 뽑습니다.
+안정적인 해시 순위 파일 샘플링을 둔 이유는 성능만이 아니라 review scope 안정성과 데이터 concentration risk를 함께 보존하기 위해서입니다. 같은 그룹/파일 집합에서는 같은 sampled scope를 유지하고, 특정 데이터가 한 파일에 몰린 경우를 운영적으로 배제하지 않도록 파일 크기 가중치는 쓰지 않습니다.
 
 ## `scan_directory_structure_start` 이후가 느릴 때
 이 구간은 보통 driver 쪽 작업입니다.

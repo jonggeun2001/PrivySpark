@@ -22,9 +22,9 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 
 ## 샘플링과 스캔 단위
 - `--sample-ratio`는 row sampling입니다.
-- `--file-sample-ratio`는 batch scan과 file fallback scan에서 그룹 내 파일을 균등 무작위로 추출합니다.
+- `--file-sample-ratio`는 batch scan과 file fallback scan에서 그룹 내 파일을 안정적인 해시 순위 subset으로 선택합니다.
 - file sampling은 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용합니다.
-- file sampling을 별도 옵션으로 분리한 이유는 row sampling 의미를 유지하면서도 작은 파일이 많은 입력에서 읽는 파일 수를 줄이고, 특정 데이터가 한 파일에 몰릴 수 있다는 운영 우려를 파일 단위로 반영하기 위해서입니다.
+- file sampling을 별도 옵션으로 분리한 이유는 row sampling 의미를 유지하면서도 작은 파일이 많은 입력에서 읽는 파일 수를 줄이고, 특정 데이터가 한 파일에 몰릴 수 있다는 운영 우려를 파일 단위로 반영하기 위해서입니다. file-sampled group의 review fingerprint는 실제 sampled file scope만 대상으로 합니다.
 
 ## 결과물
 - 결과 리포트: `scan_results`

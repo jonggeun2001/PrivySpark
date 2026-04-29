@@ -49,8 +49,9 @@
 - Hive lookup uses the configured JDBC driver class rather than Spark Catalog/`enableHiveSupport()` and enumerates only table-level `LOCATION` values. CLI `--hive-metastore-jdbc-driver-class` takes precedence over Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`; when both are omitted, the default driver class is `org.mariadb.jdbc.Driver`. If options are omitted or lookup fails, it falls back to an empty mapping. `hive_table_fqn` is intentionally excluded from review snapshot comparison payloads.
 - `xlsx` pre-scan lightly parses workbook metadata and header row XML on the driver to plan visible sheets and schema signatures. Sheet body row/cell reads are deferred to the executor-side StAX scan path.
 - `xlsx` file-level scans also flow through `scanGroupByFile`, so they consume CLI `--file-parallelism` or `spark.privyspark.fileParallelism`.
-- `--file-sample-ratio` applies to both batch scans and file-fallback scans, but only when a group has more files than `--file-sample-min-files`; when it does apply, PrivySpark uniformly samples at least one file using `ceil(fileCount * ratio)`.
+- `--file-sample-ratio` applies to both batch scans and file-fallback scans, but only when a group has more files than `--file-sample-min-files`; when it does apply, PrivySpark selects a stable hash-ranked file subset of size `ceil(fileCount * ratio)` with at least one file.
 - When file sampling actually applies, `--sample-ratio < 1.0` is ignored for that group and a warning is logged.
+- File-sampled group review rows record `review_scope_file_identifiers` and `review_scope_file_fingerprints` only for the selected files, not for the entire group directory.
 - Sampled groups are never promoted to directory-level identifiers before exact-split validation.
 - Archive and Excel logical inputs keep their own identifiers.
 - The public output contract defaults to `parquet/scan_results` and `parquet/scan_errors`, and CLI `--output-format` can additionally materialize `csv/...` and `excel/*.xlsx`.
