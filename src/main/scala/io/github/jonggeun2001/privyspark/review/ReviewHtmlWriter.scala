@@ -346,15 +346,24 @@ private[privyspark] object ReviewHtmlWriter {
     }
     function applyBulkDeletePlan() {
       const dueDate = document.getElementById('bulkDeleteDueDate').value;
+      const bulkSortKeys = new Set(['action_plan', 'action_due_date']);
+      const shouldRefreshSort = bulkSortKeys.has(sortState.key);
+      let changed = false;
       formState.forEach((values, index) => {
         if (values.decision === 'true_positive') {
           values.action_plan = BulkDeleteActionPlan;
           if (dueDate) {
             values.action_due_date = dueDate;
           }
-          updateHydratedRow(index);
+          changed = true;
+          if (!shouldRefreshSort) {
+            updateHydratedRow(index);
+          }
         }
       });
+      if (changed && shouldRefreshSort) {
+        renderFindings();
+      }
     }
     function sanitizeResponse(response) {
       if (response.decision === 'false_positive') {

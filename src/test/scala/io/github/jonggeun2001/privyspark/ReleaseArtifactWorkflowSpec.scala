@@ -94,6 +94,8 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(html.contains("<input id=\"bulkDeleteDueDate\" type=\"date\">"))
     assert(html.contains("<button type=\"button\" id=\"applyBulkDeletePlan\">일괄 삭제 계획 등록</button>"))
     assert(html.contains("const BulkDeleteActionPlan = '삭제 처리';"))
+    assert(html.contains("const bulkSortKeys = new Set(['action_plan', 'action_due_date']);"))
+    assert(html.contains("if (changed && shouldRefreshSort) {"))
     assert(html.contains("function applyDecisionVisibility(row)"))
     assert(html.contains("function applyBulkDeletePlan()"))
     assert(html.contains("function sanitizeResponse(response)"))
