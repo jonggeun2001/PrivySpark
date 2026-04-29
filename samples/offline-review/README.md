@@ -20,7 +20,7 @@
 `review-response-viewer.html` is a local operator page for inspecting a returned `response-YYYYMMDD-HHMMSS.json`.
 
 - Open it directly in a browser.
-- Choose the response JSON file or paste its contents.
+- Choose the response JSON file, drop it onto the upload area, or paste its contents.
 - Review the envelope metadata, validation messages, and per-finding decisions.
 
 GitHub Release publishes these files as `privyspark-<tag>-review-response-example.html` and `privyspark-<tag>-review-response-viewer.html`.

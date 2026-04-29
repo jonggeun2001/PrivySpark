@@ -39,6 +39,34 @@
       display: block;
       margin: 8px 0 12px;
     }
+    .drop-zone {
+      align-items: center;
+      background: var(--surface);
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      justify-content: center;
+      margin: 8px 0 12px;
+      min-height: 88px;
+      padding: 14px;
+      text-align: center;
+    }
+    .drop-zone:focus-visible {
+      outline: 2px solid #1f6feb;
+      outline-offset: 2px;
+    }
+    .drop-zone.drag-over {
+      background: #eef6ff;
+      border-color: #1f6feb;
+      color: #17202a;
+    }
+    .drop-zone strong {
+      color: #17202a;
+    }
     textarea {
       box-sizing: border-box;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -139,6 +167,10 @@
   <section class="panel">
     <label for="responseFile"><strong>응답 파일</strong></label>
     <input id="responseFile" type="file" accept="application/json,.json">
+    <div id="dropZone" class="drop-zone" role="button" tabindex="0" aria-label="응답 JSON 파일 드래그앤드롭 또는 파일 선택">
+      <strong>응답 JSON 파일</strong>
+      <span>여기로 드롭하거나 클릭해서 선택</span>
+    </div>
     <div>
       <button type="button" id="loadExample" class="secondary">예시 JSON 불러오기</button>
       <button type="button" id="clearViewer" class="secondary">초기화</button>
@@ -435,13 +467,29 @@ ${field(response.finding_hash)}</td>
       setStatus(validation.warnings.length > 0 ? 'warn' : 'ok', validation.warnings.length > 0 ? validation.warnings : ['응답 JSON 구조를 확인했습니다.']);
     };
 
-    document.getElementById('responseFile').addEventListener('change', event => {
-      const file = event.target.files && event.target.files[0];
+    const responseFileInput = document.getElementById('responseFile');
+    const rawJsonInput = document.getElementById('rawJson');
+    const dropZone = document.getElementById('dropZone');
+
+    function isJsonFile(file) {
+      if (!file) return false;
+      const fileName = String(file.name || '').toLowerCase();
+      return file.type === 'application/json' || fileName.endsWith('.json');
+    }
+
+    function loadResponseFile(file) {
       if (!file) return;
+      if (!isJsonFile(file)) {
+        responseFileInput.value = '';
+        rawJsonInput.value = '';
+        clearRenderedState();
+        setStatus('error', ['JSON 파일만 열 수 있습니다.']);
+        return;
+      }
       const reader = new FileReader();
       reader.onload = () => {
         const text = String(reader.result || '');
-        document.getElementById('rawJson').value = text;
+        rawJsonInput.value = text;
         parseAndRender(text);
       };
       reader.onerror = () => {
@@ -449,21 +497,60 @@ ${field(response.finding_hash)}</td>
         setStatus('error', ['파일을 읽지 못했습니다.']);
       };
       reader.readAsText(file);
+    }
+
+    responseFileInput.addEventListener('change', event => {
+      const file = event.target.files && event.target.files[0];
+      loadResponseFile(file);
+    });
+
+    dropZone.addEventListener('click', () => {
+      responseFileInput.click();
+    });
+
+    dropZone.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        responseFileInput.click();
+      }
+    });
+
+    dropZone.addEventListener('dragover', event => {
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'copy';
+      }
+      dropZone.classList.add('drag-over');
+    });
+
+    dropZone.addEventListener('dragleave', event => {
+      event.preventDefault();
+      if (!dropZone.contains(event.relatedTarget)) {
+        dropZone.classList.remove('drag-over');
+      }
+    });
+
+    dropZone.addEventListener('drop', event => {
+      event.preventDefault();
+      dropZone.classList.remove('drag-over');
+      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+      loadResponseFile(file);
     });
 
     document.getElementById('parseText').addEventListener('click', () => {
-      parseAndRender(document.getElementById('rawJson').value);
+      parseAndRender(rawJsonInput.value);
     });
 
     document.getElementById('loadExample').addEventListener('click', () => {
       const text = JSON.stringify(exampleResponse, null, 2);
-      document.getElementById('rawJson').value = text;
+      rawJsonInput.value = text;
       parseAndRender(text);
     });
 
     document.getElementById('clearViewer').addEventListener('click', () => {
-      document.getElementById('responseFile').value = '';
-      document.getElementById('rawJson').value = '';
+      responseFileInput.value = '';
+      rawJsonInput.value = '';
+      dropZone.classList.remove('drag-over');
       document.getElementById('statusPanel').classList.add('hidden');
       document.getElementById('messages').innerHTML = '';
       clearRenderedState();
