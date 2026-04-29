@@ -114,8 +114,21 @@ private[privyspark] object ReviewHtmlWriter {
   <title>PrivySpark Review</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; color: #17202a; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #d5d8dc; padding: 8px; vertical-align: top; }
+    table { border-collapse: collapse; table-layout: fixed; width: 100%; min-width: 2160px; }
+    col { box-sizing: border-box; }
+    .col-path { width: 260px; }
+    .col-hive { width: 180px; }
+    .col-column { width: 180px; }
+    .col-pii { width: 140px; }
+    .col-sampled { width: 110px; }
+    .col-match { width: 110px; }
+    .col-ratio { width: 110px; }
+    .col-sample { width: 280px; }
+    .col-decision { width: 130px; }
+    .col-reason { width: 240px; }
+    .col-plan { width: 240px; }
+    .col-due-date { width: 180px; }
+    th, td { border: 1px solid #d5d8dc; padding: 8px; vertical-align: top; overflow-wrap: anywhere; }
     th { background: #f4f6f7; text-align: left; }
     thead th { position: sticky; top: 0; z-index: 10; }
     .sort-button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
@@ -123,7 +136,7 @@ private[privyspark] object ReviewHtmlWriter {
     .sort-indicator { min-width: 1em; }
     textarea, input, select { width: 100%; box-sizing: border-box; }
     .table-wrap { overflow: auto; max-height: 70vh; }
-    .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+    .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .field { display: block; margin-bottom: 8px; }
     .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
     .decision-toggle { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -142,7 +155,7 @@ private[privyspark] object ReviewHtmlWriter {
     .date-cell { min-width: 180px; }
     .reason-cell, .plan-cell { min-width: 220px; }
     .placeholder-cell { min-height: 120px; color: #566573; background: #fbfcfc; }
-    .placeholder-summary { display: block; min-height: 120px; }
+    .placeholder-summary { display: block; max-height: 120px; overflow: hidden; }
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
     .bulk-actions textarea { min-height: 3em; min-width: 240px; }
@@ -172,6 +185,20 @@ private[privyspark] object ReviewHtmlWriter {
   </details>
   <div class="table-wrap">
   <table id="findingsTable">
+    <colgroup>
+      <col class="col-path">
+      <col class="col-hive">
+      <col class="col-column">
+      <col class="col-pii">
+      <col class="col-sampled">
+      <col class="col-match">
+      <col class="col-ratio">
+      <col class="col-sample">
+      <col class="col-decision">
+      <col class="col-reason">
+      <col class="col-plan">
+      <col class="col-due-date">
+    </colgroup>
     <thead>
       <tr>
         <th scope="col" data-sort-key="path" aria-sort="none"><button type="button" class="sort-button">경로 <span class="sort-indicator" aria-hidden="true"></span></button></th>
