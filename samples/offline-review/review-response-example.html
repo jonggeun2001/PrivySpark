@@ -24,6 +24,10 @@
     .scope-cell { min-width: 240px; }
     .placeholder-cell { min-height: 120px; color: #566573; background: #fbfcfc; }
     .placeholder-summary { display: block; min-height: 120px; }
+    .multi-value { white-space: pre-wrap; }
+    .finding-summary { margin-bottom: 8px; }
+    .finding-summary:last-child { margin-bottom: 0; }
+    .group-count { color: #566573; font-size: 12px; margin-top: 4px; }
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
     .decision-fields[hidden], [data-decision-section][hidden] { display: none; }
@@ -106,10 +110,10 @@
         },
         {
           "scan_path": "hdfs:///warehouse/example_db.db",
-          "file_identifier": "example_db/members/part-001.parquet",
+          "file_identifier": "example_db/customers/part-000.parquet",
           "hive_database": "example_db",
-          "hive_table": "members",
-          "hive_table_fqn": "example_db.members",
+          "hive_table": "customers",
+          "hive_table_fqn": "example_db.customers",
           "column_name": "email",
           "pii_type": "email",
           "match_count": 982,
@@ -123,7 +127,7 @@
           "has_multiple_file_evidence": false,
           "evidence_samples": [
             {
-              "file_identifier": "example_db/members/part-001.parquet",
+              "file_identifier": "example_db/customers/part-000.parquet",
               "sample_matched_fragment": "a***e@example.test",
               "sample_raw_value": "contact=a***e@example.test",
               "match_count": 982,
@@ -143,11 +147,11 @@
       "'": '&#39;'
     }[ch]));
     const BulkDeleteActionPlan = '삭제 처리';
-    const scopeGuidance = finding => {
-      const exactHint = finding.fingerprint_complete
-        ? 'exact: 이 finding만 제외합니다. 다음 스캔에서 dataset_path, file_identifier, column_name, pii_type, file_size, mtime, checksum fingerprint가 모두 다시 일치할 때만 suppress됩니다. 일반적으로 기본 선택입니다.'
-        : 'exact: 이 finding은 checksum 등 fingerprint metadata가 부족해 collector에서 거부됩니다. pattern을 쓰거나 정탐으로 처리하세요.';
-      const patternFileHint = finding.has_multiple_file_evidence
+    const scopeGuidance = group => {
+      const exactHint = group.fingerprint_complete
+        ? 'exact: 이 경로의 finding들을 각각 제외합니다. 다음 스캔에서 dataset_path, file_identifier, column_name, pii_type, file_size, mtime, checksum fingerprint가 모두 다시 일치할 때만 suppress됩니다. 일반적으로 기본 선택입니다.'
+        : 'exact: 이 경로에는 checksum 등 fingerprint metadata가 부족한 finding이 있어 collector에서 일부 응답이 거부될 수 있습니다. pattern을 쓰거나 정탐으로 처리하세요.';
+      const patternFileHint = group.has_multiple_file_evidence
         ? '여러 파일 증거가 있어 file_identifier_pattern 필수입니다.'
         : 'file_identifier_pattern을 비우면 현재 대표 file_identifier를 사용합니다.';
       return [
@@ -182,7 +186,46 @@
     const formState = new Map();
     const hydratedRows = new Map();
     const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
-    REVIEW_DATA.findings.forEach((_, index) => {
+    function uniqueValues(values) {
+      return Array.from(new Set(values.map(value => String(value ?? '').trim()).filter(Boolean)));
+    }
+    function formatList(values) {
+      return uniqueValues(values).join('\n');
+    }
+    function buildFindingGroups() {
+      const groups = [];
+      const groupByPath = new Map();
+      REVIEW_DATA.findings.forEach((finding, findingIndex) => {
+        const key = finding.file_identifier || `__finding_${findingIndex}`;
+        let group = groupByPath.get(key);
+        if (!group) {
+          group = {
+            index: groups.length,
+            key,
+            file_identifier: finding.file_identifier,
+            finding_indexes: [],
+            findings: []
+          };
+          groupByPath.set(key, group);
+          groups.push(group);
+        }
+        group.finding_indexes.push(findingIndex);
+        group.findings.push(finding);
+      });
+      groups.forEach(group => {
+        group.hive_table_fqn = formatList(group.findings.map(finding => finding.hive_table_fqn));
+        group.column_name = formatList(group.findings.map(finding => finding.column_name));
+        group.pii_type = formatList(group.findings.map(finding => finding.pii_type));
+        group.match_count = group.findings.reduce((sum, finding) => sum + (Number(finding.match_count) || 0), 0);
+        group.sampled_row_count = Math.max(...group.findings.map(finding => Number(finding.sampled_row_count) || 0));
+        group.non_empty_match_ratio = Math.max(...group.findings.map(finding => Number(finding.non_empty_match_ratio) || 0));
+        group.fingerprint_complete = group.findings.every(finding => finding.fingerprint_complete);
+        group.has_multiple_file_evidence = group.findings.some(finding => finding.has_multiple_file_evidence);
+      });
+      return groups;
+    }
+    const FINDING_GROUPS = buildFindingGroups();
+    FINDING_GROUPS.forEach((_, index) => {
       formState.set(index, Object.assign({}, FormFieldDefaults));
     });
     let sortState = { key: null, direction: 'asc' };
@@ -210,36 +253,40 @@
     function collectFormValues() {
       return formValuesSnapshot();
     }
-    function sampleSortText(finding) {
-      return finding.evidence_samples.map(sample => [
-        sample.file_identifier,
-        sample.sample_matched_fragment,
-        sample.sample_raw_value
-      ].join(' ')).join(' ');
+    function sampleSortText(group) {
+      return group.findings.map(finding =>
+        finding.evidence_samples.map(sample => [
+          finding.column_name,
+          finding.pii_type,
+          sample.file_identifier,
+          sample.sample_matched_fragment,
+          sample.sample_raw_value
+        ].join(' ')).join(' ')
+      ).join(' ');
     }
     function formSortText(index, fields) {
       const rowValues = getFormState(index);
       return fields.map(field => rowValues[field] || '').join(' ');
     }
     function getSortValue(index) {
-      const finding = REVIEW_DATA.findings[index];
+      const group = FINDING_GROUPS[index];
       switch (sortState.key) {
         case 'path':
-          return finding.file_identifier;
+          return group.file_identifier;
         case 'hive':
-          return finding.hive_table_fqn;
+          return group.hive_table_fqn;
         case 'column':
-          return finding.column_name;
+          return group.column_name;
         case 'pii':
-          return finding.pii_type;
+          return group.pii_type;
         case 'sampled_row_count':
-          return Number(finding.sampled_row_count) || 0;
+          return Number(group.sampled_row_count) || 0;
         case 'match_count':
-          return Number(finding.match_count) || 0;
+          return Number(group.match_count) || 0;
         case 'non_empty_match_ratio':
-          return Number(finding.non_empty_match_ratio) || 0;
+          return Number(group.non_empty_match_ratio) || 0;
         case 'sample':
-          return sampleSortText(finding);
+          return sampleSortText(group);
         case 'decision':
           return formSortText(index, ['decision']);
         case 'scope':
@@ -354,25 +401,47 @@
       });
     }
     function renderPlaceholderRow(index) {
-      const finding = REVIEW_DATA.findings[index];
+      const group = FINDING_GROUPS[index];
       const summary = [
-        finding.file_identifier,
-        finding.hive_table_fqn,
-        finding.column_name,
-        finding.pii_type
+        group.file_identifier,
+        group.hive_table_fqn,
+        group.column_name,
+        group.pii_type,
+        `${group.findings.length} findings`
       ].filter(Boolean).join(' / ');
-      return `<td colspan="17" class="placeholder-cell"><span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">${escapeHtml(summary)}</span></td>`;
+      const hiddenKeys = group.findings.map(finding =>
+        `<span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span>`
+      ).join('');
+      return `<td colspan="17" class="placeholder-cell">${hiddenKeys}<span class="placeholder-summary">${escapeHtml(summary)}</span></td>`;
     }
-    function renderFindingCells(finding, index) {
+    function renderFindingSummaries(group) {
+      return group.findings.map(finding =>
+        `<div class="finding-summary">${escapeHtml(finding.column_name)} / ${escapeHtml(finding.pii_type)}<div class="group-count">match_count=${escapeHtml(finding.match_count)}, non_empty_match_ratio=${escapeHtml(finding.non_empty_match_ratio)}</div></div>`
+      ).join('');
+    }
+    function renderSampleCell(group) {
+      return group.findings.map(finding => {
+        const samples = finding.evidence_samples.map(sample =>
+          escapeHtml(sample.file_identifier) + '\n' +
+          escapeHtml(sample.sample_matched_fragment) + '\n' +
+          escapeHtml(sample.sample_raw_value)
+        ).join('\n---\n');
+        return `<div class="finding-summary">${escapeHtml(finding.column_name)} / ${escapeHtml(finding.pii_type)}\n${samples}</div>`;
+      }).join('\n---\n');
+    }
+    function renderFindingCells(group, index) {
+      const hiddenKeys = group.findings.map(finding =>
+        `<span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span>`
+      ).join('');
       return `
-        <td>${escapeHtml(finding.file_identifier)}<span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span></td>
-        <td>${escapeHtml(finding.hive_table_fqn)}</td>
-        <td>${escapeHtml(finding.column_name)}</td>
-        <td>${escapeHtml(finding.pii_type)}</td>
-        <td class="metric-cell">${escapeHtml(finding.sampled_row_count)}</td>
-        <td class="metric-cell">${escapeHtml(finding.match_count)}</td>
-        <td class="metric-cell">${escapeHtml(finding.non_empty_match_ratio)}</td>
-        <td class="sample">${finding.evidence_samples.map(sample => escapeHtml(sample.file_identifier) + '\n' + escapeHtml(sample.sample_matched_fragment) + '\n' + escapeHtml(sample.sample_raw_value)).join('\n---\n')}</td>
+        <td>${escapeHtml(group.file_identifier)}${hiddenKeys}<div class="group-count">${escapeHtml(group.findings.length)} findings</div></td>
+        <td class="multi-value">${escapeHtml(group.hive_table_fqn)}</td>
+        <td class="multi-value">${escapeHtml(group.column_name)}</td>
+        <td class="multi-value">${escapeHtml(group.pii_type)}</td>
+        <td class="metric-cell">${escapeHtml(group.sampled_row_count)}</td>
+        <td class="metric-cell">${escapeHtml(group.match_count)}</td>
+        <td class="metric-cell">${escapeHtml(group.non_empty_match_ratio)}</td>
+        <td class="sample">${renderFindingSummaries(group)}${renderSampleCell(group)}</td>
         <td>
           <label class="field"><span>판정</span>
             <select data-index="${index}" data-field="decision">
@@ -391,7 +460,7 @@
                 <option value="pattern">pattern</option>
               </select>
             </label>
-            <div class="hint">${escapeHtml(scopeGuidance(finding))}</div>
+            <div class="hint">${escapeHtml(scopeGuidance(group))}</div>
           </div>
         </td>
         <td class="reason-cell">
@@ -435,8 +504,8 @@
         return;
       }
       const index = Number(row.getAttribute('data-index'));
-      const finding = REVIEW_DATA.findings[index];
-      row.innerHTML = renderFindingCells(finding, index);
+      const group = FINDING_GROUPS[index];
+      row.innerHTML = renderFindingCells(group, index);
       row.setAttribute('data-hydrated', 'true');
       setFieldValues(row, index);
       applyDecisionVisibility(row);
@@ -485,7 +554,7 @@
     function renderFindings() {
       resetRowObserver();
       const fragment = document.createDocumentFragment();
-      sortRows(REVIEW_DATA.findings.map((_, index) => index)).forEach(index => {
+      sortRows(FINDING_GROUPS.map((_, index) => index)).forEach(index => {
         const row = document.createElement('tr');
         row.setAttribute('data-index', String(index));
         row.setAttribute('data-hydrated', 'false');
@@ -524,16 +593,18 @@
     renderFindings();
     document.getElementById('downloadResponse').addEventListener('click', () => {
       const values = collectFormValues();
-      const responses = REVIEW_DATA.findings.map((finding, index) => Object.assign({
-        finding_key: finding.finding_key,
-        finding_hash: finding.finding_hash,
-        file_identifier: finding.file_identifier,
-        column_name: finding.column_name,
-        pii_type: finding.pii_type,
-        file_identifier_pattern: null,
-        column_name_pattern: null,
-        pii_type_pattern: null
-      }, values[index] || {})).map(sanitizeResponse).filter(response => response.decision);
+      const responses = FINDING_GROUPS.flatMap((group, groupIndex) =>
+        group.findings.map(finding => Object.assign({
+          finding_key: finding.finding_key,
+          finding_hash: finding.finding_hash,
+          file_identifier: finding.file_identifier,
+          column_name: finding.column_name,
+          pii_type: finding.pii_type,
+          file_identifier_pattern: null,
+          column_name_pattern: null,
+          pii_type_pattern: null
+        }, values[groupIndex] || {}))
+      ).map(sanitizeResponse).filter(response => response.decision);
       const envelope = {
         schema_version: 1,
         scan_path: REVIEW_DATA.scan_path,

@@ -122,24 +122,24 @@ GitHub Release에는 `privyspark-<tag>-review-response-example.html` 예시 파�
 
 GitHub Release에는 `privyspark-<tag>-review-response-viewer.html`도 함께 제공합니다. 운영자는 회수한 `response-YYYYMMDD-HHMMSS.json`을 이 파일로 로컬에서 열어 envelope 메타데이터, schema/fingerprint 유무, finding별 판정과 allowlist/action plan 입력값을 확인할 수 있습니다. 이 파일은 JSON 확인용이며 collector state를 갱신하지 않습니다.
 
-HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 각 finding에 대해 하나의 결정을 입력합니다.
+HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 같은 `file_identifier` 경로에서 여러 PII가 검출되면 하나의 row로 묶어 표시하고, 담당자는 해당 경로 그룹에 대해 한 번만 판정/사유/조치 계획을 입력합니다.
 
-브라우저 렌더링 비용을 낮추기 위해 `review.html`은 입력 상태를 DOM이 아닌 페이지 내부 상태에 보관하고, 화면 근처의 row만 실제 입력 필드로 hydrate합니다. 화면 밖 row는 가벼운 placeholder로 유지되지만, 입력한 판정/사유/조치 계획은 response JSON 생성 시 전체 finding 기준으로 포함됩니다. 정렬과 일괄 삭제 계획 적용도 이 내부 상태를 기준으로 처리하므로 화면에 보이지 않는 row의 입력값이 누락되지 않습니다.
+브라우저 렌더링 비용을 낮추기 위해 `review.html`은 입력 상태를 DOM이 아닌 페이지 내부 상태에 보관하고, 화면 근처의 row만 실제 입력 필드로 hydrate합니다. 화면 밖 row는 가벼운 placeholder로 유지되지만, 입력한 판정/사유/조치 계획은 response JSON 생성 시 그룹 안의 전체 finding 기준으로 펼쳐져 포함됩니다. 정렬과 일괄 삭제 계획 적용도 이 내부 상태를 기준으로 처리하므로 화면에 보이지 않는 row의 입력값이 누락되지 않습니다.
 
 결정 값은 다음 중 하나입니다.
 - `false_positive`: 실제 개인정보가 아니므로 다음 스캔에서 suppress합니다.
 - `true_positive`: 실제 개인정보이므로 조치 계획을 등록합니다.
 
 HTML 표는 검토자가 빠르게 훑을 수 있도록 주요 값을 별도 컬럼으로 보여줍니다.
-- `경로`, `Hive`, `컬럼`, `PII`: 검출 위치와 PII 타입을 각각 독립 컬럼으로 표시합니다. `finding_key`는 response 생성과 검증에는 사용하지만 화면에는 hidden 값으로만 보관합니다.
-- `sampled_row_count`, `match_count`, `non_empty_match_ratio`: 검토 판단에 필요한 핵심 지표를 개별 컬럼으로 표시합니다. `confidence`는 response JSON 검증용 데이터에는 남지만 표의 지표 컬럼에는 노출하지 않습니다.
+- `경로`, `Hive`, `컬럼`, `PII`: 검출 위치와 PII 타입을 각각 독립 컬럼으로 표시합니다. 같은 경로 그룹에 여러 값이 있으면 줄바꿈 목록으로 표시합니다. `finding_key`는 response 생성과 검증에는 사용하지만 화면에는 hidden 값으로만 보관합니다.
+- `sampled_row_count`, `match_count`, `non_empty_match_ratio`: 검토 판단에 필요한 핵심 지표를 개별 컬럼으로 표시합니다. 경로 그룹의 `match_count`는 합산하고, `sampled_row_count`와 `non_empty_match_ratio`는 그룹 내 최댓값을 표시합니다. `confidence`는 response JSON 검증용 데이터에는 남지만 표의 지표 컬럼에는 노출하지 않습니다.
 - `Decision`: 오탐/정탐 판정만 선택합니다.
 - `Allowlist Scope`: 오탐일 때만 `exact` 또는 `pattern`을 선택합니다.
 - `오탐 사유`, `file_identifier_pattern`, `column_name_pattern`, `pii_type_pattern`, `pattern expires_at`, `정탐 조치 계획`, `조치 예정일`: 기존 사유/계획 입력 영역을 필드별 컬럼으로 나눠 입력합니다.
 
 판정 선택 전에는 사유/계획 입력 영역을 숨깁니다. `false_positive`를 선택하면 오탐 사유와 pattern 필드만 표시하고, `true_positive`를 선택하면 조치 계획과 조치 예정일만 표시합니다.
 
-삭제 처리 대상 정탐이 여러 건이면 상단의 삭제 예정일을 입력한 뒤 `일괄 삭제 계획 등록`을 누릅니다. 이 버튼은 현재 `true_positive`로 선택된 finding에 `action_plan=삭제 처리`와 입력한 조치 예정일을 채웁니다.
+삭제 처리 대상 정탐이 여러 건이면 상단의 삭제 예정일을 입력한 뒤 `일괄 삭제 계획 등록`을 누릅니다. 이 버튼은 현재 `true_positive`로 선택된 경로 그룹에 `action_plan=삭제 처리`와 입력한 조치 예정일을 채웁니다.
 
 오탐 입력 필수값:
 - 오탐 사유
@@ -198,7 +198,7 @@ finding 요약에는 다음 필드를 표시합니다.
 ## Response JSON
 담당자가 HTML에서 제출 버튼을 누르면 response JSON 파일을 다운로드합니다. HTML 파일 자체를 회신받아 파싱하지 않습니다.
 
-response JSON은 하나의 파일 안에 여러 finding 응답을 담을 수 있는 envelope 구조입니다. 담당자가 HTML에서 여러 항목을 한 번에 검토하면 `responses` 배열에 여러 응답이 들어갑니다.
+response JSON은 하나의 파일 안에 여러 finding 응답을 담을 수 있는 envelope 구조입니다. 담당자가 HTML에서 여러 항목을 한 번에 검토하면 `responses` 배열에 여러 응답이 들어갑니다. `review.html`에서 같은 경로의 여러 finding을 하나의 row로 검토했더라도 다운로드 시에는 기존 collector 스키마에 맞게 finding별 응답으로 펼쳐집니다.
 
 ```json
 {
@@ -402,7 +402,7 @@ scan은 `<review-state-root>/current/allowlist.jsonl`을 읽어 오탐을 suppre
    ```
 
 2. 생성된 `<scan-output>/review/review.html` 또는 `--review-html-dir`로 지정한 디렉토리의 `review.html` 파일을 담당자에게 전달합니다.
-3. 담당자는 HTML에서 검출 샘플을 확인하고 response JSON을 생성합니다. 여러 정탐 finding을 삭제 처리해야 하면 `true_positive`로 선택한 뒤 일괄 삭제 계획 등록으로 같은 삭제 계획을 채울 수 있습니다.
+3. 담당자는 HTML에서 검출 샘플을 확인하고 response JSON을 생성합니다. 같은 경로의 여러 finding은 하나의 row에서 한 번만 판정/사유/계획을 입력합니다. 여러 정탐 경로 그룹을 삭제 처리해야 하면 `true_positive`로 선택한 뒤 일괄 삭제 계획 등록으로 같은 삭제 계획을 채울 수 있습니다.
 4. 사내 시스템은 response JSON을 `<review-state-root>/inbox`에 업로드합니다.
 5. collector를 실행합니다.
 
