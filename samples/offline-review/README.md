@@ -5,13 +5,14 @@
 - Open it directly in a browser.
 - Click a table header to sort findings; click the same header again to reverse the order.
 - The table keeps form state outside the DOM and hydrates only rows near the viewport, so the example matches the generated `review.html` behavior for large finding sets.
-- Review location, Hive table, column, PII type, and metrics in separate columns; findings with the same path are shown in one row, and finding keys are retained as hidden data for response generation.
-- Select decisions for one or more path groups. A grouped row uses one decision, reason, and action plan for all findings in that path.
-- Use the separate Allowlist Scope column only for false positives: `exact` for fingerprint-checked findings in the path group, `pattern` for repeated false positives with a reason, expiry date, and pattern fields.
+- Review location, Hive table, column, PII type, and metrics in separate Korean-labeled columns; findings with the same path remain separate rows so each PII type can be judged independently.
+- PII types are displayed as Korean names such as `이메일` and `운전면허번호`; downloaded JSON keeps the collector's raw `pii_type` values.
+- Select decisions for one or more findings. The top guidance block contains the shared examples instead of repeating hints in every row.
+- Use the false-positive scope column only for false positives: `exact` for fingerprint-checked findings, `pattern` for repeated false positives with a reason, expiry date, and pattern fields.
 - False-positive fields and true-positive action-plan fields are split into individual columns and shown based on the selected decision.
-- Use the bulk delete-plan button to fill `action_plan=삭제 처리` and a shared due date for path groups already marked `true_positive`.
+- Use the bulk delete-plan button to fill `action_plan=삭제 처리` and a shared due date for findings already marked `true_positive`.
 - Click the download button to create a `response-YYYYMMDD-HHMMSS.json` file.
-- The downloaded JSON still contains one response object per underlying finding, so it can be consumed by the existing collector schema.
+- The downloaded JSON contains one response object per finding, so it can be consumed by the existing collector schema.
 - The sample data is synthetic and masked; production `review.html` files are generated under `<scan-output>/review/review.html`.
 
 `review-response-viewer.html` is a local operator page for inspecting a returned `response-YYYYMMDD-HHMMSS.json`.
