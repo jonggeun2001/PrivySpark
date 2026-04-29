@@ -128,10 +128,12 @@ HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을
 - `false_positive`: 실제 개인정보가 아니므로 다음 스캔에서 suppress합니다.
 - `true_positive`: 실제 개인정보이므로 조치 계획을 등록합니다.
 
-HTML 표는 판정과 allowlist scope를 별도 컬럼으로 보여줍니다.
+HTML 표는 검토자가 빠르게 훑을 수 있도록 주요 값을 별도 컬럼으로 보여줍니다.
+- `경로`, `Hive`, `컬럼`, `PII`: 검출 위치와 PII 타입을 각각 독립 컬럼으로 표시합니다. `finding_key`는 response 생성과 검증에는 사용하지만 화면에는 hidden 값으로만 보관합니다.
+- `sampled_row_count`, `match_count`, `non_empty_match_ratio`: 검토 판단에 필요한 핵심 지표를 개별 컬럼으로 표시합니다. `confidence`는 response JSON 검증용 데이터에는 남지만 표의 지표 컬럼에는 노출하지 않습니다.
 - `Decision`: 오탐/정탐 판정만 선택합니다.
 - `Allowlist Scope`: 오탐일 때만 `exact` 또는 `pattern`을 선택합니다.
-- `Reason / Plan`: 오탐 사유, pattern 필드, 정탐 조치 계획을 입력합니다.
+- `오탐 사유`, `file_identifier_pattern`, `column_name_pattern`, `pii_type_pattern`, `pattern expires_at`, `정탐 조치 계획`, `조치 예정일`: 기존 사유/계획 입력 영역을 필드별 컬럼으로 나눠 입력합니다.
 
 판정 선택 전에는 사유/계획 입력 영역을 숨깁니다. `false_positive`를 선택하면 오탐 사유와 pattern 필드만 표시하고, `true_positive`를 선택하면 조치 계획과 조치 예정일만 표시합니다.
 
@@ -151,17 +153,17 @@ HTML 표는 판정과 allowlist scope를 별도 컬럼으로 보여줍니다.
 담당자가 판단할 수 있도록 `review.html`은 검출 샘플을 보여줍니다.
 
 finding 요약에는 다음 필드를 표시합니다.
-- `scan_path`
 - `file_identifier`
+- `hive_table_fqn`
 - `hive_database`
 - `hive_table`
 - `column_name`
 - `pii_type`
-- `match_count`
 - `sampled_row_count`
-- `match_ratio`
+- `match_count`
 - `non_empty_match_ratio`
-- `confidence`
+
+`finding_key`, `finding_hash`, `match_ratio`, `confidence`는 HTML 내부 데이터와 response 검증에는 사용하지만 검토 표의 일반 표시 컬럼으로는 노출하지 않습니다.
 
 상세 영역에는 evidence sample을 표시합니다.
 - `file_identifier`

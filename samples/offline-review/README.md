@@ -4,9 +4,10 @@
 
 - Open it directly in a browser.
 - Click a table header to sort findings; click the same header again to reverse the order.
+- Review location, Hive table, column, PII type, and metrics in separate columns; the finding key is retained as hidden data for response generation.
 - Select decisions for one or more findings.
 - Use the separate Allowlist Scope column only for false positives: `exact` for a single fingerprint-checked finding, `pattern` for repeated false positives with a reason, expiry date, and pattern fields.
-- False-positive fields and true-positive action-plan fields are shown based on the selected decision.
+- False-positive fields and true-positive action-plan fields are split into individual columns and shown based on the selected decision.
 - Use the bulk delete-plan button to fill `action_plan=삭제 처리` and a shared due date for findings already marked `true_positive`.
 - Click the download button to create a `response-YYYYMMDD-HHMMSS.json` file.
 - The sample data is synthetic and masked; production `review.html` files are generated under `<scan-output>/review/review.html`.
