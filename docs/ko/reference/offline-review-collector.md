@@ -120,7 +120,7 @@ collector는 response JSON의 `scan_results_fingerprint`가 현재 `--scan-resul
 
 GitHub Release에는 `privyspark-<tag>-review-response-example.html` 예시 파일을 함께 제공합니다. 이 파일은 더미 finding으로 response JSON 다운로드 흐름을 확인하기 위한 샘플이며, 실제 운영 검토에는 각 스캔이 생성한 `<scan-output>/review/review.html`을 사용합니다.
 
-GitHub Release에는 `privyspark-<tag>-review-response-viewer.html`도 함께 제공합니다. 운영자는 회수한 `response-YYYYMMDD-HHMMSS.json`을 이 파일로 로컬에서 열어 envelope 메타데이터, schema/fingerprint 유무, finding별 판정과 allowlist/action plan 입력값을 확인할 수 있습니다. 이 파일은 JSON 확인용이며 collector state를 갱신하지 않습니다.
+GitHub Release에는 `privyspark-<tag>-review-response-viewer.html`도 함께 제공합니다. 운영자는 회수한 `response-YYYYMMDD-HHMMSS.json`을 이 파일로 로컬에서 열고, 파일 선택/드래그앤드롭/원문 붙여넣기로 envelope 메타데이터, schema/fingerprint 유무, finding별 판정과 allowlist/action plan 입력값을 확인할 수 있습니다. 이 파일은 JSON 확인용이며 collector state를 갱신하지 않습니다.
 
 HTML에는 현재 `scan_results`에서 만든 finding 목록과 검출 샘플을 포함합니다. 담당자는 테이블 헤더를 클릭해 finding 목록을 정렬할 수 있고, 같은 헤더를 다시 클릭하면 정렬 방향이 반전됩니다. 테이블 헤더는 스크롤 중에도 고정됩니다. 같은 `file_identifier` 경로에서 여러 PII가 검출되더라도 개인정보 유형별 판정이 다를 수 있으므로 각 finding은 별도 row로 표시합니다.
 
