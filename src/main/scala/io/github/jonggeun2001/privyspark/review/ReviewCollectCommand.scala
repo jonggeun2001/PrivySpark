@@ -72,7 +72,8 @@ private[privyspark] object ReviewCollectCommand {
     )
     val findingsByKey = findings.map(finding => finding.findingKey -> finding).toMap
     val expectedScanFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
-    val expectedScanPaths = findings.map(_.scanPath).distinct.toSet
+    val expectedScanPaths =
+      findings.map(finding => ReviewPathNormalizer.normalizeScanPath(finding.scanPath)).distinct.toSet
     val root = config.reviewStateRoot.stripSuffix("/")
     val inboxPath = s"$root/inbox"
     val currentPath = s"$root/current"
@@ -85,7 +86,7 @@ private[privyspark] object ReviewCollectCommand {
       case Left(rejection) =>
         rejected += rejection
       case Right(envelope) =>
-        if (!expectedScanPaths.contains(envelope.scanPath)) {
+        if (!expectedScanPaths.contains(ReviewPathNormalizer.normalizeScanPath(envelope.scanPath))) {
           rejected += RejectedResponse(envelope.sourcePath, s"scan_path mismatch: ${envelope.scanPath}")
         } else if (envelope.scanResultsFingerprint != expectedScanFingerprint) {
           rejected += RejectedResponse(envelope.sourcePath, "scan_results_fingerprint mismatch")
@@ -242,7 +243,12 @@ private[privyspark] object ReviewCollectCommand {
           val findingKey = ReviewFindingBuilder.findingKeyForResult(result)
           if (latestFindingKeys.contains(findingKey)) {
             ReviewFindingBuilder.evidenceFromScanResult(result).foreach { evidence =>
-              affectedKeys += AllowlistKey(result.dataset_path, evidence.fileIdentifier, result.column_name, result.pii_type)
+              affectedKeys += AllowlistKey(
+                ReviewPathNormalizer.normalizeScanPath(result.dataset_path),
+                evidence.fileIdentifier,
+                result.column_name,
+                result.pii_type
+              )
               exactFalsePositiveByKey.get(findingKey).foreach { response =>
                 entries += AllowlistEntry(
                   datasetPath = result.dataset_path,
@@ -285,7 +291,8 @@ private[privyspark] object ReviewCollectCommand {
   }
 
   private def patternCoversFinding(entry: PatternAllowlistEntry, finding: ReviewFinding): Boolean =
-    entry.datasetPath == finding.scanPath &&
+    ReviewPathNormalizer.normalizeScanPath(entry.datasetPath) ==
+      ReviewPathNormalizer.normalizeScanPath(finding.scanPath) &&
       findingIdentifiers(finding).exists(wildcardMatches(entry.fileIdentifierPattern, _)) &&
       wildcardMatches(entry.columnNamePattern, finding.columnName) &&
       wildcardMatches(entry.piiTypePattern, finding.piiType)
@@ -308,9 +315,10 @@ private[privyspark] object ReviewCollectCommand {
   }
 
   private def actionPlanCoversFinding(plan: ActionPlan, finding: ReviewFinding): Boolean = {
-    val sameScanAndType = plan.scanPath == finding.scanPath &&
-      plan.columnName == finding.columnName &&
-      plan.piiType == finding.piiType
+    val sameScanAndType =
+      ReviewPathNormalizer.normalizeScanPath(plan.scanPath) == ReviewPathNormalizer.normalizeScanPath(finding.scanPath) &&
+        plan.columnName == finding.columnName &&
+        plan.piiType == finding.piiType
     if (!sameScanAndType) {
       false
     } else if (plan.fileIdentifier.trim.nonEmpty) {

@@ -42,6 +42,38 @@ class AllowlistMatcherSpec extends AnyFunSuite {
     assert(!evaluation.reviewInvalidated)
   }
 
+  test("evaluate treats equivalent hdfs slash variants as the same dataset path") {
+    val fingerprint = ResolvedFileFingerprint(
+      fileIdentifier = "users.csv",
+      physicalPath = "hdfs:///user/username/users.csv",
+      fileSize = 128L,
+      fileMtimeEpochMs = 1710000000000L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "a1b2c3d4"
+    )
+    val matcher = AllowlistMatcher.fromEntries(Seq(
+      AllowlistEntry(
+        datasetPath = "hdfs:////user/username",
+        fileIdentifier = "users.csv",
+        columnName = "email",
+        piiType = "email",
+        reason = "known dummy data",
+        reviewer = "reviewer@example.com",
+        reviewedAt = "2026-04-20T00:00:00Z",
+        sourceRunId = "",
+        fileSize = 128L,
+        fileMtimeEpochMs = 1710000000000L,
+        fileChecksumAlgo = "CRC32",
+        fileChecksum = "a1b2c3d4"
+      )
+    ))
+
+    assert(matcher.hasExactCandidate("hdfs:///user/username", "users.csv", "email", "email"))
+    val evaluation = matcher.evaluate("hdfs:///user/username/", "email", "email", Seq(fingerprint))
+
+    assert(evaluation.shouldSuppress)
+  }
+
   test("evaluate keeps the result and marks it invalidated when checksum changed") {
     val fingerprint = ResolvedFileFingerprint(
       fileIdentifier = "users.csv",

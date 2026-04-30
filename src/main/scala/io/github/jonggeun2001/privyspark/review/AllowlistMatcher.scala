@@ -22,10 +22,20 @@ final class AllowlistMatcher private (
   def size: Int = entriesByKey.size + patternEntries.size
 
   def hasExactCandidate(datasetPath: String, fileIdentifier: String, columnName: String, piiType: String): Boolean =
-    entriesByKey.contains(AllowlistKey(datasetPath, fileIdentifier, columnName, piiType))
+    entriesByKey.contains(AllowlistKey(
+      ReviewPathNormalizer.normalizeScanPath(datasetPath),
+      fileIdentifier,
+      columnName,
+      piiType
+    ))
 
   def hasDirectoryCandidate(datasetPath: String, directoryIdentifier: String, columnName: String, piiType: String): Boolean =
-    directoryCandidates.contains((datasetPath, directoryIdentifier, columnName, piiType))
+    directoryCandidates.contains((
+      ReviewPathNormalizer.normalizeScanPath(datasetPath),
+      directoryIdentifier,
+      columnName,
+      piiType
+    ))
 
   def hasPatternCandidate(datasetPath: String, fileIdentifier: String, columnName: String, piiType: String): Boolean =
     activePatternEntries.exists(patternMatches(_, datasetPath, fileIdentifier, columnName, piiType))
@@ -50,7 +60,12 @@ final class AllowlistMatcher private (
     }
 
     val exactMatches = fingerprints.flatMap { fingerprint =>
-      entriesByKey.get(AllowlistKey(datasetPath, fingerprint.fileIdentifier, columnName, piiType)).map(_ -> fingerprint)
+      entriesByKey.get(AllowlistKey(
+        ReviewPathNormalizer.normalizeScanPath(datasetPath),
+        fingerprint.fileIdentifier,
+        columnName,
+        piiType
+      )).map(_ -> fingerprint)
     }
 
     if (exactMatches.isEmpty) {
@@ -99,7 +114,7 @@ final class AllowlistMatcher private (
     columnName: String,
     piiType: String
   ): Boolean =
-    entry.datasetPath == datasetPath &&
+    ReviewPathNormalizer.normalizeScanPath(entry.datasetPath) == ReviewPathNormalizer.normalizeScanPath(datasetPath) &&
       wildcardMatches(entry.fileIdentifierPattern, fileIdentifier) &&
       wildcardMatches(entry.columnNamePattern, columnName) &&
       wildcardMatches(entry.piiTypePattern, piiType)
@@ -130,7 +145,7 @@ object AllowlistMatcher {
     }.toSeq
     val derivedDirectoryCandidates = normalizedEntries.values.flatMap { entry =>
       directoryCandidate(entry).map { directoryIdentifier =>
-        (entry.datasetPath, directoryIdentifier, entry.columnName, entry.piiType)
+        (entry.key.datasetPath, directoryIdentifier, entry.columnName, entry.piiType)
       }
     }.toSet
     new AllowlistMatcher(normalizedEntries, derivedDirectoryCandidates, normalizedPatterns)
