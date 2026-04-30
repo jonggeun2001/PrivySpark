@@ -101,9 +101,10 @@ final class AllowlistMatcher private (
   }
 
   private def fieldMatches(pattern: String, value: String, wildcardsEnabled: Boolean): Boolean = {
-    val normalizedPattern = Option(pattern).map(_.trim).getOrElse("")
-    if (wildcardsEnabled && normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, value)
-    else normalizedPattern == Option(value).getOrElse("")
+    val normalizedPattern = Option(pattern).getOrElse("")
+    val normalizedValue = Option(value).getOrElse("")
+    if (wildcardsEnabled && normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, normalizedValue)
+    else normalizedPattern == normalizedValue
   }
 
   private def wildcardMatches(pattern: String, value: String): Boolean = {

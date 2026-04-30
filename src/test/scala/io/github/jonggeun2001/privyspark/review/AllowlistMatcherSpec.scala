@@ -139,6 +139,28 @@ class AllowlistMatcherSpec extends AnyFunSuite {
     assert(!evaluation.shouldSuppress)
   }
 
+  test("evaluate preserves leading spaces in recurring column names") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "/data",
+        hiveTableFqn = "mart.customers",
+        fileIdentifierPattern = "",
+        columnName = " email"
+      )
+    ))
+
+    val evaluation = matcher.evaluate(
+      datasetPath = "/data",
+      hiveTableFqn = "mart.customers",
+      fileIdentifier = "customers/part-000.parquet",
+      columnName = " email",
+      piiType = "email",
+      fingerprints = Seq.empty
+    )
+
+    assert(evaluation.shouldSuppress)
+  }
+
   test("evaluate ignores legacy exact entries") {
     val matcher = AllowlistMatcher.fromEntries(Seq(
       AllowlistEntry(

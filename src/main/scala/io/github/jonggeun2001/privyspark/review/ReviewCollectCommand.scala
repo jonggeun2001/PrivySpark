@@ -277,9 +277,10 @@ private[privyspark] object ReviewCollectCommand {
     Option(value).exists(_.contains("*"))
 
   private def fieldMatches(pattern: String, value: String, wildcardsEnabled: Boolean): Boolean = {
-    val normalizedPattern = Option(pattern).map(_.trim).getOrElse("")
-    if (wildcardsEnabled && normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, value)
-    else normalizedPattern == Option(value).map(_.trim).getOrElse("")
+    val normalizedPattern = Option(pattern).getOrElse("")
+    val normalizedValue = Option(value).getOrElse("")
+    if (wildcardsEnabled && normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, normalizedValue)
+    else normalizedPattern == normalizedValue
   }
 
   private def wildcardMatches(pattern: String, value: String): Boolean = {

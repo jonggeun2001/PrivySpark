@@ -329,6 +329,32 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
       .shouldSuppress)
   }
 
+  test("collect preserves leading spaces in recurring column names") {
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-spaced-column-")
+    Files.createDirectories(stateRoot.resolve("inbox"))
+
+    val falsePositive =
+      """{"finding_key":"finding-spaced-column","finding_hash":"hash-finding-spaced-column","file_identifier":"customers/a.csv","column_name":" email","pii_type":"email","sample_row_count":1000,"match_count":12,"non_empty_match_ratio":0.12,"decision":"false_positive","false_positive_reason":"known spaced column","expires_at":"2999-12-31"}"""
+    Files.write(
+      stateRoot.resolve("inbox/owner-response.json"),
+      responseEnvelope(scanPath = "/data/project", responses = Seq(falsePositive)).getBytes(StandardCharsets.UTF_8)
+    )
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
+    )
+
+    val allowlistPath = stateRoot.resolve("current/allowlist.jsonl")
+    val allowlist = read(allowlistPath)
+
+    assert(allowlist.contains(""""column_name":" email""""))
+    assert(AllowlistMatcher
+      .load(spark.sparkContext.hadoopConfiguration, allowlistPath.toString)
+      .evaluate("/data/project", "", "customers/a.csv", " email", "email", Seq.empty)
+      .shouldSuppress)
+  }
+
   test("collect keeps hdfs slash variants normalized when replacing recurring state") {
     val stateRoot = Files.createTempDirectory("privyspark-review-state-hdfs-")
     Files.createDirectories(stateRoot.resolve("inbox"))
