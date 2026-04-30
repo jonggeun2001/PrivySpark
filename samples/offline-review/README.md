@@ -9,6 +9,7 @@
 - Review location, Hive table, column, PII type, and metrics in separate Korean-labeled columns; findings with the same path remain separate rows so each PII type can be judged independently.
 - PII types are displayed as Korean names such as `이메일` and `운전면허번호`; downloaded JSON keeps the collector's raw `pii_type` values.
 - Select decisions with the false-positive and true-positive buttons. The top guidance block contains the shared examples instead of repeating hints in every row.
+- The top guidance block includes false-positive reason examples, such as `거래일시 포맷이 운전면허번호 규칙과 충돌`.
 - The detection sample column shows only matched fragments and raw sample context; path, column, and PII type stay in their separate columns.
 - False-positive responses always use `allowlist_scope=exact`; the scope selector column is not shown.
 - False-positive fields and true-positive action-plan fields are split into individual columns and shown based on the selected decision.

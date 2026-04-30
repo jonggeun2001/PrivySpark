@@ -48,6 +48,7 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(html.contains("\"has_multiple_file_evidence\""))
     assert(html.contains("검토 안내"))
     assert(html.contains("오탐은 다음 스캔에서 제외하고, 정탐은 제외하지 않고 조치 계획만 남깁니다."))
+    assert(html.contains("오탐 사유 예: <code>거래일시 포맷이 운전면허번호 규칙과 충돌</code>"))
     assert(html.contains("정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>."))
     assert(html.contains("정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다."))
     assert(!html.contains("오탐 응답은 <code>exact</code> 범위로만 생성합니다."))
