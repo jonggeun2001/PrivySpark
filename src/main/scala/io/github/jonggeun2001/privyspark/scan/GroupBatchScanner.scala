@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
-import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupIndex}
+import io.github.jonggeun2001.privyspark.hive.{HiveTableFqnResolver, HiveTableLookupIndex}
 import io.github.jonggeun2001.privyspark.format.CsvInference.{readSource, resolveFileIdentifierColumn}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun, ScanGroup, ScanResult}
@@ -118,7 +118,7 @@ private[privyspark] object GroupBatchScanner {
         val provisionalResults = matchCountsByFile.flatMap { matchCount =>
           sampledRowsByFile.get(matchCount.fileIdentifier).flatMap { sampledRowCount =>
             val sourceKey = resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier)
-            val fqn = hiveTableFqn(hiveLookup, matchCount.fileIdentifier)
+            val fqn = HiveTableFqnResolver.resolve(hiveLookup, matchCount.fileIdentifier)
             ScanResultBuilder.buildScanResults(
               datasetPath,
               groupScanTimestamp,
@@ -172,6 +172,4 @@ private[privyspark] object GroupBatchScanner {
     }
   }
 
-  private def hiveTableFqn(hiveLookup: Option[Broadcast[HiveTableLookupIndex]], rawPath: String): String =
-    hiveLookup.map(_.value.lookup(HiveTableLookup.stripCompositeIdentifier(rawPath))).getOrElse("")
 }

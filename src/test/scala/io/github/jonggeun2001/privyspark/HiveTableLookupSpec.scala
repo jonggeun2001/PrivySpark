@@ -136,6 +136,29 @@ class HiveTableLookupSpec extends AnyFunSuite {
     )
   }
 
+  test("HiveTableFqnResolver resolves broadcast lookup after stripping composite identifiers") {
+    val spark = SparkSession.builder()
+      .appName("HiveTableFqnResolverSpec")
+      .master("local[1]")
+      .config("spark.ui.enabled", "false")
+      .config("spark.driver.allowMultipleContexts", "true")
+      .getOrCreate()
+    val hiveLookup = spark.sparkContext.broadcast(HiveTableLookupIndex(
+      Vector("hdfs://nn/data/archive.zip" -> "mart.archived_customers")
+    ))
+
+    try {
+      assert(
+        HiveTableFqnResolver.resolve(Some(hiveLookup), "hdfs://nn/data/archive.zip!nested/customers.csv") ==
+          "mart.archived_customers"
+      )
+      assert(HiveTableFqnResolver.resolve(None, "hdfs://nn/data/archive.zip!nested/customers.csv") == "")
+    } finally {
+      hiveLookup.destroy()
+      spark.stop()
+    }
+  }
+
   test("duplicate prefixes choose a deterministic table fqn") {
     val index = HiveTableLookupIndex(
       Vector(
