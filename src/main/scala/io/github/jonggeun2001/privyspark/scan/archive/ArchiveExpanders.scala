@@ -1,10 +1,9 @@
-package io.github.jonggeun2001.privyspark.scan
+package io.github.jonggeun2001.privyspark.scan.archive
 
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.model.{ScanError, ScanFileEntry, ScanReadOptions}
-import io.github.jonggeun2001.privyspark.scan.ArchiveStaging._
-import io.github.jonggeun2001.privyspark.scan.archive.{ArchiveExpandLoop, ArchiveIOUtil, RarHandler, SevenZHandler, TarHandler, ZipHandler}
+import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging._
 
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal

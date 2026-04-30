@@ -7,7 +7,7 @@ import io.github.jonggeun2001.privyspark.format.CompressionStreams
 import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
 import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.listVisibleWorkbookSheets
-import io.github.jonggeun2001.privyspark.scan.ArchiveStaging._
+import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging._
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.resolveRelativeIdentifier
 import org.apache.commons.compress.PasswordRequiredException
 import org.apache.commons.compress.archivers.sevenz.SevenZFile

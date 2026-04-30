@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark.scan
 
-import io.github.jonggeun2001.privyspark.scan.ArchiveStaging.ArchiveFormats
+import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging.ArchiveFormats
 import io.github.jonggeun2001.privyspark.format.ByteProbe.{isZeroBytePhysicalFile, shouldProbeForFormat}
 import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference._

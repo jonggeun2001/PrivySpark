@@ -3,7 +3,7 @@ package io.github.jonggeun2001.privyspark.scan.archive
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.model.{ScanError, ScanFileEntry, ScanReadOptions}
-import io.github.jonggeun2001.privyspark.scan.ArchiveStaging._
+import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging._
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers
