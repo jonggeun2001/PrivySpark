@@ -1,29 +1,11 @@
-# False Positive 검토 워크플로우
+# Legacy Review Apply 워크플로우
 
-## 목적
-- 반복적으로 같은 false positive가 다시 올라오는 노이즈를 줄입니다.
-- 검토 단위는 `(dataset_path, file_identifier, column_name, pii_type)` 입니다.
-- 파일 메타데이터와 checksum이 바뀌면 기존 false positive 판정은 자동으로 무효화됩니다.
+`privyspark review apply`는 사람이 `scan_results`를 직접 편집한 뒤 legacy exact allowlist JSONL을 생성하는 오래된 워크플로우입니다.
 
-이 문서는 사람이 `scan_results`를 직접 편집하고 `review apply`로 exact allowlist를 만드는 단일 파일 워크플로우입니다. 서버 없이 담당자에게 `review.html`을 보내고 response JSON을 회수해 누적 state를 운영하려면 [offline-review-collector.md](offline-review-collector.md)를 사용합니다.
+현재 오프라인 리뷰 운영의 기본 흐름은 [offline-review-collector.md](offline-review-collector.md)의 recurring review state입니다. `scan --review-state-root`가 적용하는 누적 오탐 제외는 `entry_type=recurring`만 사용하며, legacy exact entry는 suppress 판단에 사용하지 않습니다.
 
-## 1. 1차 스캔
-```bash
-privyspark scan \
-  --path /abs/input \
-  --output /abs/output \
-  --output-format excel
-```
+## Legacy 명령
 
-담당자는 `scan_results`에서 다음 컬럼만 편집하면 됩니다.
-- `review_status`: `pending`, `false_positive`, `true_positive`
-- `review_reason`: 자유 텍스트
-
-review 메타데이터 캡처 참고:
-- directory review row는 항상 staged per-file snapshot 기준으로 기록됩니다.
-- batch/file 단위 스캔은 실제 review row가 생긴 파일에 대해서만 staged review snapshot을 만들기 때문에, 미검출 파일은 추가 full-file pass 비용을 내지 않습니다.
-
-## 2. Allowlist 생성 또는 갱신
 ```bash
 privyspark review apply \
   --scan-results /abs/output/excel/scan_results.xlsx \
@@ -32,37 +14,20 @@ privyspark review apply \
   --reviewer reviewer@example.com
 ```
 
-동작 요약:
-- `review_status=false_positive` row만 읽습니다.
-- 각 row의 `file_identifier`를 실제 파일로 역해석합니다.
-- directory identifier는 `review_scope_file_identifiers`에 기록된 concrete file identifier만 allowlist로 전개합니다.
-- directory review row는 기록된 `review_scope_file_fingerprints`가 있어야 하며, scope에 포함된 각 파일 fingerprint가 모두 일치할 때만 staged 됩니다.
-- non-directory row는 기록된 `file_size`, `file_mtime_epoch_ms`를 검증한 뒤 현재 `CRC32`를 계산합니다.
-- 같은 key가 이미 있으면 최신 review로 덮어씁니다.
+이 명령은 `review_status=false_positive` row를 읽고 파일 fingerprint 기반 exact entry를 씁니다. 이 형식은 이전 버전과의 파일 생성 호환을 위해 남아 있지만, 반복 배치 오탐 운영에는 적합하지 않습니다.
 
-같은 `scan_results` 파일에서 `true_positive` 또는 `pending`으로 바뀐 key는 기존 allowlist에서 제거됩니다.
+## 권장 흐름
 
-`--dry-run`을 주면 파일은 쓰지 않고 staged entry 수만 계산합니다.
+서버 없이 담당자에게 `review.html`을 전달하고 다음 스캔에서 반복 오탐을 제외하려면 다음 흐름을 사용합니다.
 
-## 3. 재스캔
 ```bash
 privyspark scan \
   --path /abs/input \
-  --output /abs/output-next \
-  --allowlist /abs/review/allowlist.jsonl
+  --output /abs/output \
+  --review-state-root /abs/review-state
+
+privyspark review collect \
+  --review-state-root /abs/review-state
 ```
 
-재스캔 시 동작:
-- allowlist key와 현재 `(dataset_path, file_identifier, column_name, pii_type)`가 일치하고
-- `file_size`, `file_mtime_epoch_ms`, `CRC32`도 같으면
-- 해당 result row는 최종 `scan_results`에서 빠집니다.
-
-메타데이터나 checksum이 바뀌면 row를 유지하고 다음 값을 남깁니다.
-- `review_status=pending`
-- `review_reason=<이전 사유>`
-- `review_invalidated=true`
-
-## 주의사항
-- ignore와 allowlist는 다릅니다. ignore는 파일 자체를 스캔에서 제외하고, allowlist는 이미 검토된 false positive만 suppress합니다.
-- archive entry는 `<archive>!<entry>`, Excel sheet는 `<workbook>#<sheet>` 식별자를 유지합니다.
-- password-protected archive, multi-volume RAR, RAR5 archive는 스캔 단계에서 `scan_errors`에 명시적으로 기록됩니다.
+회수한 response JSON은 `/abs/review-state/inbox/*.json`에 업로드합니다.

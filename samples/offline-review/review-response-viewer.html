@@ -194,7 +194,7 @@
       <div class="metric">전체 응답<strong id="metricTotal">0</strong></div>
       <div class="metric">오탐<strong id="metricFalsePositive">0</strong></div>
       <div class="metric">정탐<strong id="metricTruePositive">0</strong></div>
-      <div class="metric">Pattern Allowlist<strong id="metricPattern">0</strong></div>
+      <div class="metric">Recurring Allowlist<strong id="metricPattern">0</strong></div>
     </div>
     <table>
       <tbody id="metaTable"></tbody>
@@ -221,7 +221,6 @@
     const exampleResponse = {
       "schema_version": 1,
       "scan_path": "hdfs:///warehouse/example_db.db",
-      "scan_results_fingerprint": "sha256:example-scan-results-fingerprint",
       "responder": "security-reviewer",
       "responded_at": "2026-04-28T00:00:00.000Z",
       "responses": [
@@ -229,21 +228,30 @@
           "finding_key": "sha256:example-driver-license-finding-key",
           "finding_hash": "sha256:example-driver-license-finding-hash",
           "file_identifier": "example_db/customers/part-000.parquet",
+          "hive_database": "example_db",
+          "hive_table": "customers",
+          "hive_table_fqn": "example_db.customers",
           "column_name": "customer_no",
           "pii_type": "driver_license_number",
+          "sample_row_count": 1000,
+          "match_count": 24,
+          "non_empty_match_ratio": 0.024,
           "decision": "false_positive",
-          "allowlist_scope": "pattern",
           "false_positive_reason": "Synthetic customer number pattern",
-          "file_identifier_pattern": "example_db/customers/*",
-          "column_name_pattern": "customer_*",
           "expires_at": "2026-12-31"
         },
         {
           "finding_key": "sha256:example-email-finding-key",
           "finding_hash": "sha256:example-email-finding-hash",
           "file_identifier": "example_db/members/part-001.parquet",
+          "hive_database": "example_db",
+          "hive_table": "members",
+          "hive_table_fqn": "example_db.members",
           "column_name": "email",
           "pii_type": "email",
+          "sample_row_count": 1000,
+          "match_count": 830,
+          "non_empty_match_ratio": 0.83,
           "decision": "true_positive",
           "action_plan": "Mask email before downstream export",
           "action_due_date": "2026-05-15"
@@ -320,7 +328,6 @@
       }
       [
         ['scan_path', 'scan_path 값이 필요합니다.'],
-        ['scan_results_fingerprint', 'scan_results_fingerprint 값이 필요합니다.'],
         ['responder', 'responder 값이 필요합니다.']
       ].forEach(([key, message]) => {
         if (!textValue(envelope[key])) errors.push(message);
@@ -341,7 +348,7 @@
             errors.push(`responses[${index}] response는 객체여야 합니다.`);
             return;
           }
-          ['finding_key', 'finding_hash', 'file_identifier', 'column_name', 'pii_type', 'decision'].forEach(key => {
+          ['finding_key', 'column_name', 'pii_type', 'decision'].forEach(key => {
             if (!textValue(response[key])) {
               errors.push(`responses[${index}].${key} 값이 필요합니다.`);
             }
@@ -349,32 +356,23 @@
           const decision = textValue(response.decision);
           const allowlistScope = textValue(response.allowlist_scope);
           if (decision === 'false_positive') {
+            if (allowlistScope && allowlistScope !== 'recurring') {
+              errors.push(`responses[${index}] unsupported allowlist_scope: ${field(response.allowlist_scope)}`);
+            }
             if (!textValue(response.false_positive_reason)) {
               errors.push(`responses[${index}].false_positive_reason 값이 필요합니다.`);
             }
-            if (allowlistScope === 'pattern') {
-              const expiresAt = textValue(response.expires_at);
-              if (!expiresAt) {
-                errors.push(`responses[${index}].expires_at 값이 필요합니다.`);
-              } else if (!isDateOnly(expiresAt)) {
-                errors.push(`responses[${index}].expires_at 값은 YYYY-MM-DD 형식이어야 합니다.`);
-              }
-              const filePattern = textValue(response.file_identifier_pattern);
-              const columnPattern = textValue(response.column_name_pattern);
-              const piiPattern = textValue(response.pii_type_pattern);
-              const hasFilePattern = Boolean(filePattern);
-              const hasColumnPattern = Boolean(columnPattern);
-              const hasPiiPattern = Boolean(piiPattern);
-              if (!hasFilePattern && !hasColumnPattern && !hasPiiPattern) {
-                errors.push(`responses[${index}] pattern allowlist에는 pattern 필드가 하나 이상 필요합니다.`);
-              } else if (!hasFilePattern) {
-                warnings.push(`responses[${index}] 다중 파일 finding은 collector에서 file_identifier_pattern을 요구할 수 있습니다.`);
-              }
-              if (piiPattern === '*') {
-                errors.push(`responses[${index}].pii_type_pattern=* 값은 허용되지 않습니다.`);
-              }
-            } else if (allowlistScope !== 'exact') {
-              errors.push(`responses[${index}] unsupported allowlist_scope: ${field(response.allowlist_scope)}`);
+            const expiresAt = textValue(response.expires_at);
+            if (!expiresAt) {
+              errors.push(`responses[${index}].expires_at 값이 필요합니다.`);
+            } else if (!isDateOnly(expiresAt)) {
+              errors.push(`responses[${index}].expires_at 값은 YYYY-MM-DD 형식이어야 합니다.`);
+            }
+            const hiveTableFqn = textValue(response.hive_table_fqn);
+            const filePattern = textValue(response.file_identifier_pattern);
+            const fileIdentifier = textValue(response.file_identifier);
+            if (!hiveTableFqn && !filePattern && !fileIdentifier) {
+              errors.push(`responses[${index}].file_identifier_pattern 값이 필요합니다.`);
             }
           } else if (decision === 'true_positive') {
             const actionPlan = textValue(response.action_plan);
@@ -396,17 +394,16 @@
       const responses = Array.isArray(envelope.responses) ? envelope.responses : [];
       const falsePositiveCount = responses.filter(response => response.decision === 'false_positive').length;
       const truePositiveCount = responses.filter(response => response.decision === 'true_positive').length;
-      const patternCount = responses.filter(response => response.allowlist_scope === 'pattern').length;
+      const recurringCount = responses.filter(response => response.decision === 'false_positive').length;
 
       setText('metricTotal', responses.length);
       setText('metricFalsePositive', falsePositiveCount);
       setText('metricTruePositive', truePositiveCount);
-      setText('metricPattern', patternCount);
+      setText('metricPattern', recurringCount);
 
       document.getElementById('metaTable').innerHTML = [
         ['schema_version', envelope.schema_version],
         ['scan_path', envelope.scan_path],
-        ['scan_results_fingerprint', envelope.scan_results_fingerprint],
         ['responder', envelope.responder],
         ['responded_at', envelope.responded_at]
       ].map(([key, value]) => `<tr><th>${escapeHtml(key)}</th><td>${field(value)}</td></tr>`).join('');
@@ -416,16 +413,15 @@
           <td data-field="decision">${field(response.decision)}</td>
           <td>
             <div>${field(response.file_identifier)}</div>
+            <div class="muted">${field(response.hive_table_fqn)}</div>
             <div class="muted">${field(response.column_name)} / ${field(response.pii_type)}</div>
           </td>
           <td class="sample">${field(response.finding_key)}
 ${field(response.finding_hash)}</td>
           <td>
-            <div>scope: ${field(response.allowlist_scope)}</div>
+            <div>scope: recurring</div>
             <div>reason: ${field(response.false_positive_reason)}</div>
             <div>file pattern: ${field(response.file_identifier_pattern)}</div>
-            <div>column pattern: ${field(response.column_name_pattern)}</div>
-            <div>pii pattern: ${field(response.pii_type_pattern)}</div>
             <div>expires: ${field(response.expires_at)}</div>
           </td>
           <td>

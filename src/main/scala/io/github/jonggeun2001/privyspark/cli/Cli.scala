@@ -314,9 +314,9 @@ object Cli {
       programName("privyspark review collect"),
       head("PrivySpark", "0.1.0"),
       opt[String]("scan-results")
-        .required()
+        .optional()
         .action((value, config) => config.copy(scanResultsPath = value))
-        .text("현재 scan_results 입력 경로"),
+        .text("deprecated: recurring review collect는 response JSON만 사용합니다"),
       opt[String]("review-state-root")
         .required()
         .action((value, config) => config.copy(reviewStateRoot = value))

@@ -11,10 +11,10 @@
 - Select decisions with the false-positive and true-positive buttons. The top guidance block contains the shared examples instead of repeating hints in every row.
 - The top guidance block includes false-positive reason examples, such as `거래일시 포맷이 운전면허번호 규칙과 충돌`.
 - The detection sample column shows only matched fragments and raw sample context; path, column, and PII type stay in their separate columns.
-- False-positive responses always use `allowlist_scope=exact`; the scope selector column is not shown.
-- False-positive fields and true-positive action-plan fields are split into individual columns and shown based on the selected decision.
+- False-positive responses use recurring review state only; exact scope and pattern selector controls are not shown.
+- False-positive reason, false-positive expiry date, and true-positive action-plan fields are split into individual columns and shown based on the selected decision.
 - Use the bulk true-positive button to fill `action_plan` and `action_due_date` for findings already marked `true_positive`, or the bulk false-positive button to fill `false_positive_reason` for findings already marked `false_positive`.
-- The download button validates every finding before creating JSON. Missing decisions, false-positive reasons, action plans, due dates, or due dates outside the next 30 days are highlighted in red and the first invalid cell is focused.
+- The download button validates every finding before creating JSON. Missing decisions, false-positive reasons, false-positive expiry dates, action plans, due dates, or due dates outside the next 30 days are highlighted in red and the first invalid cell is focused.
 - Direct true-positive due-date inputs use the browser date picker and only allow dates from today through 30 days from today.
 - Click the download button to create a `response-<scan-path>-YYYYMMDD-HHMMSS.json` file.
 - The downloaded JSON contains one response object per finding, so it can be consumed by the existing collector schema.

@@ -18,31 +18,27 @@ class AllowlistScanSpec extends AnyFunSuite {
     .config("spark.ui.enabled", "false")
     .getOrCreate()
 
-  test("scanGroups suppresses allowlisted file-column-pii matches") {
+  test("scanGroups suppresses recurring file-column-pii matches") {
     val inputRoot = Files.createTempDirectory("privyspark-allowlist-scan-")
 
     try {
       val csvFile = inputRoot.resolve("users.csv")
       Files.write(csvFile, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
-      val fingerprint = FileIdentifierResolver.resolveFingerprints(
-        spark.sparkContext.hadoopConfiguration,
-        inputRoot.toString,
-        "users.csv"
-      ).right.get.head
-      val matcher = AllowlistMatcher.fromEntries(Seq(
-        AllowlistEntry(
-          datasetPath = inputRoot.toString,
-          fileIdentifier = "users.csv",
+      val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+        RecurringAllowlistEntry(
+          scanPath = inputRoot.toString,
+          hiveTableFqn = "",
+          fileIdentifierPattern = "users.csv",
           columnName = "email",
           piiType = "email",
           reason = "known dummy data",
           reviewer = "reviewer@example.com",
           reviewedAt = "2026-04-20T00:00:00Z",
-          sourceRunId = "",
-          fileSize = fingerprint.fileSize,
-          fileMtimeEpochMs = fingerprint.fileMtimeEpochMs,
-          fileChecksumAlgo = fingerprint.fileChecksumAlgo,
-          fileChecksum = fingerprint.fileChecksum
+          expiresAt = "2999-12-31",
+          sourceFindingKey = "finding",
+          sampleRowCount = 10L,
+          matchCount = 1L,
+          nonEmptyMatchRatio = 1.0
         )
       ))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
@@ -64,7 +60,7 @@ class AllowlistScanSpec extends AnyFunSuite {
     }
   }
 
-  test("scanGroups keeps invalidated matches with review metadata when checksum changed") {
+  test("scanGroups ignores legacy exact allowlist entries") {
     val inputRoot = Files.createTempDirectory("privyspark-allowlist-invalidated-")
 
     try {
@@ -107,8 +103,8 @@ class AllowlistScanSpec extends AnyFunSuite {
       val results = scanned.flatMap(_._2)
       assert(results.size == 1)
       assert(results.head.review_status == "pending")
-      assert(results.head.review_reason == "known dummy data")
-      assert(results.head.review_invalidated)
+      assert(results.head.review_reason == "")
+      assert(!results.head.review_invalidated)
     } finally {
       deleteRecursively(inputRoot)
     }

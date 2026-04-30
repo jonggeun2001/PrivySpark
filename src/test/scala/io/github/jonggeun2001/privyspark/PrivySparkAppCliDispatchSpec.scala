@@ -70,8 +70,6 @@ class PrivySparkAppCliDispatchSpec extends AnyFunSuite with BeforeAndAfterAll {
       Array(
         "review",
         "collect",
-        "--scan-results",
-        "/data/output/parquet/scan_results",
         "--review-state-root",
         "/data/review-state"
       ),

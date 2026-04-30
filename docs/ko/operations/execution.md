@@ -41,10 +41,9 @@
 - `--dry-run`: 실제 파일 기록 없이 반영 예정 엔트리 수만 계산
 
 ## `review collect` CLI 인자
-- `--scan-results <ABS_PATH_OR_URI>`: 현재 스캔의 `scan_results` 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
 - `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
 
-`review collect`는 `<review-state-root>/inbox/*.json`을 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 다음 스캔은 같은 `--review-state-root`를 지정해 누적 오탐 allowlist를 반영합니다.
+`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. `--scan-results`는 더 이상 필요하지 않습니다. 다음 스캔은 같은 `--review-state-root`를 지정해 recurring 오탐 allowlist를 반영합니다.
 
 오프라인 리뷰 identity와 allowlist 매칭에서는 HDFS URI path의 중복 slash를 정규화합니다. 예를 들어 `hdfs:///user/name`과 `hdfs:////user/name`은 같은 스캔 경로로 취급됩니다.
 
@@ -59,7 +58,7 @@
 
 ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로그, 백업 파일처럼 스캔 가치가 낮은 입력 때문에 불필요한 I/O, 오류 리포트, 결과 노이즈가 늘어나는 것을 막기 위해서입니다.
 
-allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 자체를 제외하고, allowlist는 탐지 이후 `(dataset_path, file_identifier, column_name, pii_type)` 단위 false positive만 suppress합니다.
+allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 자체를 제외하고, allowlist는 탐지 이후 Hive 매핑이 있으면 `(scan_path, hive_table_fqn, column_name, pii_type)`, Hive 매핑이 없으면 `(scan_path, file_identifier_pattern, column_name, pii_type)` 단위 recurring false positive만 suppress합니다.
 
 ## Suppression
 - suppression은 특정 `(column, pii_type)` 결과만 제외합니다. 컬럼명은 대소문자를 무시하고 exact match 합니다.

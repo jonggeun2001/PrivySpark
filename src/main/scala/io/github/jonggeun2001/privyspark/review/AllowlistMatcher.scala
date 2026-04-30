@@ -12,33 +12,29 @@ import java.nio.file.{Files, Paths}
 import java.time.LocalDate
 import java.util.Locale
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Try
 
 final class AllowlistMatcher private (
-  private val entriesByKey: Map[AllowlistKey, AllowlistEntry],
-  private val directoryCandidates: Set[(String, String, String, String)],
-  private val patternEntries: Seq[PatternAllowlistEntry]
+  private val recurringEntries: Seq[RecurringAllowlistEntry]
 ) {
-  def isEmpty: Boolean = entriesByKey.isEmpty && patternEntries.isEmpty
-  def size: Int = entriesByKey.size + patternEntries.size
+  def isEmpty: Boolean = recurringEntries.isEmpty
+  def size: Int = recurringEntries.size
 
-  def hasExactCandidate(datasetPath: String, fileIdentifier: String, columnName: String, piiType: String): Boolean =
-    entriesByKey.contains(AllowlistKey(
-      ReviewPathNormalizer.normalizeScanPath(datasetPath),
-      fileIdentifier,
-      columnName,
-      piiType
-    ))
+  def hasExactCandidate(datasetPath: String, fileIdentifier: String, columnName: String, piiType: String): Boolean = false
 
-  def hasDirectoryCandidate(datasetPath: String, directoryIdentifier: String, columnName: String, piiType: String): Boolean =
-    directoryCandidates.contains((
-      ReviewPathNormalizer.normalizeScanPath(datasetPath),
-      directoryIdentifier,
-      columnName,
-      piiType
-    ))
+  def hasDirectoryCandidate(datasetPath: String, directoryIdentifier: String, columnName: String, piiType: String): Boolean = false
 
   def hasPatternCandidate(datasetPath: String, fileIdentifier: String, columnName: String, piiType: String): Boolean =
-    activePatternEntries.exists(patternMatches(_, datasetPath, fileIdentifier, columnName, piiType))
+    hasRecurringCandidate(datasetPath, "", fileIdentifier, columnName, piiType)
+
+  def hasRecurringCandidate(
+    datasetPath: String,
+    hiveTableFqn: String,
+    fileIdentifier: String,
+    columnName: String,
+    piiType: String
+  ): Boolean =
+    activeRecurringEntries.exists(recurringMatches(_, datasetPath, hiveTableFqn, fileIdentifier, columnName, piiType))
 
   def evaluate(
     datasetPath: String,
@@ -46,59 +42,34 @@ final class AllowlistMatcher private (
     piiType: String,
     fingerprints: Seq[ResolvedFileFingerprint]
   ): AllowlistEvaluation = {
-    if (fingerprints.isEmpty) {
-      return AllowlistEvaluation(shouldSuppress = false)
-    }
-
-    val activePatterns = activePatternEntries
-    val allFingerprintsCoveredByPattern =
-      activePatterns.nonEmpty &&
-        fingerprints.forall(fingerprint => activePatterns.exists(patternMatches(_, datasetPath, fingerprint.fileIdentifier, columnName, piiType)))
-
-    if (allFingerprintsCoveredByPattern) {
-      return AllowlistEvaluation(shouldSuppress = true)
-    }
-
-    val exactMatches = fingerprints.flatMap { fingerprint =>
-      entriesByKey.get(AllowlistKey(
-        ReviewPathNormalizer.normalizeScanPath(datasetPath),
-        fingerprint.fileIdentifier,
-        columnName,
-        piiType
-      )).map(_ -> fingerprint)
-    }
-
-    if (exactMatches.isEmpty) {
-      AllowlistEvaluation(shouldSuppress = false)
-    } else {
-      val allFingerprintsCovered = exactMatches.size == fingerprints.size
-      val mismatchedEntries = exactMatches.collect {
-        case (entry, fingerprint) if !metadataMatches(entry, fingerprint) => entry
-      }
-
-      if (allFingerprintsCovered && mismatchedEntries.isEmpty) {
-        AllowlistEvaluation(shouldSuppress = true)
-      } else if (mismatchedEntries.nonEmpty) {
-        AllowlistEvaluation(
-          shouldSuppress = false,
-          reviewStatus = ReviewStatus.Pending,
-          reviewReason = mismatchedEntries.head.reason,
-          reviewInvalidated = true
-        )
-      } else {
-        AllowlistEvaluation(shouldSuppress = false)
-      }
-    }
+    val fileIdentifier = fingerprints.headOption.map(_.fileIdentifier).getOrElse("")
+    evaluate(datasetPath, "", fileIdentifier, columnName, piiType, fingerprints)
   }
 
-  private def metadataMatches(entry: AllowlistEntry, fingerprint: ResolvedFileFingerprint): Boolean =
-    entry.fileSize == fingerprint.fileSize &&
-      entry.fileMtimeEpochMs == fingerprint.fileMtimeEpochMs &&
-      entry.fileChecksumAlgo.equalsIgnoreCase(fingerprint.fileChecksumAlgo) &&
-      entry.fileChecksum.equalsIgnoreCase(fingerprint.fileChecksum)
+  def evaluate(
+    datasetPath: String,
+    hiveTableFqn: String,
+    fileIdentifier: String,
+    columnName: String,
+    piiType: String,
+    fingerprints: Seq[ResolvedFileFingerprint]
+  ): AllowlistEvaluation = {
+    val identifiers = (Seq(fileIdentifier) ++ fingerprints.map(_.fileIdentifier))
+      .map(value => Option(value).getOrElse(""))
+      .filter(_.nonEmpty)
+      .distinct
+    val matched = activeRecurringEntries.exists { entry =>
+      if (entry.hiveTableFqn.trim.nonEmpty) {
+        recurringMatches(entry, datasetPath, hiveTableFqn, fileIdentifier, columnName, piiType)
+      } else {
+        identifiers.exists(identifier => recurringMatches(entry, datasetPath, hiveTableFqn, identifier, columnName, piiType))
+      }
+    }
+    AllowlistEvaluation(shouldSuppress = matched)
+  }
 
-  private def activePatternEntries: Seq[PatternAllowlistEntry] =
-    patternEntries.filterNot(entry => isExpired(entry.expiresAt))
+  private def activeRecurringEntries: Seq[RecurringAllowlistEntry] =
+    recurringEntries.filterNot(entry => isExpired(entry.expiresAt))
 
   private def isExpired(expiresAt: String): Boolean =
     try {
@@ -107,55 +78,67 @@ final class AllowlistMatcher private (
       case _: RuntimeException => true
     }
 
-  private def patternMatches(
-    entry: PatternAllowlistEntry,
+  private def recurringMatches(
+    entry: RecurringAllowlistEntry,
     datasetPath: String,
+    hiveTableFqn: String,
     fileIdentifier: String,
     columnName: String,
     piiType: String
-  ): Boolean =
-    ReviewPathNormalizer.normalizeScanPath(entry.datasetPath) == ReviewPathNormalizer.normalizeScanPath(datasetPath) &&
-      wildcardMatches(entry.fileIdentifierPattern, fileIdentifier) &&
-      wildcardMatches(entry.columnNamePattern, columnName) &&
-      wildcardMatches(entry.piiTypePattern, piiType)
+  ): Boolean = {
+    val sameScanPath =
+      ReviewPathNormalizer.normalizeScanPath(entry.scanPath) == ReviewPathNormalizer.normalizeScanPath(datasetPath)
+    val sameColumnAndType =
+      fieldMatches(entry.columnName, columnName) &&
+        fieldMatches(entry.piiType, piiType)
+    val matchesScope =
+      if (entry.hiveTableFqn.trim.nonEmpty) {
+        entry.hiveTableFqn == Option(hiveTableFqn).getOrElse("").trim
+      } else {
+        wildcardMatches(entry.fileIdentifierPattern, fileIdentifier)
+      }
+    sameScanPath && sameColumnAndType && matchesScope
+  }
+
+  private def fieldMatches(pattern: String, value: String): Boolean = {
+    val normalizedPattern = Option(pattern).map(_.trim).getOrElse("")
+    if (normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, value)
+    else normalizedPattern == Option(value).getOrElse("")
+  }
 
   private def wildcardMatches(pattern: String, value: String): Boolean = {
-    val normalizedPattern = Option(pattern).getOrElse("")
+    val normalizedPattern = Option(pattern).map(_.trim).filter(_.nonEmpty).getOrElse("")
     val normalizedValue = Option(value).getOrElse("")
-    val regex = normalizedPattern.flatMap {
-      case '*' => ".*"
-      case ch if "\\.[]{}()+-^$?|".contains(ch) => "\\" + ch
-      case ch => ch.toString
+    if (normalizedPattern.isEmpty) {
+      false
+    } else {
+      val regex = normalizedPattern.flatMap {
+        case '*' => ".*"
+        case ch if "\\.[]{}()+-^$?|".contains(ch) => "\\" + ch
+        case ch => ch.toString
+      }
+      normalizedValue.matches(regex)
     }
-    normalizedValue.matches(regex)
   }
 }
 
 object AllowlistMatcher {
-  val empty: AllowlistMatcher = fromEntries(Seq.empty)
+  val empty: AllowlistMatcher = fromRecurringEntries(Seq.empty)
 
-  def fromEntries(entries: Seq[AllowlistEntry]): AllowlistMatcher = fromEntries(entries, Seq.empty)
+  def fromEntries(entries: Seq[AllowlistEntry]): AllowlistMatcher = empty
 
-  def fromEntries(entries: Seq[AllowlistEntry], patterns: Seq[PatternAllowlistEntry]): AllowlistMatcher = {
-    val normalizedEntries = entries.groupBy(_.key).map {
-      case (key, groupedEntries) => key -> groupedEntries.last
-    }
-    val normalizedPatterns = patterns.groupBy(_.key).map {
+  def fromEntries(entries: Seq[AllowlistEntry], patterns: Seq[PatternAllowlistEntry]): AllowlistMatcher =
+    fromRecurringEntries(patterns.map(patternToRecurringEntry))
+
+  def fromRecurringEntries(entries: Seq[RecurringAllowlistEntry]): AllowlistMatcher = {
+    val normalized = entries.groupBy(_.key).map {
       case (_, groupedEntries) => groupedEntries.last
     }.toSeq
-    val derivedDirectoryCandidates = normalizedEntries.values.flatMap { entry =>
-      directoryCandidate(entry).map { directoryIdentifier =>
-        (entry.key.datasetPath, directoryIdentifier, entry.columnName, entry.piiType)
-      }
-    }.toSet
-    new AllowlistMatcher(normalizedEntries, derivedDirectoryCandidates, normalizedPatterns)
+    new AllowlistMatcher(normalized)
   }
 
   def combine(matchers: Seq[AllowlistMatcher]): AllowlistMatcher =
-    fromEntries(
-      matchers.flatMap(_.entriesByKey.values),
-      matchers.flatMap(_.patternEntries)
-    )
+    fromRecurringEntries(matchers.flatMap(_.recurringEntries))
 
   def load(conf: Configuration, path: String): AllowlistMatcher = {
     val normalizedPath = Option(path).map(_.trim).getOrElse("")
@@ -163,7 +146,7 @@ object AllowlistMatcher {
       empty
     } else {
       val resolvedPath = resolveReadableAllowlistPath(conf, normalizedPath).getOrElse(normalizedPath)
-      fromEntries(loadEntries(conf, resolvedPath), loadPatternEntries(conf, resolvedPath))
+      fromRecurringEntries(loadRecurringEntries(conf, resolvedPath))
     }
   }
 
@@ -178,10 +161,7 @@ object AllowlistMatcher {
 
   def loadExistingMany(conf: Configuration, paths: Seq[String]): AllowlistMatcher = {
     val resolvedPaths = paths.flatMap(path => resolveReadableAllowlistPath(conf, path.trim))
-    fromEntries(
-      resolvedPaths.flatMap(loadEntries(conf, _)),
-      resolvedPaths.flatMap(loadPatternEntries(conf, _))
-    )
+    fromRecurringEntries(resolvedPaths.flatMap(loadRecurringEntries(conf, _)))
   }
 
   def loadEntries(conf: Configuration, path: String): Seq[AllowlistEntry] = {
@@ -202,6 +182,15 @@ object AllowlistMatcher {
     }
   }
 
+  def loadRecurringEntries(conf: Configuration, path: String): Seq[RecurringAllowlistEntry] = {
+    val normalizedPath = Option(path).map(_.trim).getOrElse("")
+    if (normalizedPath.isEmpty) {
+      Seq.empty
+    } else {
+      readLines(conf, resolveReadableAllowlistPath(conf, normalizedPath).getOrElse(normalizedPath)).flatMap(parseRecurringEntry)
+    }
+  }
+
   private def resolveReadableAllowlistPath(conf: Configuration, path: String): Option[String] = {
     Seq(path, s"$path.bak").collectFirst {
       case candidate if allowlistPathExists(conf, candidate) => candidate
@@ -217,7 +206,7 @@ object AllowlistMatcher {
 
   private def parseEntry(line: String): Option[AllowlistEntry] = {
     val entryType = extractJsonStringField(line, "entry_type").map(_.trim.toLowerCase(Locale.ROOT))
-    if (entryType.contains("pattern")) {
+    if (entryType.exists(value => value == "pattern" || value == "recurring")) {
       return None
     }
     for {
@@ -279,14 +268,62 @@ object AllowlistMatcher {
     }
   }
 
-  private def directoryCandidate(entry: AllowlistEntry): Option[String] = {
-    val identifier = Option(entry.fileIdentifier).getOrElse("")
-    if (identifier.contains("!") || identifier.contains("#")) {
-      None
-    } else {
-      val path = new Path(identifier)
-      Option(path.getParent).map(_.toString).orElse(Some("."))
+  private def parseRecurringEntry(line: String): Option[RecurringAllowlistEntry] = {
+    val entryType = extractJsonStringField(line, "entry_type").map(_.trim.toLowerCase(Locale.ROOT))
+    entryType match {
+      case Some("recurring") =>
+        for {
+          scanPath <- extractJsonStringField(line, "scan_path").orElse(extractJsonStringField(line, "dataset_path"))
+          columnName <- extractJsonStringField(line, "column_name")
+          piiType <- extractJsonStringField(line, "pii_type")
+          reason <- extractJsonStringField(line, "reason")
+          reviewer <- extractJsonStringField(line, "reviewer")
+          reviewedAt <- extractJsonStringField(line, "reviewed_at")
+          expiresAt <- extractJsonStringField(line, "expires_at")
+        } yield RecurringAllowlistEntry(
+          scanPath = scanPath,
+          hiveTableFqn = extractJsonStringField(line, "hive_table_fqn").getOrElse(""),
+          fileIdentifierPattern = extractJsonStringField(line, "file_identifier_pattern")
+            .orElse(extractJsonStringField(line, "file_identifier"))
+            .getOrElse(""),
+          columnName = columnName,
+          piiType = piiType,
+          reason = reason,
+          reviewer = reviewer,
+          reviewedAt = reviewedAt,
+          expiresAt = expiresAt,
+          sourceFindingKey = extractJsonStringField(line, "source_finding_key").getOrElse(""),
+          sampleRowCount = extractJsonLongField(line, "sample_row_count").getOrElse(0L),
+          matchCount = extractJsonLongField(line, "match_count").getOrElse(0L),
+          nonEmptyMatchRatio = extractJsonDoubleField(line, "non_empty_match_ratio").getOrElse(0.0)
+        )
+      case Some("pattern") =>
+        parsePatternEntry(line).map(patternToRecurringEntry)
+      case _ =>
+        None
     }
+  }
+
+  private def patternToRecurringEntry(entry: PatternAllowlistEntry): RecurringAllowlistEntry =
+    RecurringAllowlistEntry(
+      scanPath = entry.datasetPath,
+      hiveTableFqn = "",
+      fileIdentifierPattern = entry.fileIdentifierPattern,
+      columnName = entry.columnNamePattern,
+      piiType = entry.piiTypePattern,
+      reason = entry.reason,
+      reviewer = entry.reviewer,
+      reviewedAt = entry.reviewedAt,
+      expiresAt = entry.expiresAt,
+      sourceFindingKey = entry.sourceFindingKey,
+      sampleRowCount = 0L,
+      matchCount = 0L,
+      nonEmptyMatchRatio = 0.0
+    )
+
+  private def extractJsonDoubleField(json: String, field: String): Option[Double] = {
+    val pattern = ("\"" + field + "\"\\s*:\\s*(-?[0-9]+(?:\\.[0-9]+)?)").r
+    pattern.findFirstMatchIn(json).flatMap(matchResult => Try(matchResult.group(1).toDouble).toOption)
   }
 
   private def readLines(conf: Configuration, path: String): Seq[String] = {

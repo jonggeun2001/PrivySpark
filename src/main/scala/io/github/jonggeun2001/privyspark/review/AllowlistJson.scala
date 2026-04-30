@@ -8,4 +8,7 @@ private[privyspark] object AllowlistJson {
 
   def patternEntryToJson(entry: PatternAllowlistEntry): String =
     s"""{"entry_type":"pattern","dataset_path":${jsonString(entry.datasetPath)},"file_identifier_pattern":${jsonString(entry.fileIdentifierPattern)},"column_name_pattern":${jsonString(entry.columnNamePattern)},"pii_type_pattern":${jsonString(entry.piiTypePattern)},"reason":${jsonString(entry.reason)},"reviewer":${jsonString(entry.reviewer)},"reviewed_at":${jsonString(entry.reviewedAt)},"expires_at":${jsonString(entry.expiresAt)},"source_finding_key":${jsonString(entry.sourceFindingKey)}}"""
+
+  def recurringEntryToJson(entry: RecurringAllowlistEntry): String =
+    s"""{"entry_type":"recurring","scan_path":${jsonString(entry.scanPath)},"hive_table_fqn":${jsonString(entry.hiveTableFqn)},"file_identifier_pattern":${jsonString(entry.fileIdentifierPattern)},"column_name":${jsonString(entry.columnName)},"pii_type":${jsonString(entry.piiType)},"reason":${jsonString(entry.reason)},"reviewer":${jsonString(entry.reviewer)},"reviewed_at":${jsonString(entry.reviewedAt)},"expires_at":${jsonString(entry.expiresAt)},"source_finding_key":${jsonString(entry.sourceFindingKey)},"sample_row_count":${entry.sampleRowCount},"match_count":${entry.matchCount},"non_empty_match_ratio":${entry.nonEmptyMatchRatio}}"""
 }
