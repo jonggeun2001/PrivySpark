@@ -25,7 +25,7 @@ ruleset을 로드할 때 regex를 미리 검증하는 이유는 스캔이 한참
 - 각 rule은 `pii_type`, `regex`를 포함해야 합니다.
 - `column_hints`는 선택 항목이며, 지정 시 힌트가 포함된 컬럼에만 적용합니다.
 - `match_type`은 선택 항목이며 기본값은 `value`입니다.
-- top-level `suppressions`는 선택 항목이며 특정 `(column, pii_type)` 결과를 제외합니다.
+- top-level `suppressions`는 선택 항목이며 특정 `(column, pii_type)` 결과를 제외합니다. 각 항목은 단일 `column` 또는 여러 `columns`를 사용할 수 있습니다.
 - 허용 `match_type` 값은 `value`, `full_column`입니다.
 
 ## 오탐 제외 (Suppressions)
@@ -39,11 +39,13 @@ rules:
     regex: '...'
 
 suppressions:
-  - column: prdctcd
+  - columns: [tr_dt, trade_time]
     pii_type: driver_license_number
   - column: PRDCTCD
     pii_type: phone_number
 ```
+
+`column`에도 YAML 배열을 쓸 수 있지만, 하나의 suppression 항목이 여러 컬럼으로 펼쳐질 때는 `columns`를 권장합니다.
 
 ### CLI 로 추가 suppression
 - `--suppress <column:pii_type>`는 반복 지정 가능합니다.
@@ -67,6 +69,7 @@ bin/privyspark-submit \
 ### 매칭 규칙
 - 컬럼명은 trim 후 소문자로 정규화한 값으로 exact match 합니다.
 - `pii_type`은 trim 후 exact match 합니다.
+- ruleset YAML의 `column`/`columns` 배열은 컬럼별 `(column, pii_type)` suppression으로 펼쳐집니다.
 - suppression은 metric plan 생성 전에 적용되므로, 제외된 조합은 `match_count`, `match_ratio`, `confidence`, `sample_raw_value`, `sample_matched_fragment` 결과 자체가 생기지 않습니다.
 - 같은 컬럼이라도 suppression에 지정되지 않은 다른 `pii_type`은 계속 탐지됩니다.
 
