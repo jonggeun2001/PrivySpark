@@ -9,7 +9,7 @@ import io.github.jonggeun2001.privyspark.model.{ProgressRun, ScanReadOptions, Su
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager._
 import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewApplyCommand, ReviewCollectCommand, ReviewHtmlWriter}
-import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
+import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanCoordinator, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{renderConfiguredParallelism, resolveCliParallelism}
 import io.github.jonggeun2001.privyspark.util.{DriverLogLevel, DriverLogger}
 import org.apache.hadoop.conf.Configuration
@@ -295,7 +295,7 @@ object PrivySparkApp {
         )
       }
 
-      GroupScanner.scanGroups(
+      GroupScanCoordinator.scanGroups(
         spark,
         config.inputPath,
         scanPlan.groups,

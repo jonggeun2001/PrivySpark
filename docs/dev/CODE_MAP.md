@@ -14,7 +14,7 @@
 - `progress/`: run marker, progress JSONL, in-flight marker, stale run cleanup.
 - `report/`: scan result/error를 parquet/csv/excel 산출물로 저장.
 - `review/`: offline review HTML, response collect/apply, allowlist/action plan state.
-- `scan/`: directory discovery, source expansion, grouping, batch/file scan orchestration.
+- `scan/`: directory discovery, source expansion, grouping, file sampling, batch/file scan orchestration.
 - `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
 - `util/`: driver logging, parallelism 설정, path identifier 정규화.
 
@@ -25,6 +25,7 @@
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
 - `scan/GroupScanCoordinator.scala`: `scanGroups` L17, sampled/file fallback L173, batch fallback policy L246.
+- `scan/FileSampling.scala`: deterministic file sampling L6.
 - `hive/HiveTableFqnResolver.scala`: scan result `hive_table_fqn` 단일 해석 helper L5.
 - `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L29, public `write` overloads L34-L68, `writeFindings` L84, JSON/sample rendering L885.
 - `detect/DetectionAggregator.scala`: public `aggregate` L80, `aggregateByFile` L89, sample collection L124, metric planning L145.
@@ -40,7 +41,6 @@ main
   -> runScan
   -> DirectoryScanner.scanDirectoryStructure
   -> ProgressRunManager.prepareProgressRun
-  -> GroupScanner.scanGroups
   -> GroupScanCoordinator.scanGroups
   -> DetectionAggregator
   -> ProgressRunManager.mergeProgressReports

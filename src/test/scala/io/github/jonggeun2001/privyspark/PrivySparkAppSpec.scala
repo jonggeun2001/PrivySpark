@@ -7,7 +7,7 @@ import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CsvDialect, DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult, Suppression}
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
 import io.github.jonggeun2001.privyspark.report.ReportWriter
-import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
+import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanCoordinator, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.runner.RunWith
@@ -376,7 +376,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       ))
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         parquetGroups.head,
@@ -1349,7 +1349,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
 
       val group = plan.groups.head
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -1416,7 +1416,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val results = GroupScanner.scanGroupBatch(
+      val results = GroupScanCoordinator.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -1461,7 +1461,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         PiiRule("phone_number", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val results = GroupScanner.scanGroupBatch(
+      val results = GroupScanCoordinator.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -1556,7 +1556,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val results = GroupScanner.scanGroupBatch(
+      val results = GroupScanCoordinator.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -1628,7 +1628,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         useDirectoryIdentifier = true
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -1845,7 +1845,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -1886,7 +1886,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         PiiRule("email", "sales@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
       )
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -1973,7 +1973,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         useDirectoryIdentifier = true
       )
 
-      val (rootResults, rootErrors) = GroupScanner.scanGroup(
+      val (rootResults, rootErrors) = GroupScanCoordinator.scanGroup(
         spark,
         datasetDir.toString,
         rootGroup,
@@ -1981,7 +1981,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         sampleRatio = 1.0,
         timestamp = timestamp
       )
-      val (nestedResults, nestedErrors) = GroupScanner.scanGroup(
+      val (nestedResults, nestedErrors) = GroupScanCoordinator.scanGroup(
         spark,
         datasetDir.toString,
         nestedGroup,
@@ -2058,7 +2058,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       var scanResult = (Seq.empty[ScanResult], Seq.empty[ScanError])
       val logs = captureStderr {
-        scanResult = GroupScanner.scanGroup(
+        scanResult = GroupScanCoordinator.scanGroup(
           spark,
           inputDir.toString,
           group,
@@ -2102,7 +2102,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2145,7 +2145,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2186,7 +2186,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2231,7 +2231,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2280,7 +2280,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2319,7 +2319,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2358,7 +2358,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
       val logs = captureStderr {
-        GroupScanner.scanGroup(
+        GroupScanCoordinator.scanGroup(
           spark,
           inputDir.toString,
           group,
@@ -2396,7 +2396,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2455,7 +2455,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         groupedDir.toString,
         group,
@@ -2517,7 +2517,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2580,7 +2580,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2623,7 +2623,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2664,7 +2664,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val sequential = GroupScanner.scanGroupByFile(
+      val sequential = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2673,7 +2673,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         timestamp = timestamp,
         fileParallelism = 1
       )
-      val parallel = GroupScanner.scanGroupByFile(
+      val parallel = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2707,7 +2707,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val results = GroupScanner.scanGroupBatch(
+      val results = GroupScanCoordinator.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -2747,7 +2747,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          GroupScanner.scanGroupBatch(
+          GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2791,7 +2791,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          val results = GroupScanner.scanGroupBatch(
+          val results = GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2837,7 +2837,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          val results = GroupScanner.scanGroupBatch(
+          val results = GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2889,7 +2889,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val snapshots = (1 to 4).map { _ =>
-        GroupScanner.scanGroupBatch(
+        GroupScanCoordinator.scanGroupBatch(
           spark,
           inputDir.toString,
           group,
@@ -2941,7 +2941,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDriverLogLevel("warn") {
-          val results = GroupScanner.scanGroupBatch(
+          val results = GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2994,7 +2994,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          val results = GroupScanner.scanGroupBatch(
+          val results = GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -3044,7 +3044,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          GroupScanner.scanGroupBatch(
+          GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -3087,7 +3087,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -3132,7 +3132,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -3175,7 +3175,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val (results, persistedRdds) = capturePersistedRddNames {
-        GroupScanner.scanGroupBatch(
+        GroupScanCoordinator.scanGroupBatch(
           spark,
           inputDir.toString,
           group,
@@ -3215,7 +3215,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val ((results, errors), persistedRdds) = capturePersistedRddNames {
-        GroupScanner.scanGroupByFile(
+        GroupScanCoordinator.scanGroupByFile(
           spark,
           inputDir.toString,
           group,
@@ -3258,7 +3258,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          val (results, errors) = GroupScanner.scanGroupByFile(
+          val (results, errors) = GroupScanCoordinator.scanGroupByFile(
             spark,
             inputDir.toString,
             group,
@@ -3309,7 +3309,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val snapshots = (1 to 6).map { _ =>
-        val (results, errors) = GroupScanner.scanGroupByFile(
+        val (results, errors) = GroupScanCoordinator.scanGroupByFile(
           spark,
           inputDir.toString,
           group,
@@ -3376,7 +3376,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
 
-      val sequential = GroupScanner.scanGroups(
+      val sequential = GroupScanCoordinator.scanGroups(
         spark,
         inputDir.toString,
         plan.groups,
@@ -3385,7 +3385,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         timestamp = timestamp,
         groupParallelism = 1
       )
-      val parallel = GroupScanner.scanGroups(
+      val parallel = GroupScanCoordinator.scanGroups(
         spark,
         inputDir.toString,
         plan.groups,
@@ -3417,7 +3417,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
 
-      val outcomes = GroupScanner.scanGroups(
+      val outcomes = GroupScanCoordinator.scanGroups(
         spark,
         inputDir.toString,
         plan.groups,
@@ -3458,7 +3458,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
 
     plan.groups.foreach { group =>
-      val (groupResults, groupErrors) = GroupScanner.scanGroup(
+      val (groupResults, groupErrors) = GroupScanCoordinator.scanGroup(
         spark,
         datasetDir.toString,
         group,
@@ -5292,7 +5292,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -5361,7 +5361,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -5420,7 +5420,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val scanFuture = Future {
-        GroupScanner.scanGroupByFile(
+        GroupScanCoordinator.scanGroupByFile(
           spark,
           inputDir.toString,
           group,
@@ -5471,7 +5471,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,

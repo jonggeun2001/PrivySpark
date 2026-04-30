@@ -13,7 +13,7 @@
 - `util/DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
 - `detect/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
 - `hive/HiveTableLookup.scala`: Hive Metastore JDBC 조회, table `LOCATION` 정규화, longest-prefix lookup 인덱스, broadcast 생성
-- `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: 입력 확장, 그룹화, 스캔 실행
+- `scan/DirectoryScanner.scala`, `scan/GroupScanCoordinator.scala`: 입력 확장, 그룹화, 스캔 실행
 - `report/ReportWriter.scala`: 최종 리포트 저장과 포맷별 산출물 생성
 - `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, progress/최종 리포트 저장
 - `Models.scala`: 결과/오류/규칙 모델
@@ -104,7 +104,6 @@ sequenceDiagram
   participant Spark
   participant DirectoryScanner
   participant ProgressRunManager
-  participant GroupScanner
   participant GroupScanCoordinator
   participant DetectionAggregator
   participant ReportWriter
@@ -117,12 +116,10 @@ sequenceDiagram
   DirectoryScanner-->>PrivySparkApp: DirectoryScanPlan 반환
   PrivySparkApp->>ProgressRunManager: prepareProgressRun(...)
   PrivySparkApp->>ProgressRunManager: startProgressHeartbeat(...)
-  PrivySparkApp->>GroupScanner: scanGroups(...)
-  GroupScanner->>GroupScanCoordinator: scanGroups(...)
+  PrivySparkApp->>GroupScanCoordinator: scanGroups(...)
   GroupScanCoordinator->>DetectionAggregator: aggregate / aggregateByFile
   DetectionAggregator-->>GroupScanCoordinator: ScanResult 집계
-  GroupScanCoordinator-->>GroupScanner: progress records 기록
-  GroupScanner-->>PrivySparkApp: group scan 완료
+  GroupScanCoordinator-->>PrivySparkApp: progress records 기록 후 group scan 완료
   PrivySparkApp->>ProgressRunManager: mergeProgressReports(afterReportWrite)
   ProgressRunManager->>ReportWriter: writeReports(...)
   ProgressRunManager-->>PrivySparkApp: afterReportWrite(resultDf)
