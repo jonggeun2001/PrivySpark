@@ -138,19 +138,30 @@ private[privyspark] object AllowlistApplier {
         if (!hasCandidate) {
           Some(result)
         } else {
-          val identifiersToEvaluate = (Seq(result.file_identifier) ++ reviewScopeIdentifiers).distinct
-          val evaluation = identifiersToEvaluate.foldLeft(AllowlistEvaluation(shouldSuppress = false)) {
-            case (matched, _) if matched.shouldSuppress => matched
-            case (_, identifier) =>
-              allowlistMatcher.evaluate(
-                result.dataset_path,
-                result.hive_table_fqn,
-                identifier,
-                result.column_name,
-                result.pii_type,
-                Seq.empty
-              )
-          }
+          val directEvaluation = allowlistMatcher.evaluate(
+            result.dataset_path,
+            result.hive_table_fqn,
+            result.file_identifier,
+            result.column_name,
+            result.pii_type,
+            Seq.empty
+          )
+          val evaluation =
+            if (directEvaluation.shouldSuppress || reviewScopeIdentifiers.isEmpty) {
+              directEvaluation
+            } else {
+              val allScopedIdentifiersCovered = reviewScopeIdentifiers.forall { identifier =>
+                allowlistMatcher.evaluate(
+                  result.dataset_path,
+                  result.hive_table_fqn,
+                  identifier,
+                  result.column_name,
+                  result.pii_type,
+                  Seq.empty
+                ).shouldSuppress
+              }
+              AllowlistEvaluation(shouldSuppress = allScopedIdentifiersCovered)
+            }
           applyAllowlistEvaluation(result, evaluation)
         }
       }
