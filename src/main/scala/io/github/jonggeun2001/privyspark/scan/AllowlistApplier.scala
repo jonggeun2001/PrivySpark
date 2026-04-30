@@ -5,7 +5,7 @@ import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupI
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
-import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, FileIdentifierResolver, ReviewScopeFingerprintCodec}
+import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, ReviewScopeFingerprintCodec}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{executeInParallel, resolveFileParallelism}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveDirectoryIdentifier, resolveLogicalIdentifier, resolvePhysicalPath}
@@ -112,53 +112,57 @@ private[privyspark] object AllowlistApplier {
     allowlistInputRoot: Option[String],
     results: Seq[ScanResult]
   ): Seq[ScanResult] = {
-    if (results.isEmpty || allowlistMatcher.isEmpty || allowlistInputRoot.isEmpty) {
+    if (results.isEmpty || allowlistMatcher.isEmpty) {
       results
     } else {
-      val inputRoot = allowlistInputRoot.get
       results.flatMap { result =>
         val reviewScopeIdentifiers = ReviewSnapshotLog.parseReviewScopeIdentifiers(result.review_scope_file_identifiers)
         val hasCandidate =
-          allowlistMatcher.hasDirectoryCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type) ||
-            allowlistMatcher.hasPatternCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type) ||
-            (if (reviewScopeIdentifiers.nonEmpty) {
-              reviewScopeIdentifiers.exists(identifier =>
-                allowlistMatcher.hasExactCandidate(result.dataset_path, identifier, result.column_name, result.pii_type) ||
-                  allowlistMatcher.hasPatternCandidate(result.dataset_path, identifier, result.column_name, result.pii_type)
+          allowlistMatcher.hasRecurringCandidate(
+            result.dataset_path,
+            result.hive_table_fqn,
+            result.file_identifier,
+            result.column_name,
+            result.pii_type
+          ) ||
+            reviewScopeIdentifiers.exists(identifier =>
+              allowlistMatcher.hasRecurringCandidate(
+                result.dataset_path,
+                result.hive_table_fqn,
+                identifier,
+                result.column_name,
+                result.pii_type
               )
-            } else {
-              allowlistMatcher.hasExactCandidate(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)
-            })
+            )
 
         if (!hasCandidate) {
           Some(result)
         } else {
-          val identifiersToResolve = if (reviewScopeIdentifiers.nonEmpty) reviewScopeIdentifiers else Seq(result.file_identifier)
-          val resolvedFingerprints = identifiersToResolve.foldLeft[Either[String, Vector[io.github.jonggeun2001.privyspark.review.ResolvedFileFingerprint]]](Right(Vector.empty)) {
-            case (Right(fingerprints), identifier) =>
-              FileIdentifierResolver.resolveFingerprints(conf, inputRoot, identifier) match {
-                case Right(resolved) =>
-                  Right(fingerprints ++ resolved)
-                case Left(errorMessage) =>
-                  Left(s"$identifier: $errorMessage")
+          val directEvaluation = allowlistMatcher.evaluate(
+            result.dataset_path,
+            result.hive_table_fqn,
+            result.file_identifier,
+            result.column_name,
+            result.pii_type,
+            Seq.empty
+          )
+          val evaluation =
+            if (directEvaluation.shouldSuppress || reviewScopeIdentifiers.isEmpty) {
+              directEvaluation
+            } else {
+              val allScopedIdentifiersCovered = reviewScopeIdentifiers.forall { identifier =>
+                allowlistMatcher.evaluate(
+                  result.dataset_path,
+                  result.hive_table_fqn,
+                  identifier,
+                  result.column_name,
+                  result.pii_type,
+                  Seq.empty
+                ).shouldSuppress
               }
-            case (left, _) =>
-              left
-          }
-          resolvedFingerprints match {
-            case Right(fingerprints) =>
-              val evaluation = allowlistMatcher.evaluate(result.dataset_path, result.column_name, result.pii_type, fingerprints)
-              applyAllowlistEvaluation(result, evaluation)
-            case Left(errorMessage) =>
-              DriverLogger.warn(
-                "allowlist_resolution_failed",
-                "file_identifier" -> result.file_identifier,
-                "column" -> result.column_name,
-                "pii_type" -> result.pii_type,
-                "reason" -> errorMessage
-              )
-              Some(result)
-          }
+              AllowlistEvaluation(shouldSuppress = allScopedIdentifiersCovered)
+            }
+          applyAllowlistEvaluation(result, evaluation)
         }
       }
     }

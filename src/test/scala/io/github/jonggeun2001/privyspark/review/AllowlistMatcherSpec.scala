@@ -10,86 +10,165 @@ import java.nio.file.Files
 
 @RunWith(classOf[JUnitRunner])
 class AllowlistMatcherSpec extends AnyFunSuite {
-  test("evaluate suppresses an exact file match when metadata is unchanged") {
-    val fingerprint = ResolvedFileFingerprint(
-      fileIdentifier = "users.csv",
-      physicalPath = "/data/users.csv",
-      fileSize = 128L,
-      fileMtimeEpochMs = 1710000000000L,
-      fileChecksumAlgo = "CRC32",
-      fileChecksum = "a1b2c3d4"
-    )
-    val matcher = AllowlistMatcher.fromEntries(Seq(
-      AllowlistEntry(
-        datasetPath = "/data",
-        fileIdentifier = "users.csv",
-        columnName = "email",
-        piiType = "email",
-        reason = "known dummy data",
-        reviewer = "reviewer@example.com",
-        reviewedAt = "2026-04-20T00:00:00Z",
-        sourceRunId = "",
-        fileSize = 128L,
-        fileMtimeEpochMs = 1710000000000L,
-        fileChecksumAlgo = "CRC32",
-        fileChecksum = "a1b2c3d4"
+  test("evaluate suppresses recurring hive entries without fingerprint checks") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "/data",
+        hiveTableFqn = "mart.customers",
+        fileIdentifierPattern = ""
       )
     ))
 
-    val evaluation = matcher.evaluate("/data", "email", "email", Seq(fingerprint))
+    val evaluation = matcher.evaluate(
+      datasetPath = "/data",
+      hiveTableFqn = "mart.customers",
+      fileIdentifier = "users-20260430.csv",
+      columnName = "email",
+      piiType = "email",
+      fingerprints = Seq(fingerprint("users-20260430.csv", "changed"))
+    )
 
     assert(evaluation.shouldSuppress)
     assert(!evaluation.reviewInvalidated)
   }
 
-  test("evaluate treats equivalent hdfs slash variants as the same dataset path") {
-    val fingerprint = ResolvedFileFingerprint(
-      fileIdentifier = "users.csv",
-      physicalPath = "hdfs:///user/username/users.csv",
-      fileSize = 128L,
-      fileMtimeEpochMs = 1710000000000L,
-      fileChecksumAlgo = "CRC32",
-      fileChecksum = "a1b2c3d4"
-    )
-    val matcher = AllowlistMatcher.fromEntries(Seq(
-      AllowlistEntry(
-        datasetPath = "hdfs:////user/username",
-        fileIdentifier = "users.csv",
-        columnName = "email",
-        piiType = "email",
-        reason = "known dummy data",
-        reviewer = "reviewer@example.com",
-        reviewedAt = "2026-04-20T00:00:00Z",
-        sourceRunId = "",
-        fileSize = 128L,
-        fileMtimeEpochMs = 1710000000000L,
-        fileChecksumAlgo = "CRC32",
-        fileChecksum = "a1b2c3d4"
+  test("evaluate suppresses recurring file pattern entries when hive table is absent") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "/data",
+        hiveTableFqn = "",
+        fileIdentifierPattern = "daily/customers/*.csv"
       )
     ))
 
-    assert(matcher.hasExactCandidate("hdfs:///user/username", "users.csv", "email", "email"))
-    val evaluation = matcher.evaluate("hdfs:///user/username/", "email", "email", Seq(fingerprint))
+    val evaluation = matcher.evaluate(
+      datasetPath = "/data",
+      hiveTableFqn = "",
+      fileIdentifier = "daily/customers/20260430.csv",
+      columnName = "email",
+      piiType = "email",
+      fingerprints = Seq.empty
+    )
 
     assert(evaluation.shouldSuppress)
   }
 
-  test("evaluate keeps the result and marks it invalidated when checksum changed") {
-    val fingerprint = ResolvedFileFingerprint(
-      fileIdentifier = "users.csv",
-      physicalPath = "/data/users.csv",
-      fileSize = 128L,
-      fileMtimeEpochMs = 1710000000000L,
-      fileChecksumAlgo = "CRC32",
-      fileChecksum = "deadbeef"
+  test("evaluate preserves leading spaces in recurring file identifier patterns") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "/data",
+        hiveTableFqn = "",
+        fileIdentifierPattern = " reviews/a.csv"
+      )
+    ))
+
+    val evaluation = matcher.evaluate(
+      datasetPath = "/data",
+      hiveTableFqn = "",
+      fileIdentifier = " reviews/a.csv",
+      columnName = "email",
+      piiType = "email",
+      fingerprints = Seq.empty
     )
+
+    assert(evaluation.shouldSuppress)
+  }
+
+  test("evaluate treats equivalent hdfs slash variants as the same scan path") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "hdfs:////user/username",
+        hiveTableFqn = "mart.customers",
+        fileIdentifierPattern = ""
+      )
+    ))
+
+    val evaluation = matcher.evaluate(
+      datasetPath = "hdfs:///user/username/",
+      hiveTableFqn = "mart.customers",
+      fileIdentifier = "customers/part-000.parquet",
+      columnName = "email",
+      piiType = "email",
+      fingerprints = Seq.empty
+    )
+
+    assert(evaluation.shouldSuppress)
+  }
+
+  test("evaluate ignores expired recurring entries") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "/data",
+        hiveTableFqn = "mart.customers",
+        fileIdentifierPattern = "",
+        expiresAt = "2000-01-01"
+      )
+    ))
+
+    val evaluation = matcher.evaluate(
+      datasetPath = "/data",
+      hiveTableFqn = "mart.customers",
+      fileIdentifier = "customers/part-000.parquet",
+      columnName = "email",
+      piiType = "email",
+      fingerprints = Seq.empty
+    )
+
+    assert(!evaluation.shouldSuppress)
+  }
+
+  test("evaluate treats recurring wildcard field characters as exact values") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "/data",
+        hiveTableFqn = "mart.customers",
+        fileIdentifierPattern = "",
+        columnName = "*"
+      )
+    ))
+
+    val evaluation = matcher.evaluate(
+      datasetPath = "/data",
+      hiveTableFqn = "mart.customers",
+      fileIdentifier = "customers/part-000.parquet",
+      columnName = "email",
+      piiType = "email",
+      fingerprints = Seq.empty
+    )
+
+    assert(!evaluation.shouldSuppress)
+  }
+
+  test("evaluate preserves leading spaces in recurring column names") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "/data",
+        hiveTableFqn = "mart.customers",
+        fileIdentifierPattern = "",
+        columnName = " email"
+      )
+    ))
+
+    val evaluation = matcher.evaluate(
+      datasetPath = "/data",
+      hiveTableFqn = "mart.customers",
+      fileIdentifier = "customers/part-000.parquet",
+      columnName = " email",
+      piiType = "email",
+      fingerprints = Seq.empty
+    )
+
+    assert(evaluation.shouldSuppress)
+  }
+
+  test("evaluate ignores legacy exact entries") {
     val matcher = AllowlistMatcher.fromEntries(Seq(
       AllowlistEntry(
         datasetPath = "/data",
         fileIdentifier = "users.csv",
         columnName = "email",
         piiType = "email",
-        reason = "known dummy data",
+        reason = "legacy exact",
         reviewer = "reviewer@example.com",
         reviewedAt = "2026-04-20T00:00:00Z",
         sourceRunId = "",
@@ -100,43 +179,62 @@ class AllowlistMatcherSpec extends AnyFunSuite {
       )
     ))
 
-    val evaluation = matcher.evaluate("/data", "email", "email", Seq(fingerprint))
+    val evaluation = matcher.evaluate("/data", "email", "email", Seq(fingerprint("users.csv", "a1b2c3d4")))
 
+    assert(!matcher.hasExactCandidate("/data", "users.csv", "email", "email"))
     assert(!evaluation.shouldSuppress)
-    assert(evaluation.reviewInvalidated)
-    assert(evaluation.reviewStatus == "pending")
-    assert(evaluation.reviewReason == "known dummy data")
   }
 
-  test("evaluate suppresses directory aggregates only when every child file is allowlisted") {
-    val matcher = AllowlistMatcher.fromEntries(Seq(
-      allowlistEntry("reviews/a.csv"),
-      allowlistEntry("reviews/b.csv")
-    ))
+  test("load preserves escaped string fields in recurring entries") {
+    val tempFile = Files.createTempFile("privyspark-allowlist-recurring-escaped-", ".jsonl")
+    val scanPath = "/data/root"
+    val filePattern = """archive\"name.zip!folder\quoted\".csv"""
+    val reason = """contains "quote" and \ slash"""
 
-    val suppressEvaluation = matcher.evaluate(
-      "/data",
-      "resident_registration_number",
-      "rrn",
-      Seq(
-        fingerprint("reviews/a.csv", "11112222"),
-        fingerprint("reviews/b.csv", "33334444")
-      )
-    )
-    val keepEvaluation = matcher.evaluate(
-      "/data",
-      "resident_registration_number",
-      "rrn",
-      Seq(
-        fingerprint("reviews/a.csv", "11112222"),
-        fingerprint("reviews/c.csv", "55556666")
-      )
-    )
+    try {
+      val line =
+        s"""{"entry_type":"recurring","scan_path":${jsonString(scanPath)},"hive_table_fqn":"","file_identifier_pattern":${jsonString(filePattern)},"column_name":"email","pii_type":"email","reason":${jsonString(reason)},"reviewer":"reviewer@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"finding","sample_row_count":100,"match_count":3,"non_empty_match_ratio":0.03}"""
+      Files.write(tempFile, s"$line\n".getBytes(StandardCharsets.UTF_8))
 
-    assert(suppressEvaluation.shouldSuppress)
-    assert(!keepEvaluation.shouldSuppress)
-    assert(!keepEvaluation.reviewInvalidated)
-    assert(matcher.hasDirectoryCandidate("/data", "reviews", "resident_registration_number", "rrn"))
+      val matcher = AllowlistMatcher.load(new org.apache.hadoop.conf.Configuration(), tempFile.toAbsolutePath.toString)
+
+      val evaluation = matcher.evaluate(
+        scanPath,
+        "",
+        filePattern,
+        "email",
+        "email",
+        Seq.empty
+      )
+      assert(evaluation.shouldSuppress)
+    } finally {
+      Files.deleteIfExists(tempFile)
+    }
+  }
+
+  test("load treats legacy pattern entries as recurring entries") {
+    val tempFile = Files.createTempFile("privyspark-pattern-allowlist-", ".jsonl")
+    val line =
+      """{"entry_type":"pattern","dataset_path":"/data","file_identifier":"reviews/*","column_name":"temp_*","pii_type":"email","reason":"known temporary identifiers","reviewer":"reviewer@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"finding"}"""
+
+    try {
+      Files.write(tempFile, s"$line\n".getBytes(StandardCharsets.UTF_8))
+      val matcher = AllowlistMatcher.load(new org.apache.hadoop.conf.Configuration(), tempFile.toAbsolutePath.toString)
+
+      val evaluation = matcher.evaluate(
+        "/data",
+        "",
+        "reviews/a.csv",
+        "temp_email",
+        "email",
+        Seq.empty
+      )
+
+      assert(evaluation.shouldSuppress)
+      assert(matcher.size == 1)
+    } finally {
+      Files.deleteIfExists(tempFile)
+    }
   }
 
   test("local allowlist fallback ignores absolute paths without a scheme") {
@@ -155,98 +253,28 @@ class AllowlistMatcherSpec extends AnyFunSuite {
     }
   }
 
-  test("load preserves escaped string fields in allowlist entries") {
-    val tempFile = Files.createTempFile("privyspark-allowlist-escaped-", ".jsonl")
-    val datasetPath = "/data/root"
-    val fileIdentifier = """archive\"name.zip!folder\quoted\".csv"""
-    val reason = """contains "quote" and \ slash"""
-
-    try {
-      val line =
-        s"""{"dataset_path":${jsonString(datasetPath)},"file_identifier":${jsonString(fileIdentifier)},"column_name":"email","pii_type":"email","reason":${jsonString(reason)},"reviewer":"reviewer@example.com","reviewed_at":"2026-04-20T00:00:00Z","source_run_id":"","file_size":128,"file_mtime_epoch_ms":1710000000000,"file_checksum_algo":"CRC32","file_checksum":"a1b2c3d4"}"""
-      Files.write(tempFile, s"$line\n".getBytes(StandardCharsets.UTF_8))
-
-      val matcher = AllowlistMatcher.load(new org.apache.hadoop.conf.Configuration(), tempFile.toAbsolutePath.toString)
-
-      assert(matcher.hasExactCandidate(datasetPath, fileIdentifier, "email", "email"))
-      val invalidated = matcher.evaluate(
-        datasetPath,
-        "email",
-        "email",
-        Seq(ResolvedFileFingerprint(
-          fileIdentifier = fileIdentifier,
-          physicalPath = tempFile.toAbsolutePath.toString,
-          fileSize = 128L,
-          fileMtimeEpochMs = 1710000000000L,
-          fileChecksumAlgo = "CRC32",
-          fileChecksum = "deadbeef"
-        ))
-      )
-      assert(invalidated.reviewReason == reason)
-    } finally {
-      Files.deleteIfExists(tempFile)
-    }
-  }
-
-  test("evaluate suppresses wildcard pattern entries without fingerprint metadata") {
-    val tempFile = Files.createTempFile("privyspark-pattern-allowlist-", ".jsonl")
-    val line =
-      """{"entry_type":"pattern","dataset_path":"/data","file_identifier":"reviews/*","column_name":"temp_*","pii_type":"driver_license_number","reason":"known temporary identifiers","reviewer":"reviewer@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"finding"}"""
-
-    try {
-      Files.write(tempFile, s"$line\n".getBytes(StandardCharsets.UTF_8))
-      val matcher = AllowlistMatcher.load(new org.apache.hadoop.conf.Configuration(), tempFile.toAbsolutePath.toString)
-
-      val evaluation = matcher.evaluate(
-        "/data",
-        "temp_driver_no",
-        "driver_license_number",
-        Seq(fingerprint("reviews/a.csv", "changed"))
-      )
-
-      assert(evaluation.shouldSuppress)
-      assert(matcher.size == 1)
-    } finally {
-      Files.deleteIfExists(tempFile)
-    }
-  }
-
-  test("evaluate ignores expired wildcard pattern entries") {
-    val tempFile = Files.createTempFile("privyspark-expired-pattern-allowlist-", ".jsonl")
-    val line =
-      """{"entry_type":"pattern","dataset_path":"/data","file_identifier":"reviews/*","column_name":"temp_*","pii_type":"driver_license_number","reason":"expired temporary identifiers","reviewer":"reviewer@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2000-01-01","source_finding_key":"finding"}"""
-
-    try {
-      Files.write(tempFile, s"$line\n".getBytes(StandardCharsets.UTF_8))
-      val matcher = AllowlistMatcher.load(new org.apache.hadoop.conf.Configuration(), tempFile.toAbsolutePath.toString)
-
-      val evaluation = matcher.evaluate(
-        "/data",
-        "temp_driver_no",
-        "driver_license_number",
-        Seq(fingerprint("reviews/a.csv", "changed"))
-      )
-
-      assert(!evaluation.shouldSuppress)
-    } finally {
-      Files.deleteIfExists(tempFile)
-    }
-  }
-
-  private def allowlistEntry(fileIdentifier: String): AllowlistEntry =
-    AllowlistEntry(
-      datasetPath = "/data",
-      fileIdentifier = fileIdentifier,
-      columnName = "resident_registration_number",
-      piiType = "rrn",
-      reason = "dummy",
+  private def recurringEntry(
+    scanPath: String,
+    hiveTableFqn: String,
+    fileIdentifierPattern: String,
+    expiresAt: String = "2999-12-31",
+    columnName: String = "email",
+    piiType: String = "email"
+  ): RecurringAllowlistEntry =
+    RecurringAllowlistEntry(
+      scanPath = scanPath,
+      hiveTableFqn = hiveTableFqn,
+      fileIdentifierPattern = fileIdentifierPattern,
+      columnName = columnName,
+      piiType = piiType,
+      reason = "daily dummy account column",
       reviewer = "reviewer@example.com",
-      reviewedAt = "2026-04-20T00:00:00Z",
-      sourceRunId = "",
-      fileSize = 42L,
-      fileMtimeEpochMs = 1710000000000L,
-      fileChecksumAlgo = "CRC32",
-      fileChecksum = checksumFor(fileIdentifier)
+      reviewedAt = "2026-04-30T00:00:00Z",
+      expiresAt = expiresAt,
+      sourceFindingKey = "finding",
+      sampleRowCount = 1000L,
+      matchCount = 12L,
+      nonEmptyMatchRatio = 0.12
     )
 
   private def fingerprint(fileIdentifier: String, checksum: String): ResolvedFileFingerprint =
@@ -258,10 +286,4 @@ class AllowlistMatcherSpec extends AnyFunSuite {
       fileChecksumAlgo = "CRC32",
       fileChecksum = checksum
     )
-
-  private def checksumFor(fileIdentifier: String): String = fileIdentifier match {
-    case "reviews/a.csv" => "11112222"
-    case "reviews/b.csv" => "33334444"
-    case other => other
-  }
 }

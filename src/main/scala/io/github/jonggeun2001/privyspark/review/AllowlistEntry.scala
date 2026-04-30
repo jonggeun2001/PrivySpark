@@ -49,6 +49,40 @@ final case class PatternAllowlistEntry(
       fileIdentifierPattern,
       columnNamePattern,
       piiTypePattern
+  )
+}
+
+final case class RecurringAllowlistKey(
+  scanPath: String,
+  hiveTableFqn: String,
+  fileIdentifierPattern: String,
+  columnName: String,
+  piiType: String
+)
+
+final case class RecurringAllowlistEntry(
+  scanPath: String,
+  hiveTableFqn: String,
+  fileIdentifierPattern: String,
+  columnName: String,
+  piiType: String,
+  reason: String,
+  reviewer: String,
+  reviewedAt: String,
+  expiresAt: String,
+  sourceFindingKey: String,
+  sampleRowCount: Long,
+  matchCount: Long,
+  nonEmptyMatchRatio: Double,
+  fieldWildcardsEnabled: Boolean = false
+) {
+  def key: RecurringAllowlistKey =
+    RecurringAllowlistKey(
+      ReviewPathNormalizer.normalizeScanPath(scanPath),
+      hiveTableFqn,
+      fileIdentifierPattern,
+      columnName,
+      piiType
     )
 }
 

@@ -96,7 +96,7 @@ object PrivySparkApp {
           return
         }
       case CliCommand.ReviewCollect(config) =>
-        if (!validateAbsoluteArgument("--scan-results", config.scanResultsPath, exitWith)) {
+        if (config.scanResultsPath.trim.nonEmpty && !validateAbsoluteArgument("--scan-results", config.scanResultsPath, exitWith)) {
           return
         }
         if (!validateAbsoluteArgument("--review-state-root", config.reviewStateRoot, exitWith)) {
