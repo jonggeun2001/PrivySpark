@@ -46,6 +46,8 @@
 
 `review collect`는 `<review-state-root>/inbox/*.json`을 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 다음 스캔은 같은 `--review-state-root`를 지정해 누적 오탐 allowlist를 반영합니다.
 
+오프라인 리뷰 identity와 allowlist 매칭에서는 HDFS URI path의 중복 slash를 정규화합니다. 예를 들어 `hdfs:///user/name`과 `hdfs:////user/name`은 같은 스캔 경로로 취급됩니다.
+
 ## Ignore 패턴
 - `/`가 없는 패턴은 basename 기준으로 매칭합니다. 예: `_SUCCESS`, `*.crc`
 - `/`가 있는 패턴은 입력 루트 기준 상대 경로로 매칭합니다. 예: `backup/**`, `logs/2025/*.gz`

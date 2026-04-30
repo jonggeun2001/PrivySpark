@@ -178,6 +178,58 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(!Files.exists(rejected) || read(rejected).trim.isEmpty)
   }
 
+  test("collect matches response and scan results with equivalent hdfs slash variants") {
+    val sparkSession = spark
+    import sparkSession.implicits._
+
+    val scanRoot = Files.createTempDirectory("privyspark-review-scan-hdfs-slash-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-hdfs-slash-")
+    val scanResultsPath = scanRoot.resolve("parquet/scan_results")
+    Files.createDirectories(scanResultsPath.getParent)
+    Files.createDirectories(stateRoot.resolve("inbox"))
+
+    val fingerprint = RecordedFileFingerprint(
+      fileIdentifier = "customers/part-000.parquet",
+      fileSize = 128L,
+      fileMtimeEpochMs = 1710000000000L,
+      fileChecksumAlgo = "CRC32",
+      fileChecksum = "abcd1234"
+    )
+    val scanResultFromScanResults = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "alice@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(fingerprint)),
+      datasetPath = "hdfs:///user/username"
+    )
+    val scanResultFromReviewHtml = scanResult(
+      columnName = "email",
+      piiType = "email",
+      sample = "alice@example.com",
+      scopeFingerprints = ReviewScopeFingerprintCodec.encode(Seq(fingerprint)),
+      datasetPath = "hdfs:////user/username"
+    )
+    Seq(scanResultFromScanResults).toDS().toDF().write.mode("overwrite").parquet(scanResultsPath.toString)
+
+    val responseFindings = ReviewFindingBuilder.fromScanResults(Seq(scanResultFromReviewHtml))
+    val responseFingerprint = ReviewFindingBuilder.scanResultsFingerprint(responseFindings)
+    val responseFinding = responseFindings.head
+    val responseJson =
+      s"""{"schema_version":1,"scan_path":"hdfs:////user/username","scan_results_fingerprint":"$responseFingerprint","responder":"owner@example.com","responded_at":"2026-04-27T10:00:00Z","responses":[{"finding_key":"${responseFinding.findingKey}","finding_hash":"${responseFinding.findingHash}","decision":"false_positive","false_positive_reason":"dummy email","allowlist_scope":"exact"}]}"""
+    Files.write(stateRoot.resolve("inbox/owner-response.json"), responseJson.getBytes(StandardCharsets.UTF_8))
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(scanResultsPath.toString, stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val ledger = read(stateRoot.resolve("current/response_ledger.jsonl"))
+
+    assert(allowlist.contains("dummy email"))
+    assert(ledger.contains(responseFinding.findingKey))
+  }
+
   test("collect keys unified review state by scan path and file identifier") {
     val sparkSession = spark
     import sparkSession.implicits._

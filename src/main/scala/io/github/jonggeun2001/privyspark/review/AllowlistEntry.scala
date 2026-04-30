@@ -21,7 +21,8 @@ final case class AllowlistEntry(
   fileChecksumAlgo: String,
   fileChecksum: String
 ) {
-  def key: AllowlistKey = AllowlistKey(datasetPath, fileIdentifier, columnName, piiType)
+  def key: AllowlistKey =
+    AllowlistKey(ReviewPathNormalizer.normalizeScanPath(datasetPath), fileIdentifier, columnName, piiType)
 }
 
 final case class PatternAllowlistKey(
@@ -42,7 +43,13 @@ final case class PatternAllowlistEntry(
   expiresAt: String,
   sourceFindingKey: String
 ) {
-  def key: PatternAllowlistKey = PatternAllowlistKey(datasetPath, fileIdentifierPattern, columnNamePattern, piiTypePattern)
+  def key: PatternAllowlistKey =
+    PatternAllowlistKey(
+      ReviewPathNormalizer.normalizeScanPath(datasetPath),
+      fileIdentifierPattern,
+      columnNamePattern,
+      piiTypePattern
+    )
 }
 
 final case class ResolvedFileFingerprint(

@@ -81,7 +81,7 @@ scan_path = scan CLI의 --path 값
 file_identifier = scan_results.file_identifier
 ```
 
-collector와 HTML 생성기는 `scan_path`를 정규화한 뒤 finding key를 계산합니다.
+collector와 HTML 생성기는 `scan_path`를 정규화한 뒤 finding key를 계산합니다. HDFS URI는 `hdfs:///user/path`, `hdfs:////user/path`, `hdfs://nameservice//user/path`처럼 path 구분자의 개수가 달라도 의미가 같은 경우 같은 review identity로 취급합니다.
 
 ```text
 finding_key = sha256(
@@ -301,7 +301,7 @@ HTML에서는 오탐 응답을 항상 exact로 생성합니다. 단, finding의 
 - `file_mtime_epoch_ms`
 - checksum
 
-다음 스캔에서 모든 fingerprint가 일치하면 해당 finding은 `scan_results`에서 suppress됩니다. 파일 metadata 또는 checksum이 바뀌면 suppress하지 않고 재검토 대상으로 남깁니다.
+다음 스캔에서 모든 fingerprint가 일치하면 해당 finding은 `scan_results`에서 suppress됩니다. 이때 HDFS `dataset_path`는 review identity와 동일한 방식으로 정규화해 비교하므로, 이전 스캔과 다음 스캔의 URI slash 표기가 달라도 같은 위치로 매칭됩니다. 파일 metadata 또는 checksum이 바뀌면 suppress하지 않고 재검토 대상으로 남깁니다.
 
 ### Pattern allowlist
 `allowlist_scope=pattern`은 반복 오탐을 줄이기 위한 확장입니다.
