@@ -14,6 +14,18 @@ private[privyspark] object ReviewHtmlWriter {
   val DefaultSampleMode = "masked"
   val SupportedSampleModes: Set[String] = Set("raw", "masked", "none")
 
+  private val ResponseScanPathScript =
+    """    function formatResponseScanPath(scanPath) {
+      const safePath = String(scanPath || 'scan')
+        .trim()
+        .replace(/[\\/:*?"<>|]+/g, '-')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      return safePath || 'scan';
+    }
+"""
+
   def normalizeSampleMode(value: String): Option[String] = {
     val normalized = Option(value).map(_.trim.toLowerCase(Locale.ROOT)).getOrElse("")
     if (SupportedSampleModes.contains(normalized)) Some(normalized) else None
@@ -255,6 +267,7 @@ private[privyspark] object ReviewHtmlWriter {
         pad(date.getMinutes()) +
         pad(date.getSeconds());
     }
+${ResponseScanPathScript}
     const FormFieldDefaults = {
       decision: '',
       false_positive_reason: '',
@@ -797,7 +810,7 @@ private[privyspark] object ReviewHtmlWriter {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `response-$${formatResponseTimestamp(new Date())}.json`;
+      link.download = `response-$${formatResponseScanPath(REVIEW_DATA.scan_path)}-$${formatResponseTimestamp(new Date())}.json`;
       link.click();
       URL.revokeObjectURL(url);
     });

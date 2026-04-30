@@ -15,11 +15,11 @@
 - Use the bulk true-positive button to fill `action_plan` and `action_due_date` for findings already marked `true_positive`, or the bulk false-positive button to fill `false_positive_reason` for findings already marked `false_positive`.
 - The download button validates every finding before creating JSON. Missing decisions, false-positive reasons, action plans, or due dates are highlighted in red and the first invalid cell is focused.
 - Direct true-positive due-date inputs use the browser date picker.
-- Click the download button to create a `response-YYYYMMDD-HHMMSS.json` file.
+- Click the download button to create a `response-<scan-path>-YYYYMMDD-HHMMSS.json` file.
 - The downloaded JSON contains one response object per finding, so it can be consumed by the existing collector schema.
 - The sample data is synthetic and masked; production `review.html` files are generated under `<scan-output>/review/review.html`.
 
-`review-response-viewer.html` is a local operator page for inspecting a returned `response-YYYYMMDD-HHMMSS.json`.
+`review-response-viewer.html` is a local operator page for inspecting a returned `response-<scan-path>-YYYYMMDD-HHMMSS.json`.
 
 - Open it directly in a browser.
 - Choose the response JSON file, drop it onto the upload area, or paste its contents.
