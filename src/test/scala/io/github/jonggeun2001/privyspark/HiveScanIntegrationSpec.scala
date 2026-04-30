@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.hive.HiveTableLookupIndex
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanGroup}
-import io.github.jonggeun2001.privyspark.scan.GroupScanner
+import io.github.jonggeun2001.privyspark.scan.GroupScanCoordinator
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
@@ -54,7 +54,7 @@ class HiveScanIntegrationSpec extends AnyFunSuite with BeforeAndAfterAll {
           logicalIdentifiersByKey = Map(csvPath.toString -> "part-00000.csv")
         )
 
-        val (results, errors) = GroupScanner.scanGroup(
+        val (results, errors) = GroupScanCoordinator.scanGroup(
           spark,
           datasetPath = tempDir.toString,
           group = group,

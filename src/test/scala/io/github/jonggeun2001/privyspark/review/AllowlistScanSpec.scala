@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.review
 
 import io.github.jonggeun2001.privyspark.model.PiiRule
-import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanner}
+import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanCoordinator}
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
@@ -43,7 +43,7 @@ class AllowlistScanSpec extends AnyFunSuite {
       ))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,
@@ -89,7 +89,7 @@ class AllowlistScanSpec extends AnyFunSuite {
       ))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,
@@ -136,7 +136,7 @@ class AllowlistScanSpec extends AnyFunSuite {
       ))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,
@@ -179,7 +179,7 @@ class AllowlistScanSpec extends AnyFunSuite {
       ))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,
@@ -207,7 +207,7 @@ class AllowlistScanSpec extends AnyFunSuite {
       Files.write(reviewsDir.resolve("b.csv"), "name,email\nbob,bob@example.com\n".getBytes(StandardCharsets.UTF_8))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,
@@ -244,7 +244,7 @@ class AllowlistScanSpec extends AnyFunSuite {
       Files.write(csvFile, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,

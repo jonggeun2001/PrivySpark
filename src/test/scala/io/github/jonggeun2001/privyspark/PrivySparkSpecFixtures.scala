@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanGroup, ScanResult}
-import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanner}
+import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanCoordinator}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
 import org.apache.commons.compress.archivers.tar.{TarArchiveEntry, TarArchiveOutputStream}
@@ -134,7 +134,7 @@ trait PrivySparkSpecFixtures extends BeforeAndAfterAll { this: Suite =>
     val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
 
     plan.groups.foreach { group =>
-      val (groupResults, groupErrors) = GroupScanner.scanGroup(
+      val (groupResults, groupErrors) = GroupScanCoordinator.scanGroup(
         spark,
         datasetPath,
         group,

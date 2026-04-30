@@ -13,7 +13,7 @@
 - `util/DriverLogger.scala`: driver log level parsing and structured log format
 - `detect/DetectionAggregator.scala`: metric aggregation and fallback strategies
 - `hive/HiveTableLookup.scala`: Hive Metastore JDBC enumeration, table `LOCATION` normalization, longest-prefix lookup indexing, and broadcast creation
-- `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: input expansion, grouping, and scan execution
+- `scan/DirectoryScanner.scala`, `scan/GroupScanCoordinator.scala`: input expansion, grouping, and scan execution
 - `report/ReportWriter.scala`: final report writing and format-specific outputs
 - `PrivySparkApp.scala`: input expansion, grouping, exact split, scan orchestration, progress/final report writing
 - `Models.scala`: result, error, and ruleset models

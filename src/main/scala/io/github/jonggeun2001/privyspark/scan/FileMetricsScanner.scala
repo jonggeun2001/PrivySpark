@@ -173,7 +173,7 @@ private[privyspark] object FileMetricsScanner {
   ): Seq[String] = {
     fileSampleRatio match {
       case Some(ratio) if group.filePaths.size > fileSampleMinFiles =>
-        val sampledKeys = GroupScanner.selectSampledFileKeys(
+        val sampledKeys = FileSampling.selectSampledFileKeys(
           group.filePaths,
           ratio,
           s"${group.directoryPath}\u0000${group.format}\u0000${group.schemaSignature}"
