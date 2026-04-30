@@ -107,9 +107,9 @@ final class AllowlistMatcher private (
   }
 
   private def wildcardMatches(pattern: String, value: String): Boolean = {
-    val normalizedPattern = Option(pattern).map(_.trim).filter(_.nonEmpty).getOrElse("")
+    val normalizedPattern = Option(pattern).getOrElse("")
     val normalizedValue = Option(value).getOrElse("")
-    if (normalizedPattern.isEmpty) {
+    if (normalizedPattern.trim.isEmpty) {
       false
     } else {
       val regex = normalizedPattern.flatMap {

@@ -270,8 +270,8 @@ private[privyspark] object ReviewCollectCommand {
   }
 
   private def recurringFileIdentifierPattern(item: ResponseItem): String =
-    Option(item.fileIdentifierPattern).map(_.trim).filter(_.nonEmpty)
-      .getOrElse(Option(item.fileIdentifier).map(_.trim).getOrElse(""))
+    Option(item.fileIdentifierPattern).filter(_.trim.nonEmpty)
+      .getOrElse(Option(item.fileIdentifier).getOrElse(""))
 
   private def hasFieldWildcard(value: String): Boolean =
     Option(value).exists(_.contains("*"))
@@ -283,9 +283,9 @@ private[privyspark] object ReviewCollectCommand {
   }
 
   private def wildcardMatches(pattern: String, value: String): Boolean = {
-    val normalizedPattern = Option(pattern).map(_.trim).filter(_.nonEmpty).getOrElse("")
+    val normalizedPattern = Option(pattern).getOrElse("")
     val normalizedValue = Option(value).getOrElse("")
-    if (normalizedPattern.isEmpty) {
+    if (normalizedPattern.trim.isEmpty) {
       false
     } else {
       val regex = normalizedPattern.flatMap {
@@ -298,8 +298,8 @@ private[privyspark] object ReviewCollectCommand {
   }
 
   private def wildcardCoversRepresentative(pattern: String, representative: String): Boolean = {
-    val normalizedPattern = Option(pattern).map(_.trim.stripSuffix("/")).getOrElse("")
-    val normalizedRepresentative = Option(representative).map(_.trim.stripSuffix("/")).getOrElse("")
+    val normalizedPattern = Option(pattern).map(_.stripSuffix("/")).getOrElse("")
+    val normalizedRepresentative = Option(representative).map(_.stripSuffix("/")).getOrElse("")
     normalizedPattern.endsWith("/*") &&
       normalizedPattern.stripSuffix("/*") == normalizedRepresentative
   }

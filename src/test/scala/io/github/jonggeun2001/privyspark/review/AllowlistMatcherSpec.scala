@@ -53,6 +53,27 @@ class AllowlistMatcherSpec extends AnyFunSuite {
     assert(evaluation.shouldSuppress)
   }
 
+  test("evaluate preserves leading spaces in recurring file identifier patterns") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "/data",
+        hiveTableFqn = "",
+        fileIdentifierPattern = " reviews/a.csv"
+      )
+    ))
+
+    val evaluation = matcher.evaluate(
+      datasetPath = "/data",
+      hiveTableFqn = "",
+      fileIdentifier = " reviews/a.csv",
+      columnName = "email",
+      piiType = "email",
+      fingerprints = Seq.empty
+    )
+
+    assert(evaluation.shouldSuppress)
+  }
+
   test("evaluate treats equivalent hdfs slash variants as the same scan path") {
     val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
       recurringEntry(
