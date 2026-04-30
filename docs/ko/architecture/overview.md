@@ -73,10 +73,14 @@
 flowchart LR
   app[PrivySparkApp] --> cli[cli]
   app --> config[config]
+  app --> format[format]
+  app --> fsio[fsio]
+  app --> hive[hive]
+  app --> model[model]
   app --> scan[scan]
-  app --> report[report]
   app --> review[review]
   app --> progress[progress]
+  app --> util[util]
   scan --> format[format]
   scan --> config
   scan --> hive[hive]
@@ -86,10 +90,11 @@ flowchart LR
   scan --> model[model]
   detect --> model
   report --> model
+  review --> report
   review --> model
-  progress --> fsio
+  progress --> report
+  progress --> model
   scan --> util[util]
-  app --> util
 ```
 
 ```mermaid
