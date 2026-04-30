@@ -238,8 +238,8 @@ private[privyspark] object ReviewCollectCommand {
   private def responseCoversRecurring(entry: RecurringAllowlistEntry, response: AcceptedResponse): Boolean = {
     val sameScanAndType =
       ReviewPathNormalizer.normalizeScanPath(entry.scanPath) == ReviewPathNormalizer.normalizeScanPath(response.scanPath) &&
-        entry.columnName == response.item.columnName &&
-        entry.piiType == response.item.piiType
+        fieldMatches(entry.columnName, response.item.columnName) &&
+        fieldMatches(entry.piiType, response.item.piiType)
     if (!sameScanAndType) {
       false
     } else if (entry.hiveTableFqn.trim.nonEmpty || response.item.hiveTableFqn.trim.nonEmpty) {
@@ -270,6 +270,12 @@ private[privyspark] object ReviewCollectCommand {
   private def recurringFileIdentifierPattern(item: ResponseItem): String =
     Option(item.fileIdentifierPattern).map(_.trim).filter(_.nonEmpty)
       .getOrElse(Option(item.fileIdentifier).map(_.trim).getOrElse(""))
+
+  private def fieldMatches(pattern: String, value: String): Boolean = {
+    val normalizedPattern = Option(pattern).map(_.trim).getOrElse("")
+    if (normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, value)
+    else normalizedPattern == Option(value).map(_.trim).getOrElse("")
+  }
 
   private def wildcardMatches(pattern: String, value: String): Boolean = {
     val normalizedPattern = Option(pattern).map(_.trim).filter(_.nonEmpty).getOrElse("")

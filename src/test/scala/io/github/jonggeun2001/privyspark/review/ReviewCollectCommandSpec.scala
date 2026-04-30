@@ -201,6 +201,35 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(actionPlan.contains("mask customer emails"))
   }
 
+  test("collect removes legacy wildcard field pattern when covered finding is later true positive") {
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-legacy-field-wildcard-replace-")
+    Files.createDirectories(stateRoot.resolve("inbox"))
+    Files.createDirectories(stateRoot.resolve("current"))
+
+    val pattern =
+      """{"entry_type":"pattern","dataset_path":"/data/project","file_identifier":"reviews/*","column_name":"temp_*","pii_type":"email","reason":"old temporary false positive","reviewer":"owner@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"old-finding"}"""
+    Files.write(stateRoot.resolve("current/allowlist.jsonl"), s"$pattern\n".getBytes(StandardCharsets.UTF_8))
+
+    val truePositive =
+      """{"finding_key":"finding-temp-email","finding_hash":"hash-finding-temp-email","file_identifier":"reviews/part-000.parquet","column_name":"temp_email","pii_type":"email","sample_row_count":1000,"match_count":830,"non_empty_match_ratio":0.83,"decision":"true_positive","action_plan":"mask temp email","action_due_date":"2999-12-31"}"""
+    Files.write(
+      stateRoot.resolve("inbox/owner-response.json"),
+      responseEnvelope(scanPath = "/data/project", responses = Seq(truePositive)).getBytes(StandardCharsets.UTF_8)
+    )
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val actionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+
+    assert(!allowlist.contains("old temporary false positive"))
+    assert(!allowlist.contains("temp_*"))
+    assert(actionPlan.contains("mask temp email"))
+  }
+
   test("collect keeps hdfs slash variants normalized when replacing recurring state") {
     val stateRoot = Files.createTempDirectory("privyspark-review-state-hdfs-")
     Files.createDirectories(stateRoot.resolve("inbox"))
