@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
-import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupIndex}
+import io.github.jonggeun2001.privyspark.hive.{HiveTableFqnResolver, HiveTableLookupIndex}
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
@@ -85,7 +85,7 @@ private[privyspark] object AllowlistApplier {
 
       matchedSourceKeys.flatMap { sourceKey =>
         val fileIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
-        val fqn = hiveTableFqn(hiveLookup, resolvePhysicalPath(group, sourceKey))
+        val fqn = HiveTableFqnResolver.resolve(hiveLookup, resolvePhysicalPath(group, sourceKey))
         metricMap.get(fileIdentifier).toSeq.flatMap { fileMetrics =>
           ScanResultBuilder.buildScanResults(
             datasetPath,
@@ -273,6 +273,4 @@ private[privyspark] object AllowlistApplier {
     (rescannedResults.toSeq, rescannedErrors.toSeq)
   }
 
-  private def hiveTableFqn(hiveLookup: Option[Broadcast[HiveTableLookupIndex]], rawPath: String): String =
-    hiveLookup.map(_.value.lookup(HiveTableLookup.stripCompositeIdentifier(rawPath))).getOrElse("")
 }

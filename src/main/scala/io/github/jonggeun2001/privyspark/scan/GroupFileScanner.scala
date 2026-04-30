@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
-import io.github.jonggeun2001.privyspark.hive.{HiveTableLookup, HiveTableLookupIndex}
+import io.github.jonggeun2001.privyspark.hive.{HiveTableFqnResolver, HiveTableLookupIndex}
 import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
@@ -69,7 +69,7 @@ private[privyspark] object GroupFileScanner {
       () => {
         val physicalPath = resolvePhysicalPath(group, sourceKey)
         val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
-        val fileHiveTableFqn = hiveTableFqn(hiveLookup, physicalPath)
+        val fileHiveTableFqn = HiveTableFqnResolver.resolve(hiveLookup, physicalPath)
         DriverLogger.debug("group_scan_fallback_file_start", "file" -> physicalPath, "directory" -> group.directoryPath)
         def scanFileMetrics(): Either[ScanError, FileScanMetrics] =
           if (group.useDirectoryIdentifier) {
@@ -246,7 +246,7 @@ private[privyspark] object GroupFileScanner {
     }
 
     val fallbackResults = if (group.useDirectoryIdentifier && fallbackErrors.isEmpty) {
-      val directoryHiveTableFqn = hiveTableFqn(hiveLookup, group.directoryPath)
+      val directoryHiveTableFqn = HiveTableFqnResolver.resolve(hiveLookup, group.directoryPath)
       val reviewScopeFileIdentifiers = successfulFileMetrics.map(_.fileIdentifier)
       val reviewScopeFileFingerprints =
         if (successfulFileMetrics.forall(_.recordedFingerprint.nonEmpty)) {
@@ -310,7 +310,7 @@ private[privyspark] object GroupFileScanner {
         )
       }
       successfulFileMetrics.flatMap { fileMetrics =>
-        val fileHiveTableFqn = hiveTableFqn(hiveLookup, physicalPathForFileIdentifier(group, datasetPath, fileMetrics.fileIdentifier))
+        val fileHiveTableFqn = HiveTableFqnResolver.resolve(hiveLookup, physicalPathForFileIdentifier(group, datasetPath, fileMetrics.fileIdentifier))
         ScanResultBuilder.buildScanResults(
           datasetPath,
           fileMetrics.scanTimestamp,
@@ -357,9 +357,6 @@ private[privyspark] object GroupFileScanner {
     )
     (filteredFallbackResults.toSeq, fallbackErrors.toSeq)
   }
-
-  private def hiveTableFqn(hiveLookup: Option[Broadcast[HiveTableLookupIndex]], rawPath: String): String =
-    hiveLookup.map(_.value.lookup(HiveTableLookup.stripCompositeIdentifier(rawPath))).getOrElse("")
 
   private def physicalPathForFileIdentifier(group: ScanGroup, datasetPath: String, fileIdentifier: String): String =
     group.filePaths.find(sourceKey => resolveLogicalIdentifier(group, datasetPath, sourceKey) == fileIdentifier) match {

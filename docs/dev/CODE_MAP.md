@@ -9,7 +9,7 @@
 - `detect/`: PII 규칙별 Spark aggregation, non-empty count, sample value 수집.
 - `format/`: 입력 포맷 감지, CSV dialect/header 추론, Excel workbook streaming, 압축 스트림 처리.
 - `fsio/`: Hadoop `FileSystem` 기반 안전한 경로 교체, retry IO helper.
-- `hive/`: Hive Metastore JDBC table location 조회와 longest-prefix lookup 인덱스.
+- `hive/`: Hive Metastore JDBC table location 조회, longest-prefix lookup 인덱스, scan result `hive_table_fqn` 해석.
 - `model/`: scan result/error, ruleset, scan plan, pre-scan/group/report ADT.
 - `progress/`: run marker, progress JSONL, in-flight marker, stale run cleanup.
 - `report/`: scan result/error를 parquet/csv/excel 산출물로 저장.
@@ -22,6 +22,7 @@
 - `PrivySparkApp.scala`: `main` L36, `runMain` L40, `runScan` L161.
 - `scan/DirectoryScanner.scala`: `discoverPhysicalFiles` L55, `scanDirectoryStructure` L108, schema split fast path L501.
 - `scan/GroupScanCoordinator.scala`: `scanGroups` L17, sampled/file fallback L173, batch fallback policy L246.
+- `hive/HiveTableFqnResolver.scala`: scan result `hive_table_fqn` 단일 해석 helper L5.
 - `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L29, public `write` overloads L34-L68, `writeFindings` L84, JSON/sample rendering L885.
 - `detect/DetectionAggregator.scala`: public `aggregate` L80, `aggregateByFile` L101, sample collection L175, metric planning L232.
 - `report/ReportWriter.scala`: public `writeReports` overloads L17-L51, format writer L147.
