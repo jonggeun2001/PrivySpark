@@ -40,7 +40,9 @@ main
   -> GroupScanCoordinator.scanGroups
   -> DetectionAggregator
   -> ProgressRunManager.mergeProgressReports
-  -> ReviewHtmlWriter
+  -> ReportWriter.writeReports
+  -> afterReportWrite callback
+  -> ReviewHtmlWriter.write (reviewStateRoot 설정 시)
 ```
 
 ## 데이터 모델 위치

@@ -120,5 +120,8 @@ sequenceDiagram
   GroupScanner-->>PrivySparkApp: group scan 완료
   PrivySparkApp->>ProgressRunManager: mergeProgressReports(afterReportWrite)
   ProgressRunManager->>ReportWriter: writeReports(...)
-  ProgressRunManager->>ReviewHtmlWriter: afterReportWrite callback 실행
+  ProgressRunManager-->>PrivySparkApp: afterReportWrite(resultDf)
+  alt reviewStateRoot 설정 시
+    PrivySparkApp->>ReviewHtmlWriter: write(...)
+  end
 ```
