@@ -94,7 +94,8 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-  participant Cli
+  participant PrivySparkApp
+  participant CliParser as Cli
   participant Spark
   participant DirectoryScanner
   participant ProgressRunManager
@@ -104,18 +105,20 @@ sequenceDiagram
   participant ReportWriter
   participant ReviewHtmlWriter
 
-  Cli->>Spark: SparkSession 생성
-  Cli->>DirectoryScanner: scanDirectoryStructure(...)
-  DirectoryScanner-->>Cli: DirectoryScanPlan 반환
-  Cli->>ProgressRunManager: prepareProgressRun(...)
-  Cli->>ProgressRunManager: startProgressHeartbeat(...)
-  Cli->>GroupScanner: scanGroups(...)
+  PrivySparkApp->>CliParser: args 파싱
+  CliParser-->>PrivySparkApp: Scan config
+  PrivySparkApp->>Spark: SparkSession 생성
+  PrivySparkApp->>DirectoryScanner: scanDirectoryStructure(...)
+  DirectoryScanner-->>PrivySparkApp: DirectoryScanPlan 반환
+  PrivySparkApp->>ProgressRunManager: prepareProgressRun(...)
+  PrivySparkApp->>ProgressRunManager: startProgressHeartbeat(...)
+  PrivySparkApp->>GroupScanner: scanGroups(...)
   GroupScanner->>GroupScanCoordinator: scanGroups(...)
   GroupScanCoordinator->>DetectionAggregator: aggregate / aggregateByFile
   DetectionAggregator-->>GroupScanCoordinator: ScanResult 집계
   GroupScanCoordinator-->>GroupScanner: progress records 기록
-  GroupScanner-->>Cli: group scan 완료
-  Cli->>ProgressRunManager: mergeProgressReports(...)
+  GroupScanner-->>PrivySparkApp: group scan 완료
+  PrivySparkApp->>ProgressRunManager: mergeProgressReports(afterReportWrite)
   ProgressRunManager->>ReportWriter: writeReports(...)
-  ProgressRunManager->>ReviewHtmlWriter: review HTML hook 실행
+  ProgressRunManager->>ReviewHtmlWriter: afterReportWrite callback 실행
 ```
