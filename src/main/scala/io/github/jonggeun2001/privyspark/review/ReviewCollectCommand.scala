@@ -248,7 +248,8 @@ private[privyspark] object ReviewCollectCommand {
       val responsePattern = recurringFileIdentifierPattern(response.item)
       entry.fileIdentifierPattern == responsePattern ||
         wildcardMatches(entry.fileIdentifierPattern, response.item.fileIdentifier) ||
-        wildcardMatches(responsePattern, entry.fileIdentifierPattern)
+        wildcardMatches(responsePattern, entry.fileIdentifierPattern) ||
+        wildcardCoversRepresentative(entry.fileIdentifierPattern, responsePattern)
     }
   }
 
@@ -283,6 +284,13 @@ private[privyspark] object ReviewCollectCommand {
       }
       normalizedValue.matches(regex)
     }
+  }
+
+  private def wildcardCoversRepresentative(pattern: String, representative: String): Boolean = {
+    val normalizedPattern = Option(pattern).map(_.trim.stripSuffix("/")).getOrElse("")
+    val normalizedRepresentative = Option(representative).map(_.trim.stripSuffix("/")).getOrElse("")
+    normalizedPattern.endsWith("/*") &&
+      normalizedPattern.stripSuffix("/*") == normalizedRepresentative
   }
 
   private def toActionPlan(response: AcceptedResponse): ActionPlan = {

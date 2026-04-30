@@ -172,6 +172,35 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(actionPlan.contains("mask email"))
   }
 
+  test("collect removes wildcard recurring allowlist entry when directory finding is later true positive") {
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-wildcard-directory-replace-")
+    Files.createDirectories(stateRoot.resolve("inbox"))
+    Files.createDirectories(stateRoot.resolve("current"))
+
+    val recurring =
+      """{"entry_type":"recurring","scan_path":"/data/project","hive_table_fqn":"","file_identifier_pattern":"customers/*","column_name":"email","pii_type":"email","reason":"old broad false positive","reviewer":"owner@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"old-finding","sample_row_count":1000,"match_count":12,"non_empty_match_ratio":0.12}"""
+    Files.write(stateRoot.resolve("current/allowlist.jsonl"), s"$recurring\n".getBytes(StandardCharsets.UTF_8))
+
+    val truePositive =
+      """{"finding_key":"finding-email","finding_hash":"hash-finding-email","file_identifier":"customers","column_name":"email","pii_type":"email","sample_row_count":1000,"match_count":830,"non_empty_match_ratio":0.83,"decision":"true_positive","action_plan":"mask customer emails","action_due_date":"2999-12-31"}"""
+    Files.write(
+      stateRoot.resolve("inbox/owner-response.json"),
+      responseEnvelope(scanPath = "/data/project", responses = Seq(truePositive)).getBytes(StandardCharsets.UTF_8)
+    )
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val actionPlan = read(stateRoot.resolve("current/action_plan.jsonl"))
+
+    assert(!allowlist.contains("old broad false positive"))
+    assert(!allowlist.contains("customers/*"))
+    assert(actionPlan.contains("mask customer emails"))
+  }
+
   test("collect keeps hdfs slash variants normalized when replacing recurring state") {
     val stateRoot = Files.createTempDirectory("privyspark-review-state-hdfs-")
     Files.createDirectories(stateRoot.resolve("inbox"))
