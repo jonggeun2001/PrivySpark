@@ -35,9 +35,11 @@ main
   -> runMain
   -> runScan
   -> DirectoryScanner.scanDirectoryStructure
+  -> ProgressRunManager.prepareProgressRun
+  -> GroupScanner.scanGroups
   -> GroupScanCoordinator.scanGroups
   -> DetectionAggregator
-  -> ReportWriter
+  -> ProgressRunManager.mergeProgressReports
   -> ReviewHtmlWriter
 ```
 

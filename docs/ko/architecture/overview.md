@@ -97,7 +97,8 @@ sequenceDiagram
   participant Cli
   participant Spark
   participant DirectoryScanner
-  participant ProgressIO
+  participant ProgressRunManager
+  participant GroupScanner
   participant GroupScanCoordinator
   participant DetectionAggregator
   participant ReportWriter
@@ -105,13 +106,16 @@ sequenceDiagram
 
   Cli->>Spark: SparkSession 생성
   Cli->>DirectoryScanner: scanDirectoryStructure(...)
-  DirectoryScanner->>ProgressIO: preparing/active run marker 기록
-  DirectoryScanner->>GroupScanCoordinator: scanGroups(...)
+  DirectoryScanner-->>Cli: DirectoryScanPlan 반환
+  Cli->>ProgressRunManager: prepareProgressRun(...)
+  Cli->>ProgressRunManager: startProgressHeartbeat(...)
+  Cli->>GroupScanner: scanGroups(...)
+  GroupScanner->>GroupScanCoordinator: scanGroups(...)
   GroupScanCoordinator->>DetectionAggregator: aggregate / aggregateByFile
   DetectionAggregator-->>GroupScanCoordinator: ScanResult 집계
-  GroupScanCoordinator-->>DirectoryScanner: results/errors
-  DirectoryScanner->>ProgressIO: progress merge 및 completion 기록
-  DirectoryScanner-->>Cli: DirectoryScanPlan
-  Cli->>ReportWriter: writeReports(...)
-  Cli->>ReviewHtmlWriter: write(...)
+  GroupScanCoordinator-->>GroupScanner: progress records 기록
+  GroupScanner-->>Cli: group scan 완료
+  Cli->>ProgressRunManager: mergeProgressReports(...)
+  ProgressRunManager->>ReportWriter: writeReports(...)
+  ProgressRunManager->>ReviewHtmlWriter: review HTML hook 실행
 ```
