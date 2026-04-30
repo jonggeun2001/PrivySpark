@@ -14,16 +14,20 @@
 - `progress/`: run marker, progress JSONL, in-flight marker, stale run cleanup.
 - `report/`: scan result/error를 parquet/csv/excel 산출물로 저장.
 - `review/`: offline review HTML, response collect/apply, allowlist/action plan state.
-- `scan/`: directory discovery, source expansion, grouping, file sampling, batch/file scan orchestration.
+- `scan/`: directory scan orchestration, source expansion, grouping, file sampling, batch/file scan orchestration.
 - `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
+- `scan/discovery/`: physical file discovery, pre-scan expansion, schema split/finalization helpers.
 - `util/`: driver logging, parallelism 설정, path identifier 정규화.
 
 ## 핵심 파일 포인터
 
 - `PrivySparkApp.scala`: `main` L36, `runMain` L40, `runScan` L161.
-- `scan/DirectoryScanner.scala`: `discoverPhysicalFiles` L55, `scanDirectoryStructure` L108, schema split fast path L501.
+- `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L22, pre-scan collect/group build L132, schema split/finalization delegate L210.
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
+- `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L12, `discover` L16.
+- `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L27, `runPreScan` L48.
+- `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L22, `splitGroupBySchemaFast` L112, `splitGroupBySchema` L229.
 - `scan/GroupScanCoordinator.scala`: `scanGroups` L17, sampled/file fallback L173, batch fallback policy L246.
 - `scan/FileSampling.scala`: deterministic file sampling L6.
 - `hive/HiveTableFqnResolver.scala`: scan result `hive_table_fqn` 단일 해석 helper L5.
