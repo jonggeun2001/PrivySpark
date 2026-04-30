@@ -245,7 +245,10 @@ private[privyspark] object ReviewCollectCommand {
     } else if (entry.hiveTableFqn.trim.nonEmpty || response.item.hiveTableFqn.trim.nonEmpty) {
       entry.hiveTableFqn == response.item.hiveTableFqn
     } else {
-      entry.fileIdentifierPattern == recurringFileIdentifierPattern(response.item)
+      val responsePattern = recurringFileIdentifierPattern(response.item)
+      entry.fileIdentifierPattern == responsePattern ||
+        wildcardMatches(entry.fileIdentifierPattern, response.item.fileIdentifier) ||
+        wildcardMatches(responsePattern, entry.fileIdentifierPattern)
     }
   }
 
@@ -266,6 +269,21 @@ private[privyspark] object ReviewCollectCommand {
   private def recurringFileIdentifierPattern(item: ResponseItem): String =
     Option(item.fileIdentifierPattern).map(_.trim).filter(_.nonEmpty)
       .getOrElse(Option(item.fileIdentifier).map(_.trim).getOrElse(""))
+
+  private def wildcardMatches(pattern: String, value: String): Boolean = {
+    val normalizedPattern = Option(pattern).map(_.trim).filter(_.nonEmpty).getOrElse("")
+    val normalizedValue = Option(value).getOrElse("")
+    if (normalizedPattern.isEmpty) {
+      false
+    } else {
+      val regex = normalizedPattern.flatMap {
+        case '*' => ".*"
+        case ch if "\\.[]{}()+-^$?|".contains(ch) => "\\" + ch
+        case ch => ch.toString
+      }
+      normalizedValue.matches(regex)
+    }
+  }
 
   private def toActionPlan(response: AcceptedResponse): ActionPlan = {
     val (fallbackDatabase, fallbackTable) = splitHiveTableFqn(response.item.hiveTableFqn)

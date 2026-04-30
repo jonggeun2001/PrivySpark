@@ -138,7 +138,7 @@ private[privyspark] object AllowlistApplier {
         if (!hasCandidate) {
           Some(result)
         } else {
-          val identifiersToEvaluate = if (reviewScopeIdentifiers.nonEmpty) reviewScopeIdentifiers else Seq(result.file_identifier)
+          val identifiersToEvaluate = (Seq(result.file_identifier) ++ reviewScopeIdentifiers).distinct
           val evaluation = identifiersToEvaluate.foldLeft(AllowlistEvaluation(shouldSuppress = false)) {
             case (matched, _) if matched.shouldSuppress => matched
             case (_, identifier) =>
