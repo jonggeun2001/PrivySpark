@@ -56,7 +56,7 @@
 
 The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `.crc`, log dumps, or backup directories do not inflate I/O, error rows, or report noise.
 
-Allowlists are intentionally different from ignore rules. Ignore rules skip files before scanning, while allowlists suppress only reviewed recurring false positives after detection. When Hive mapping exists the key is `(scan_path, hive_table_fqn, column_name, pii_type)`; otherwise the key is `(scan_path, file_identifier_pattern, column_name, pii_type)`.
+Allowlists are intentionally different from ignore rules. Ignore rules skip files before scanning, while allowlists suppress only reviewed recurring false positives after detection. When Hive mapping exists the key is `(scan_path, hive_table_fqn, column_name, pii_type)`; otherwise the key is `(scan_path, file_identifier_pattern, column_name, pii_type)`. New recurring responses require exact `column_name` and `pii_type` values; `*` wildcards are rejected for those fields.
 
 ## Suppression
 - Suppression removes only a specific `(column, pii_type)` result pair. Column names are matched case-insensitively by exact equality.

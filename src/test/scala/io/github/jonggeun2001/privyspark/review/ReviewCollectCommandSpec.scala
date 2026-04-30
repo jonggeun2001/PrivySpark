@@ -109,6 +109,41 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(ledger.trim.isEmpty)
   }
 
+  test("collect rejects wildcard column or pii fields in new recurring false positive responses") {
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-field-wildcard-reject-")
+    Files.createDirectories(stateRoot.resolve("inbox"))
+
+    val wildcardColumn =
+      falsePositiveResponse(
+        findingKey = "finding-email-column",
+        columnName = "temp_*",
+        piiType = "email",
+        reason = "unsafe wildcard"
+      )
+    val wildcardPii =
+      falsePositiveResponse(
+        findingKey = "finding-email-pii",
+        columnName = "email",
+        piiType = "*",
+        reason = "unsafe wildcard"
+      )
+    Files.write(
+      stateRoot.resolve("inbox/owner-response.json"),
+      responseEnvelope("/data/project", Seq(wildcardColumn, wildcardPii)).getBytes(StandardCharsets.UTF_8)
+    )
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val ledger = read(stateRoot.resolve("current/response_ledger.jsonl"))
+
+    assert(allowlist.trim.isEmpty)
+    assert(ledger.trim.isEmpty)
+  }
+
   test("collect removes recurring allowlist entry when same finding is later reviewed as true positive") {
     val stateRoot = Files.createTempDirectory("privyspark-review-state-replace-")
     Files.createDirectories(stateRoot.resolve("inbox"))
@@ -228,6 +263,44 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(!allowlist.contains("old temporary false positive"))
     assert(!allowlist.contains("temp_*"))
     assert(actionPlan.contains("mask temp email"))
+  }
+
+  test("collect preserves legacy field wildcard marker for retained pattern entries") {
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-legacy-field-wildcard-retain-")
+    Files.createDirectories(stateRoot.resolve("inbox"))
+    Files.createDirectories(stateRoot.resolve("current"))
+
+    val pattern =
+      """{"entry_type":"pattern","dataset_path":"/data/project","file_identifier":"reviews/*","column_name":"temp_*","pii_type":"email","reason":"old temporary false positive","reviewer":"owner@example.com","reviewed_at":"2026-04-20T00:00:00Z","expires_at":"2999-12-31","source_finding_key":"old-finding"}"""
+    Files.write(stateRoot.resolve("current/allowlist.jsonl"), s"$pattern\n".getBytes(StandardCharsets.UTF_8))
+
+    Files.write(
+      stateRoot.resolve("inbox/owner-response.json"),
+      responseEnvelope(
+        scanPath = "/data/project",
+        responses = Seq(falsePositiveResponse(
+          findingKey = "finding-phone",
+          columnName = "phone",
+          piiType = "phone_number",
+          reason = "known sample phone"
+        ))
+      ).getBytes(StandardCharsets.UTF_8)
+    )
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+
+    assert(allowlist.contains("old temporary false positive"))
+    assert(allowlist.contains(""""legacy_field_wildcards":true"""))
+    assert(allowlist.contains("temp_*"))
+    assert(AllowlistMatcher
+      .load(spark.sparkContext.hadoopConfiguration, stateRoot.resolve("current/allowlist.jsonl").toString)
+      .evaluate("/data/project", "", "reviews/part-000.parquet", "temp_email", "email", Seq.empty)
+      .shouldSuppress)
   }
 
   test("collect keeps hdfs slash variants normalized when replacing recurring state") {

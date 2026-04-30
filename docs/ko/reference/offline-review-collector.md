@@ -151,6 +151,7 @@ collector는 response JSON에 대해 다음을 검증합니다.
 - `responded_at`은 ISO-8601 instant
 - 각 response의 `finding_key`, `column_name`, `pii_type`, `decision`은 필수
 - 오탐은 `false_positive_reason`, `expires_at` 필수
+- 신규 recurring 오탐의 `column_name`, `pii_type`은 exact 값만 허용하며 `*` wildcard는 거부
 - Hive 매핑이 없는 오탐은 `file_identifier_pattern` 또는 `file_identifier` 필수
 - 정탐은 `action_plan`, `action_due_date` 필수
 - `expires_at`, `action_due_date`는 `YYYY-MM-DD`

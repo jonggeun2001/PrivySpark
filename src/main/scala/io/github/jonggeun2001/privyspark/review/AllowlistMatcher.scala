@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark.review
 
-import io.github.jonggeun2001.privyspark.report.JsonCodec.{extractJsonLongField, extractJsonStringField}
+import io.github.jonggeun2001.privyspark.report.JsonCodec.{extractJsonBooleanField, extractJsonLongField, extractJsonStringField}
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.spark.SparkEnv
@@ -89,8 +89,8 @@ final class AllowlistMatcher private (
     val sameScanPath =
       ReviewPathNormalizer.normalizeScanPath(entry.scanPath) == ReviewPathNormalizer.normalizeScanPath(datasetPath)
     val sameColumnAndType =
-      fieldMatches(entry.columnName, columnName) &&
-        fieldMatches(entry.piiType, piiType)
+      fieldMatches(entry.columnName, columnName, entry.fieldWildcardsEnabled) &&
+        fieldMatches(entry.piiType, piiType, entry.fieldWildcardsEnabled)
     val matchesScope =
       if (entry.hiveTableFqn.trim.nonEmpty) {
         entry.hiveTableFqn == Option(hiveTableFqn).getOrElse("").trim
@@ -100,9 +100,9 @@ final class AllowlistMatcher private (
     sameScanPath && sameColumnAndType && matchesScope
   }
 
-  private def fieldMatches(pattern: String, value: String): Boolean = {
+  private def fieldMatches(pattern: String, value: String, wildcardsEnabled: Boolean): Boolean = {
     val normalizedPattern = Option(pattern).map(_.trim).getOrElse("")
-    if (normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, value)
+    if (wildcardsEnabled && normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, value)
     else normalizedPattern == Option(value).getOrElse("")
   }
 
@@ -295,7 +295,8 @@ object AllowlistMatcher {
           sourceFindingKey = extractJsonStringField(line, "source_finding_key").getOrElse(""),
           sampleRowCount = extractJsonLongField(line, "sample_row_count").getOrElse(0L),
           matchCount = extractJsonLongField(line, "match_count").getOrElse(0L),
-          nonEmptyMatchRatio = extractJsonDoubleField(line, "non_empty_match_ratio").getOrElse(0.0)
+          nonEmptyMatchRatio = extractJsonDoubleField(line, "non_empty_match_ratio").getOrElse(0.0),
+          fieldWildcardsEnabled = extractJsonBooleanField(line, "legacy_field_wildcards").getOrElse(false)
         )
       case Some("pattern") =>
         parsePatternEntry(line).map(patternToRecurringEntry)
@@ -318,7 +319,8 @@ object AllowlistMatcher {
       sourceFindingKey = entry.sourceFindingKey,
       sampleRowCount = 0L,
       matchCount = 0L,
-      nonEmptyMatchRatio = 0.0
+      nonEmptyMatchRatio = 0.0,
+      fieldWildcardsEnabled = true
     )
 
   private def extractJsonDoubleField(json: String, field: String): Option[Double] = {

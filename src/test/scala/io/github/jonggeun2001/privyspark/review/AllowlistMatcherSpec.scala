@@ -96,6 +96,28 @@ class AllowlistMatcherSpec extends AnyFunSuite {
     assert(!evaluation.shouldSuppress)
   }
 
+  test("evaluate treats recurring wildcard field characters as exact values") {
+    val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+      recurringEntry(
+        scanPath = "/data",
+        hiveTableFqn = "mart.customers",
+        fileIdentifierPattern = "",
+        columnName = "*"
+      )
+    ))
+
+    val evaluation = matcher.evaluate(
+      datasetPath = "/data",
+      hiveTableFqn = "mart.customers",
+      fileIdentifier = "customers/part-000.parquet",
+      columnName = "email",
+      piiType = "email",
+      fingerprints = Seq.empty
+    )
+
+    assert(!evaluation.shouldSuppress)
+  }
+
   test("evaluate ignores legacy exact entries") {
     val matcher = AllowlistMatcher.fromEntries(Seq(
       AllowlistEntry(
@@ -192,14 +214,16 @@ class AllowlistMatcherSpec extends AnyFunSuite {
     scanPath: String,
     hiveTableFqn: String,
     fileIdentifierPattern: String,
-    expiresAt: String = "2999-12-31"
+    expiresAt: String = "2999-12-31",
+    columnName: String = "email",
+    piiType: String = "email"
   ): RecurringAllowlistEntry =
     RecurringAllowlistEntry(
       scanPath = scanPath,
       hiveTableFqn = hiveTableFqn,
       fileIdentifierPattern = fileIdentifierPattern,
-      columnName = "email",
-      piiType = "email",
+      columnName = columnName,
+      piiType = piiType,
       reason = "daily dummy account column",
       reviewer = "reviewer@example.com",
       reviewedAt = "2026-04-30T00:00:00Z",

@@ -353,6 +353,9 @@
               errors.push(`responses[${index}].${key} 값이 필요합니다.`);
             }
           });
+          if (textValue(response.column_name).includes('*') || textValue(response.pii_type).includes('*')) {
+            errors.push(`responses[${index}].column_name과 pii_type은 wildcard 없이 exact 값이어야 합니다.`);
+          }
           const decision = textValue(response.decision);
           const allowlistScope = textValue(response.allowlist_scope);
           if (decision === 'false_positive') {

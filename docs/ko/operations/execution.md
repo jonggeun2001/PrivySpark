@@ -58,7 +58,7 @@
 
 ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로그, 백업 파일처럼 스캔 가치가 낮은 입력 때문에 불필요한 I/O, 오류 리포트, 결과 노이즈가 늘어나는 것을 막기 위해서입니다.
 
-allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 자체를 제외하고, allowlist는 탐지 이후 Hive 매핑이 있으면 `(scan_path, hive_table_fqn, column_name, pii_type)`, Hive 매핑이 없으면 `(scan_path, file_identifier_pattern, column_name, pii_type)` 단위 recurring false positive만 suppress합니다.
+allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 자체를 제외하고, allowlist는 탐지 이후 Hive 매핑이 있으면 `(scan_path, hive_table_fqn, column_name, pii_type)`, Hive 매핑이 없으면 `(scan_path, file_identifier_pattern, column_name, pii_type)` 단위 recurring false positive만 suppress합니다. 신규 recurring 응답의 `column_name`, `pii_type`은 exact 값만 허용하며 `*` wildcard는 거부합니다.
 
 ## Suppression
 - suppression은 특정 `(column, pii_type)` 결과만 제외합니다. 컬럼명은 대소문자를 무시하고 exact match 합니다.

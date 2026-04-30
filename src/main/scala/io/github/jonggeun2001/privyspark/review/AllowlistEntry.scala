@@ -73,7 +73,8 @@ final case class RecurringAllowlistEntry(
   sourceFindingKey: String,
   sampleRowCount: Long,
   matchCount: Long,
-  nonEmptyMatchRatio: Double
+  nonEmptyMatchRatio: Double,
+  fieldWildcardsEnabled: Boolean = false
 ) {
   def key: RecurringAllowlistKey =
     RecurringAllowlistKey(

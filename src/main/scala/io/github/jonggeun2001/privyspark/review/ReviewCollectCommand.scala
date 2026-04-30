@@ -191,6 +191,8 @@ private[privyspark] object ReviewCollectCommand {
       Some(s"unsupported allowlist_scope: $scope")
     } else if (item.falsePositiveReason.trim.isEmpty) {
       Some(s"false_positive_reason is required: ${item.findingKey}")
+    } else if (hasFieldWildcard(item.columnName) || hasFieldWildcard(item.piiType)) {
+      Some(s"column_name and pii_type must be exact values without wildcard '*': ${item.findingKey}")
     } else if (item.expiresAt.trim.isEmpty) {
       Some(s"expires_at is required for recurring allowlist: ${item.findingKey}")
     } else if (Try(LocalDate.parse(item.expiresAt)).isFailure) {
@@ -238,8 +240,8 @@ private[privyspark] object ReviewCollectCommand {
   private def responseCoversRecurring(entry: RecurringAllowlistEntry, response: AcceptedResponse): Boolean = {
     val sameScanAndType =
       ReviewPathNormalizer.normalizeScanPath(entry.scanPath) == ReviewPathNormalizer.normalizeScanPath(response.scanPath) &&
-        fieldMatches(entry.columnName, response.item.columnName) &&
-        fieldMatches(entry.piiType, response.item.piiType)
+        fieldMatches(entry.columnName, response.item.columnName, entry.fieldWildcardsEnabled) &&
+        fieldMatches(entry.piiType, response.item.piiType, entry.fieldWildcardsEnabled)
     if (!sameScanAndType) {
       false
     } else if (entry.hiveTableFqn.trim.nonEmpty || response.item.hiveTableFqn.trim.nonEmpty) {
@@ -271,9 +273,12 @@ private[privyspark] object ReviewCollectCommand {
     Option(item.fileIdentifierPattern).map(_.trim).filter(_.nonEmpty)
       .getOrElse(Option(item.fileIdentifier).map(_.trim).getOrElse(""))
 
-  private def fieldMatches(pattern: String, value: String): Boolean = {
+  private def hasFieldWildcard(value: String): Boolean =
+    Option(value).exists(_.contains("*"))
+
+  private def fieldMatches(pattern: String, value: String, wildcardsEnabled: Boolean): Boolean = {
     val normalizedPattern = Option(pattern).map(_.trim).getOrElse("")
-    if (normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, value)
+    if (wildcardsEnabled && normalizedPattern.contains("*")) wildcardMatches(normalizedPattern, value)
     else normalizedPattern == Option(value).map(_.trim).getOrElse("")
   }
 
