@@ -16,56 +16,18 @@ private[privyspark] object ReportWriter {
 
   def writeReports(
     spark: SparkSession,
-    outputRoot: String,
-    results: Seq[ScanResult],
-    errors: Seq[ScanError]
-  ): Unit = writeReports(spark, outputRoot, results, errors, OutputFormats.Default)
-
-  def writeReports(
-    spark: SparkSession,
-    outputRoot: String,
-    results: Seq[ScanResult],
-    errors: Seq[ScanError],
-    outputFormats: Seq[String]
-  ): Unit = writeReports(spark, outputRoot, results, errors, outputFormats, () => ())
-
-  def writeReports(
-    spark: SparkSession,
-    outputRoot: String,
-    results: Seq[ScanResult],
-    errors: Seq[ScanError],
-    outputFormats: Seq[String],
-    beforePromote: () => Unit
+    request: WriteReportsRequest
   ): Unit = {
-    import spark.implicits._
-    writeReports(
-      spark,
-      outputRoot,
-      spark.createDataset(results).toDF(),
-      spark.createDataset(errors).toDF(),
-      outputFormats,
-      beforePromote
-    )
-  }
-
-  def writeReports(
-    spark: SparkSession,
-    outputRoot: String,
-    resultsDf: DataFrame,
-    errorsDf: DataFrame,
-    outputFormats: Seq[String],
-    beforePromote: () => Unit
-  ): Unit = {
-    val root = outputRoot.stripSuffix("/")
+    val root = request.outputRoot.stripSuffix("/")
     val conf = spark.sparkContext.hadoopConfiguration
-    val normalizedOutputFormats = OutputFormats.requireSupported(outputFormats)
+    val normalizedOutputFormats = OutputFormats.requireSupported(request.outputFormats)
     DriverLogger.debug(
       "write_reports_materialize",
       "output_root" -> root,
       "output_formats" -> normalizedOutputFormats.mkString(",")
     )
-    val resultDf = resultsDf.coalesce(1)
-    val errorDf = errorsDf.coalesce(1)
+    val resultDf = request.resultsDf.coalesce(1)
+    val errorDf = request.errorsDf.coalesce(1)
     val selectedFinalPaths = normalizedOutputFormats.map(format => reportFormatPaths(root, format))
     val stagingBaseRoot = s"$root/$ReportStagingDirectoryName"
     val stagingRoot = s"$stagingBaseRoot/${UUID.randomUUID().toString}"
@@ -87,7 +49,7 @@ private[privyspark] object ReportWriter {
         }
       }
 
-      beforePromote()
+      request.beforePromote()
 
       stagedPaths.foreach { stagePaths =>
         val finalPaths = reportFormatPaths(root, stagePaths.format)
@@ -133,6 +95,25 @@ private[privyspark] object ReportWriter {
     )
 
     deleteStagingPath(conf, stagingBaseRoot)
+  }
+
+  def writeReports(
+    spark: SparkSession,
+    outputRoot: String,
+    results: Seq[ScanResult],
+    errors: Seq[ScanError],
+    outputFormats: Seq[String] = OutputFormats.Default
+  ): Unit = {
+    import spark.implicits._
+    writeReports(
+      spark,
+      WriteReportsRequest(
+        outputRoot,
+        spark.createDataset(results).toDF(),
+        spark.createDataset(errors).toDF(),
+        outputFormats
+      )
+    )
   }
 
   private def writeExcelReport(df: DataFrame, path: String, sheetName: String): Unit = {

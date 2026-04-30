@@ -11,7 +11,7 @@ import java.nio.file.Files
 
 @RunWith(classOf[JUnitRunner])
 class ReportWriterSpec extends AnyFunSuite with PrivySparkSpecFixtures {
-  test("writeReports default overload promotes parquet reports") {
+  test("writeReports compatibility overload promotes parquet reports by default") {
     val outputDir = Files.createTempDirectory("privyspark-report-default-")
 
     try {
@@ -32,7 +32,7 @@ class ReportWriterSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("writeReports format overload promotes selected csv and excel reports") {
+  test("writeReports compatibility overload promotes selected csv and excel reports") {
     val outputDir = Files.createTempDirectory("privyspark-report-formats-")
 
     try {
@@ -65,20 +65,24 @@ class ReportWriterSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("writeReports sequence guard overload restores previous outputs when promotion fails") {
+  test("writeReports request restores previous outputs when promotion fails") {
     val outputDir = Files.createTempDirectory("privyspark-report-seq-rollback-")
 
     try {
       ReportWriter.writeReports(spark, outputDir.toString, Seq(scanResult("part-0001.csv")), Seq.empty[ScanError])
 
+      val (replacementResultsDf, replacementErrorsDf) =
+        reportDataFrames(Seq(scanResult("replacement.csv")), Seq.empty[ScanError])
       val error = intercept[RuntimeException] {
         ReportWriter.writeReports(
           spark,
-          outputDir.toString,
-          Seq(scanResult("replacement.csv")),
-          Seq.empty[ScanError],
-          Seq("csv"),
-          () => throw new RuntimeException("promote guard failed")
+          WriteReportsRequest(
+            outputDir.toString,
+            replacementResultsDf,
+            replacementErrorsDf,
+            Seq("csv"),
+            () => throw new RuntimeException("promote guard failed")
+          )
         )
       }
 
@@ -91,18 +95,19 @@ class ReportWriterSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("writeReports dataframe overload promotes and rolls back with the same staging contract") {
+  test("writeReports request promotes dataframes and rolls back with the same staging contract") {
     val outputDir = Files.createTempDirectory("privyspark-report-df-")
 
     try {
       val (initialResultsDf, emptyErrorsDf) = reportDataFrames(Seq(scanResult("part-0001.csv")), Seq.empty[ScanError])
       ReportWriter.writeReports(
         spark,
-        outputDir.toString,
-        initialResultsDf,
-        emptyErrorsDf,
-        Seq("parquet"),
-        () => ()
+        WriteReportsRequest(
+          outputDir.toString,
+          initialResultsDf,
+          emptyErrorsDf,
+          Seq("parquet")
+        )
       )
 
       val (replacementResultsDf, replacementErrorsDf) =
@@ -110,11 +115,13 @@ class ReportWriterSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val error = intercept[RuntimeException] {
         ReportWriter.writeReports(
           spark,
-          outputDir.toString,
-          replacementResultsDf,
-          replacementErrorsDf,
-          Seq("csv"),
-          () => throw new RuntimeException("dataframe promote guard failed")
+          WriteReportsRequest(
+            outputDir.toString,
+            replacementResultsDf,
+            replacementErrorsDf,
+            Seq("csv"),
+            () => throw new RuntimeException("dataframe promote guard failed")
+          )
         )
       }
 

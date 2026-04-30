@@ -29,7 +29,8 @@
 - `hive/HiveTableFqnResolver.scala`: scan result `hive_table_fqn` 단일 해석 helper L5.
 - `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L29, public `write` overloads L34-L68, `writeFindings` L84, JSON/sample rendering L885.
 - `detect/DetectionAggregator.scala`: public `aggregate` L80, `aggregateByFile` L89, sample collection L124, metric planning L145.
-- `report/ReportWriter.scala`: public `writeReports` overloads L17-L51, format writer L147.
+- `report/WriteReportsRequest.scala`: report write request ADT L5.
+- `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.
 - `model/Models.scala`: `PiiRule` L14, `ScanResult` L32, `ScanError` L55.
 - `model/ScanPlanModels.scala`: `ScanFileEntry` L20, `ScanGroup` L32, `DirectoryScanPlan` L49, `PreScanFileOutcome` L74, `ReportFormatPaths` L107.
 

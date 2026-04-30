@@ -6,7 +6,7 @@ import io.github.jonggeun2001.privyspark.format.{CsvHeaderHeuristic, CsvInferenc
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CsvDialect, DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult, Suppression}
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
-import io.github.jonggeun2001.privyspark.report.ReportWriter
+import io.github.jonggeun2001.privyspark.report.{ReportWriter, WriteReportsRequest}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanCoordinator, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
@@ -29,6 +29,25 @@ import scala.concurrent.{Await, Future}
 
 @RunWith(classOf[JUnitRunner])
 class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
+  private def writeReportsRequest(
+    outputRoot: String,
+    results: Seq[ScanResult],
+    errors: Seq[ScanError],
+    outputFormats: Seq[String],
+    beforePromote: () => Unit
+  ): Unit = {
+    import spark.implicits._
+    ReportWriter.writeReports(
+      spark,
+      WriteReportsRequest(
+        outputRoot,
+        spark.createDataset(results).toDF(),
+        spark.createDataset(errors).toDF(),
+        outputFormats,
+        beforePromote
+      )
+    )
+  }
 
   test("executeInParallel preserves task order while allowing concurrent execution") {
     val currentRunning = new AtomicInteger(0)
@@ -4820,8 +4839,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       ReportWriter.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
 
       val error = intercept[RuntimeException] {
-        ReportWriter.writeReports(
-          spark,
+        writeReportsRequest(
           outputDir.toString,
           replacementResults,
           Seq.empty,
@@ -4864,8 +4882,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       ReportWriter.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
 
       val error = intercept[IllegalStateException] {
-        ReportWriter.writeReports(
-          spark,
+        writeReportsRequest(
           outputDir.toString,
           initialResults,
           Seq.empty,
@@ -4914,8 +4931,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       ReportWriter.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
 
       intercept[IllegalStateException] {
-        ReportWriter.writeReports(
-          spark,
+        writeReportsRequest(
           outputDir.toString,
           initialResults,
           Seq.empty,
@@ -4928,8 +4944,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       }
 
       intercept[RuntimeException] {
-        ReportWriter.writeReports(
-          spark,
+        writeReportsRequest(
           outputDir.toString,
           initialResults,
           Seq.empty,
