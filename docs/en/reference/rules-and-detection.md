@@ -25,7 +25,7 @@ Rulesets are validated before scanning so long-running jobs do not fail late bec
 - Each rule must include `pii_type` and `regex`.
 - `column_hints` is optional and limits the rule to matching column names.
 - `match_type` is optional and defaults to `value`.
-- Top-level `suppressions` is optional and removes specific `(column, pii_type)` result pairs.
+- Top-level `suppressions` is optional and removes specific `(column, pii_type)` result pairs. Each entry may use one `column` or multiple `columns`.
 - Supported `match_type` values are `value` and `full_column`.
 
 ## Suppressing False Positives
@@ -39,11 +39,13 @@ rules:
     regex: '...'
 
 suppressions:
-  - column: prdctcd
+  - columns: [tr_dt, trade_time]
     pii_type: driver_license_number
   - column: PRDCTCD
     pii_type: phone_number
 ```
+
+`column` also accepts a YAML array, but `columns` is preferred when one suppression entry expands to multiple columns.
 
 ### CLI Overrides
 - `--suppress <column:pii_type>` is repeatable.
@@ -67,6 +69,7 @@ bin/privyspark-submit \
 ### Matching Semantics
 - Column names are trimmed, lowercased, and matched by exact equality.
 - `pii_type` is trimmed and matched by exact equality.
+- Ruleset YAML `column`/`columns` arrays are expanded into one `(column, pii_type)` suppression per column.
 - Suppression happens before metric planning, so suppressed pairs never produce `match_count`, ratios, confidence, or sample values.
 - Other `pii_type` matches on the same column still remain visible.
 
