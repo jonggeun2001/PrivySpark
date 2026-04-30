@@ -214,6 +214,15 @@
         pad(date.getMinutes()) +
         pad(date.getSeconds());
     }
+    function formatResponseScanPath(scanPath) {
+      const safePath = String(scanPath || 'scan')
+        .trim()
+        .replace(/[\\/:*?"<>|]+/g, '-')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      return safePath || 'scan';
+    }
     const FormFieldDefaults = {
       decision: '',
       false_positive_reason: '',
@@ -756,7 +765,7 @@
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `response-${formatResponseTimestamp(new Date())}.json`;
+      link.download = `response-${formatResponseScanPath(REVIEW_DATA.scan_path)}-${formatResponseTimestamp(new Date())}.json`;
       link.click();
       URL.revokeObjectURL(url);
     });
