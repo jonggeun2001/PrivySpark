@@ -71,7 +71,7 @@
 
 ```mermaid
 flowchart LR
-  cli[cli] --> app[PrivySparkApp]
+  app[PrivySparkApp] --> cli[cli]
   app --> config[config]
   app --> scan[scan]
   app --> report[report]
