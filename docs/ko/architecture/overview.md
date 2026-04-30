@@ -66,3 +66,52 @@
 - 종료 훅 대신 다음 실행 cleanup을 택한 이유는 YARN 강제 종료나 `kill -9` 상황에서 훅 신뢰도가 낮기 때문입니다.
 - `_progress-preparing.json`을 active marker보다 먼저 두는 이유는 startup race에서 서로의 fresh root를 지우지 않게 하기 위해서입니다.
 - unreadable `active-run.json`을 owner run이 `meta/run.json`으로 self-heal하는 이유는 marker 손상이 live run을 불필요하게 실패시키지 않게 하기 위해서입니다.
+
+## 컴포넌트 의존성
+
+```mermaid
+flowchart LR
+  cli[cli] --> app[PrivySparkApp]
+  app --> config[config]
+  app --> scan[scan]
+  app --> report[report]
+  app --> review[review]
+  app --> progress[progress]
+  scan --> format[format]
+  scan --> config
+  scan --> hive[hive]
+  scan --> detect[detect]
+  scan --> fsio[fsio]
+  scan --> progress
+  scan --> model[model]
+  detect --> model
+  report --> model
+  review --> model
+  progress --> fsio
+  scan --> util[util]
+  app --> util
+```
+
+```mermaid
+sequenceDiagram
+  participant Cli
+  participant Spark
+  participant DirectoryScanner
+  participant ProgressIO
+  participant GroupScanCoordinator
+  participant DetectionAggregator
+  participant ReportWriter
+  participant ReviewHtmlWriter
+
+  Cli->>Spark: SparkSession 생성
+  Cli->>DirectoryScanner: scanDirectoryStructure(...)
+  DirectoryScanner->>ProgressIO: preparing/active run marker 기록
+  DirectoryScanner->>GroupScanCoordinator: scanGroups(...)
+  GroupScanCoordinator->>DetectionAggregator: aggregate / aggregateByFile
+  DetectionAggregator-->>GroupScanCoordinator: ScanResult 집계
+  GroupScanCoordinator-->>DirectoryScanner: results/errors
+  DirectoryScanner->>ProgressIO: progress merge 및 completion 기록
+  DirectoryScanner-->>Cli: DirectoryScanPlan
+  Cli->>ReportWriter: writeReports(...)
+  Cli->>ReviewHtmlWriter: write(...)
+```

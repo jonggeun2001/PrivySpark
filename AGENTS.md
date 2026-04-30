@@ -3,14 +3,24 @@
 ## 프로젝트 구조 및 모듈 구성
 - `src/main/scala/io/github/jonggeun2001/privyspark`: 앱 코드
   - `PrivySparkApp.scala`: 엔트리포인트
-  - `cli/`, `scan/`, `format/`, `detect/`, `report/`, `fsio/`, `util/`: 역할별 서브패키지
+  - `cli/`, `config/`, `detect/`, `format/`, `fsio/`, `hive/`, `model/`, `progress/`, `report/`, `review/`, `scan/`, `util/`: 역할별 서브패키지
   - `config/RulesetLoader.scala`: 외부 규칙셋 로더
-  - `model/Models.scala`: 리포트/규칙 데이터 모델
+  - `model/Models.scala`, `model/ScanPlanModels.scala`: 리포트/규칙/스캔 계획 데이터 모델
 - `src/test/scala/io/github/jonggeun2001/privyspark`: 단위 테스트
 - `config/rules/default.yaml`: 기본 정규식 규칙셋
 - `bin/privyspark-submit`: YARN cluster 제출 스크립트
-- `docs/PRD-Functional.md`: 기능 요구사항
-- `docs/PRD-Architecture.md`: 아키텍처 요구사항
+- `docs/ko/getting-started/`: 기능 사용 흐름과 빠른 시작
+- `docs/ko/architecture/overview.md`: 아키텍처 요구사항과 처리 흐름
+
+## 코드 맵
+- 작업 시작 전 `docs/dev/CODE_MAP.md`를 먼저 읽어 패키지 책임과 호출 흐름을 확인합니다.
+- 코드 맵은 에이전트가 빠르게 진입할 수 있도록 핵심 파일 라인 포인터를 유지합니다.
+- 새 패키지나 대형 파일 분할이 생기면 코드 맵의 패키지 요약과 호출 트레이스를 함께 갱신합니다.
+- `PrivySparkApp`, `DirectoryScanner`, `GroupScanCoordinator`, `ReviewHtmlWriter`, `DetectionAggregator` 변경 시 라인 포인터가 stale하지 않은지 확인합니다.
+- 스캔 계획/결과 ADT 변경 시 `model/Models.scala`, `model/ScanPlanModels.scala` 위치 인덱스를 갱신합니다.
+- 문서 경로를 옮기면 `AGENTS.md`와 코드 맵 링크를 함께 수정합니다.
+- 앱 버전 표기는 `build.gradle.kts:12`를 진실 소스로 삼고, 문서 본문에 고정 버전을 중복 기재하지 않습니다.
+- 코드 맵은 동작 계약 문서가 아니라 탐색 인덱스입니다. 동작 변경은 운영/레퍼런스 문서에 반영합니다.
 
 ## 빌드, 테스트, 개발 명령어
 - `./gradlew clean shadowJar`: Shadow fat JAR 생성(`build/libs/*-all.jar`)
@@ -48,7 +58,7 @@
   - 변경 목적과 범위
   - CLI/출력 스키마 영향
   - 테스트 결과(`./gradlew test`) 또는 미실행 사유
-  - 요구사항 변경 시 `README.md`, `docs/PRD-Functional.md`, `docs/PRD-Architecture.md` 동시 반영
+  - 요구사항 변경 시 `README.md`, `docs/ko/getting-started/`, `docs/ko/architecture/overview.md` 등 영향 문서 동시 반영
 
 ## Release 운영
 - 워크플로우: `.github/workflows/release-artifact.yml`
