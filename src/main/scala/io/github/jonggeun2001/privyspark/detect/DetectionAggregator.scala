@@ -77,22 +77,10 @@ object DetectionAggregator {
     )
   }
 
-  def aggregate(sampledDf: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
-    aggregate(sampledDf, rules, SuppressionSet.empty, AggregationConfig())
-  }
-
-  private[privyspark] def aggregate(
+  def aggregate(
     sampledDf: DataFrame,
     rules: Seq[PiiRule],
-    config: AggregationConfig
-  ): Seq[MatchCount] = {
-    aggregate(sampledDf, rules, SuppressionSet.empty, config)
-  }
-
-  private[privyspark] def aggregate(
-    sampledDf: DataFrame,
-    rules: Seq[PiiRule],
-    suppressions: SuppressionSet,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     config: AggregationConfig = AggregationConfig()
   ): Seq[MatchCount] = {
     DetectionAggregationApi.aggregate(sampledDf, rules, suppressions, config)
@@ -101,25 +89,8 @@ object DetectionAggregator {
   def aggregateByFile(
     sampledDf: DataFrame,
     fileIdentifierColumn: String,
-    rules: Seq[PiiRule]
-  ): Seq[FileMatchCount] = {
-    aggregateByFile(sampledDf, fileIdentifierColumn, rules, SuppressionSet.empty, AggregationConfig())
-  }
-
-  private[privyspark] def aggregateByFile(
-    sampledDf: DataFrame,
-    fileIdentifierColumn: String,
     rules: Seq[PiiRule],
-    config: AggregationConfig
-  ): Seq[FileMatchCount] = {
-    aggregateByFile(sampledDf, fileIdentifierColumn, rules, SuppressionSet.empty, config)
-  }
-
-  private[privyspark] def aggregateByFile(
-    sampledDf: DataFrame,
-    fileIdentifierColumn: String,
-    rules: Seq[PiiRule],
-    suppressions: SuppressionSet,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     config: AggregationConfig = AggregationConfig()
   ): Seq[FileMatchCount] = {
     DetectionAggregationApi.aggregateByFile(sampledDf, fileIdentifierColumn, rules, suppressions, config)
@@ -127,15 +98,8 @@ object DetectionAggregator {
 
   def countNonEmpty(
     sampledDf: DataFrame,
-    columns: Seq[String]
-  ): Map[String, Long] = {
-    countNonEmpty(sampledDf, columns, AggregationConfig())
-  }
-
-  private[privyspark] def countNonEmpty(
-    sampledDf: DataFrame,
     columns: Seq[String],
-    config: AggregationConfig
+    config: AggregationConfig = AggregationConfig()
   ): Map[String, Long] = {
     DetectionCounts.countNonEmpty(sampledDf, columns, config)
   }
@@ -143,31 +107,16 @@ object DetectionAggregator {
   def countNonEmptyByFile(
     sampledDf: DataFrame,
     fileIdentifierColumn: String,
-    columns: Seq[String]
-  ): Map[(String, String), Long] = {
-    countNonEmptyByFile(sampledDf, fileIdentifierColumn, columns, AggregationConfig())
-  }
-
-  private[privyspark] def countNonEmptyByFile(
-    sampledDf: DataFrame,
-    fileIdentifierColumn: String,
     columns: Seq[String],
-    config: AggregationConfig
+    config: AggregationConfig = AggregationConfig()
   ): Map[(String, String), Long] = {
     DetectionCounts.countNonEmptyByFile(sampledDf, fileIdentifierColumn, columns, config)
   }
 
   private[privyspark] def columnsCoveredByRules(
     columns: Seq[String],
-    rules: Seq[PiiRule]
-  ): Seq[String] = {
-    columnsCoveredByRules(columns, rules, SuppressionSet.empty)
-  }
-
-  private[privyspark] def columnsCoveredByRules(
-    columns: Seq[String],
     rules: Seq[PiiRule],
-    suppressions: SuppressionSet
+    suppressions: SuppressionSet = SuppressionSet.empty
   ): Seq[String] = {
     DetectionCounts.columnsCoveredByRules(columns, rules, suppressions)
   }
@@ -175,25 +124,8 @@ object DetectionAggregator {
   def sampleMatches(
     sampledDf: DataFrame,
     rules: Seq[PiiRule],
-    matchCounts: Seq[MatchCount]
-  ): Map[String, SampleValue] = {
-    sampleMatches(sampledDf, rules, matchCounts, SuppressionSet.empty, AggregationConfig())
-  }
-
-  private[privyspark] def sampleMatches(
-    sampledDf: DataFrame,
-    rules: Seq[PiiRule],
     matchCounts: Seq[MatchCount],
-    config: AggregationConfig
-  ): Map[String, SampleValue] = {
-    sampleMatches(sampledDf, rules, matchCounts, SuppressionSet.empty, config)
-  }
-
-  private[privyspark] def sampleMatches(
-    sampledDf: DataFrame,
-    rules: Seq[PiiRule],
-    matchCounts: Seq[MatchCount],
-    suppressions: SuppressionSet,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     config: AggregationConfig = AggregationConfig()
   ): Map[String, SampleValue] = {
     DetectionAggregationApi.sampleMatches(sampledDf, rules, matchCounts, suppressions, config)
@@ -203,27 +135,8 @@ object DetectionAggregator {
     sampledDf: DataFrame,
     fileIdentifierColumn: String,
     rules: Seq[PiiRule],
-    matchCounts: Seq[FileMatchCount]
-  ): Map[(String, String), SampleValue] = {
-    sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, SuppressionSet.empty, AggregationConfig())
-  }
-
-  private[privyspark] def sampleMatchesByFile(
-    sampledDf: DataFrame,
-    fileIdentifierColumn: String,
-    rules: Seq[PiiRule],
     matchCounts: Seq[FileMatchCount],
-    config: AggregationConfig
-  ): Map[(String, String), SampleValue] = {
-    sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, SuppressionSet.empty, config)
-  }
-
-  private[privyspark] def sampleMatchesByFile(
-    sampledDf: DataFrame,
-    fileIdentifierColumn: String,
-    rules: Seq[PiiRule],
-    matchCounts: Seq[FileMatchCount],
-    suppressions: SuppressionSet,
+    suppressions: SuppressionSet = SuppressionSet.empty,
     config: AggregationConfig = AggregationConfig()
   ): Map[(String, String), SampleValue] = {
     DetectionAggregationApi.sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, suppressions, config)
