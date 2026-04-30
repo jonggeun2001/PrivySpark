@@ -1,4 +1,4 @@
-package io.github.jonggeun2001.privyspark.scan
+package io.github.jonggeun2001.privyspark.scan.archive
 
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.canonicalizePath
 import org.apache.hadoop.fs.Path

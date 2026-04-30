@@ -14,13 +14,16 @@
 - `progress/`: run marker, progress JSONL, in-flight marker, stale run cleanup.
 - `report/`: scan result/error를 parquet/csv/excel 산출물로 저장.
 - `review/`: offline review HTML, response collect/apply, allowlist/action plan state.
-- `scan/`: directory discovery, source expansion, grouping, batch/file scan orchestration, archive expansion.
+- `scan/`: directory discovery, source expansion, grouping, batch/file scan orchestration.
+- `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
 - `util/`: driver logging, parallelism 설정, path identifier 정규화.
 
 ## 핵심 파일 포인터
 
 - `PrivySparkApp.scala`: `main` L36, `runMain` L40, `runScan` L161.
 - `scan/DirectoryScanner.scala`: `discoverPhysicalFiles` L55, `scanDirectoryStructure` L108, schema split fast path L501.
+- `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
+- `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
 - `scan/GroupScanCoordinator.scala`: `scanGroups` L17, sampled/file fallback L173, batch fallback policy L246.
 - `hive/HiveTableFqnResolver.scala`: scan result `hive_table_fqn` 단일 해석 helper L5.
 - `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L29, public `write` overloads L34-L68, `writeFindings` L84, JSON/sample rendering L885.

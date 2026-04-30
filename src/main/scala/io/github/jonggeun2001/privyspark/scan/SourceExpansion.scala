@@ -1,6 +1,7 @@
 package io.github.jonggeun2001.privyspark.scan
 
-import io.github.jonggeun2001.privyspark.scan.ArchiveStaging._
+import io.github.jonggeun2001.privyspark.scan.archive.ArchiveExpanders
+import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging._
 import io.github.jonggeun2001.privyspark.format.ByteProbe._
 import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
