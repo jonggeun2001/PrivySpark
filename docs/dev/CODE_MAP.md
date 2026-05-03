@@ -14,6 +14,7 @@
 - `progress/`: run marker, progress JSONL, in-flight marker, stale run cleanup.
 - `report/`: scan result/error를 parquet/csv/excel 산출물로 저장.
 - `review/`: offline review HTML, response collect/apply, allowlist/action plan state.
+- `review/fingerprint/`: review apply fingerprint resolution for flat files, workbook sheets, archive entries, CRC32 streams.
 - `scan/`: directory scan orchestration, source expansion, grouping, file sampling, batch/file scan orchestration.
 - `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
 - `scan/discovery/`: physical file discovery, pre-scan expansion, schema split/finalization helpers.
@@ -31,6 +32,11 @@
 - `scan/GroupScanCoordinator.scala`: `scanGroups` L17, sampled/file fallback L173, batch fallback policy L246.
 - `scan/FileSampling.scala`: deterministic file sampling L6.
 - `hive/HiveTableFqnResolver.scala`: scan result `hive_table_fqn` 단일 해석 helper L5.
+- `review/FileIdentifierResolver.scala`: fingerprint resolver dispatch L14.
+- `review/fingerprint/PathFingerprintResolver.scala`: flat file/directory fingerprint resolution L11, input path resolution L31.
+- `review/fingerprint/WorkbookFingerprintResolver.scala`: workbook identifier parsing L11, sheet fingerprint resolution L33.
+- `review/fingerprint/ArchiveFingerprintResolver.scala`: archive identifier parsing L21, archive format dispatch L30.
+- `review/fingerprint/Crc32Stream.scala`: CRC32 stream calculation L16, temporary local archive helper L54.
 - `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L29, public `write` overloads L34-L68, `writeFindings` L84, JSON/sample rendering L885.
 - `detect/DetectionAggregator.scala`: public `aggregate` L80, `aggregateByFile` L89, sample collection L124, metric planning L145.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
