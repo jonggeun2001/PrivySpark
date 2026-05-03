@@ -29,10 +29,6 @@ import scala.util.control.NonFatal
 object PrivySparkApp {
   private[privyspark] final case class ParsedSuppression(suppression: Suppression, source: String)
 
-  private[privyspark] def resetDebugCache(): Unit = {
-    DriverLogger.resetCache()
-  }
-
   def main(args: Array[String]): Unit = {
     runMain(args)
   }

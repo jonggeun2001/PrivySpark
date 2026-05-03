@@ -22,7 +22,7 @@
 
 ## 핵심 파일 포인터
 
-- `PrivySparkApp.scala`: `main` L36, `runMain` L40, `runScan` L161.
+- `PrivySparkApp.scala`: `main` L32, `runMain` L36, `runScan` L157.
 - `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L22, pre-scan collect/group build L132, schema split/finalization delegate L210.
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
@@ -38,7 +38,7 @@
 - `review/fingerprint/ArchiveFingerprintResolver.scala`: archive identifier parsing L21, archive format dispatch L30.
 - `review/fingerprint/Crc32Stream.scala`: CRC32 stream calculation L16, temporary local archive helper L54.
 - `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L29, public `write` overloads L34-L68, `writeFindings` L84, JSON/sample rendering L885.
-- `detect/DetectionAggregator.scala`: public `aggregate` L80, `aggregateByFile` L89, sample collection L124, metric planning L145.
+- `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, metric planning L117.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.
 - `model/Models.scala`: `PiiRule` L14, `ScanResult` L32, `ScanError` L55.

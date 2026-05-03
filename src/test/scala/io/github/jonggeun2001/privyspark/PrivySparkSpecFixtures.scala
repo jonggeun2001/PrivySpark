@@ -102,7 +102,6 @@ trait PrivySparkSpecFixtures extends BeforeAndAfterAll { this: Suite =>
 
   protected def withDriverLogLevel[A](level: String)(block: => A): A = {
     val previous = sys.props.get("privyspark.debug")
-    PrivySparkApp.resetDebugCache()
     DriverLogger.resetCache()
     System.setProperty("privyspark.debug", level)
     try {
@@ -112,7 +111,6 @@ trait PrivySparkSpecFixtures extends BeforeAndAfterAll { this: Suite =>
         case Some(value) => System.setProperty("privyspark.debug", value)
         case None => System.clearProperty("privyspark.debug")
       }
-      PrivySparkApp.resetDebugCache()
       DriverLogger.resetCache()
     }
   }

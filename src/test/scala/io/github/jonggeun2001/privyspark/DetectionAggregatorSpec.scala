@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator.{AggregationConfig, FileMatchCount}
+import io.github.jonggeun2001.privyspark.detect.testing.DetectionFaultInjectors
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType, Suppression}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
@@ -111,7 +112,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val logs = captureStderr {
-      val actual = DetectionAggregator.withForcedDatasetBatchFailure {
+      val actual = DetectionFaultInjectors.withForcedDatasetBatchFailure {
         DetectionAggregator.aggregate(
           df,
           rules,
@@ -493,7 +494,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val logs = captureStderr {
-      val actual = DetectionAggregator.withForcedFileBatchFailure {
+      val actual = DetectionFaultInjectors.withForcedFileBatchFailure {
         DetectionAggregator.aggregateByFile(
           df,
           "file_id",
@@ -677,7 +678,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules)
     val logs = captureStderr {
-      val samples = DetectionAggregator.withForcedFileSampleBatchFailure {
+      val samples = DetectionFaultInjectors.withForcedFileSampleBatchFailure {
         DetectionAggregator.sampleMatchesByFile(
           df,
           "file_id",
@@ -978,7 +979,6 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def withDriverLogLevel[A](level: String)(block: => A): A = {
     val previous = sys.props.get("privyspark.debug")
-    DetectionAggregator.resetDebugCache()
     DriverLogger.resetCache()
     System.setProperty("privyspark.debug", level)
     try {
@@ -988,7 +988,6 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
         case Some(value) => System.setProperty("privyspark.debug", value)
         case None => System.clearProperty("privyspark.debug")
       }
-      DetectionAggregator.resetDebugCache()
       DriverLogger.resetCache()
     }
   }
