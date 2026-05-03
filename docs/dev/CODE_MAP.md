@@ -38,12 +38,16 @@
 - `review/fingerprint/WorkbookFingerprintResolver.scala`: workbook identifier parsing L11, sheet fingerprint resolution L33.
 - `review/fingerprint/ArchiveFingerprintResolver.scala`: archive identifier parsing L21, archive format dispatch L30.
 - `review/fingerprint/Crc32Stream.scala`: CRC32 stream calculation L16, temporary local archive helper L54.
-- `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L29, public `write` overloads L34-L68, `writeFindings` L84, JSON/sample rendering L885.
 - `review/ReviewCollectCommand.scala`: collect ADT L12-L65, `run` orchestration L68.
 - `review/collect/ResponseEnvelopeReader.scala`: inbox JSON read L13, response envelope parse L30.
 - `review/collect/ResponseValidator.scala`: envelope validation L9, response item validation L23.
 - `review/collect/ReviewStateBuilder.scala`: current state build L23, recurring/action-plan retention helpers L85.
 - `review/collect/ReviewStateWriter.scala`: action plan load L20, state write L47, atomic replace L60.
+- `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L16, public `write` overloads L21-L68, `writeFindings` L71.
+- `review/ReviewHtmlRenderer.scala`: resource template/script loading L14-L15, `render` L17.
+- `review/ReviewSampleMasker.scala`: finding JSON rendering L6, sample masking L17.
+- `src/main/resources/review/review.html.template`: offline review HTML/CSS shell and `${REVIEW_DATA_JSON}` placeholder.
+- `src/main/resources/review/review.js`: offline review browser state, sorting, validation, and response download logic.
 - `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, metric planning L117.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.

@@ -11,6 +11,21 @@ import java.nio.file.Files
 
 @RunWith(classOf[JUnitRunner])
 class ReviewHtmlWriterSpec extends AnyFunSuite {
+  test("renderer preserves placeholder-looking text inside review data JSON") {
+    val scanPath = "/data/${REVIEW_APP_SCRIPT}/project"
+
+    val html = ReviewHtmlRenderer.render(
+      scanPath,
+      scanResultsFingerprint = "fp-1",
+      findings = Seq.empty,
+      sampleMode = "masked"
+    )
+
+    assert(html.contains(""""scan_path":"/data/${REVIEW_APP_SCRIPT}/project""""))
+    assert(html.contains("document.getElementById('scanPath').textContent = REVIEW_DATA.scan_path;"))
+    assert(!html.contains(""""scan_path":"/data/    document.getElementById"""))
+  }
+
   test("write creates only review.html under the scan output review directory and includes masked samples") {
     val outputRoot = Files.createTempDirectory("privyspark-review-html-")
     val result = ScanResult(
