@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.PrivySparkSpecFixtures
-import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
+import io.github.jonggeun2001.privyspark.detect.testing.DetectionFaultInjectors
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanGroup}
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
@@ -52,7 +52,7 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val right = writeCustomerCsv(groupedDir, "part-b.csv", "bob", "bob@example.com")
       val group = exactCsvGroup(groupedDir, left, right)
 
-      val (results, errors) = DetectionAggregator.withForcedFileBatchFailure {
+      val (results, errors) = DetectionFaultInjectors.withForcedFileBatchFailure {
         GroupScanCoordinator.scanGroup(
           spark,
           inputDir.toString,

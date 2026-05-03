@@ -26,43 +26,15 @@ object DetectionAggregator {
   private[detect] final case class ExtractedMatch(fragment: String, start: Int, end: Int)
   private[detect] val LegacyFallbackBatchSize = 50
   private[detect] val SafeSampleFallbackBatchSize = 32
-  @volatile private[detect] var forceDatasetBatchFailure = false
-  @volatile private[detect] var forceFileBatchFailure = false
-  @volatile private[detect] var forceFileSampleBatchFailure = false
 
-  private[privyspark] def resetDebugCache(): Unit = {
-    DriverLogger.resetCache()
+  private[detect] trait FaultInjector {
+    def beforeDatasetBatchAggregation(): Unit = ()
+    def beforeFileBatchAggregation(): Unit = ()
+    def beforeFileSampleCollection(): Unit = ()
   }
 
-  private[privyspark] def withForcedDatasetBatchFailure[A](block: => A): A = {
-    val previous = forceDatasetBatchFailure
-    forceDatasetBatchFailure = true
-    try {
-      block
-    } finally {
-      forceDatasetBatchFailure = previous
-    }
-  }
-
-  private[privyspark] def withForcedFileBatchFailure[A](block: => A): A = {
-    val previous = forceFileBatchFailure
-    forceFileBatchFailure = true
-    try {
-      block
-    } finally {
-      forceFileBatchFailure = previous
-    }
-  }
-
-  private[privyspark] def withForcedFileSampleBatchFailure[A](block: => A): A = {
-    val previous = forceFileSampleBatchFailure
-    forceFileSampleBatchFailure = true
-    try {
-      block
-    } finally {
-      forceFileSampleBatchFailure = previous
-    }
-  }
+  private[detect] object NoFault extends FaultInjector
+  @volatile private[detect] var faultInjector: FaultInjector = NoFault
 
   private[detect] def logDebug(event: String, fields: (String, Any)*): Unit = {
     DriverLogger.debug(event, fields: _*)
