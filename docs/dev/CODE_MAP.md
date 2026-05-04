@@ -16,7 +16,7 @@
 - `review/`: offline review HTML, response collect/apply, allowlist/action plan state.
 - `review/fingerprint/`: review apply fingerprint resolution for flat files, workbook sheets, archive entries, CRC32 streams.
 - `review/collect/`: offline review response envelope read/validate/build/write helpers.
-- `scan/`: directory scan orchestration, source expansion, grouping, file sampling, batch/file scan orchestration.
+- `scan/`: directory scan orchestration, source expansion, grouping, group route/fallback policy, file sampling, batch/file scan orchestration.
 - `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
 - `scan/discovery/`: physical file discovery, pre-scan expansion, schema split/finalization helpers.
 - `util/`: driver logging, parallelism 설정, path identifier 정규화.
@@ -30,7 +30,9 @@
 - `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L12, `discover` L16.
 - `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L27, `runPreScan` L48.
 - `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L22, `splitGroupBySchemaFast` L112, `splitGroupBySchema` L229.
-- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, sampled/file fallback L173, batch fallback policy L246.
+- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L179, batch fallback invocation L249, compatibility delegates L260/L298.
+- `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.
+- `scan/GroupScanFallbackPolicy.scala`: batch failure fallback executor L7.
 - `scan/FileSampling.scala`: deterministic file sampling L6.
 - `hive/HiveTableFqnResolver.scala`: scan result `hive_table_fqn` 단일 해석 helper L5.
 - `review/FileIdentifierResolver.scala`: fingerprint resolver dispatch L14.
