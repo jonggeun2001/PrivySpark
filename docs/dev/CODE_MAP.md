@@ -15,6 +15,7 @@
 - `report/`: scan result/error를 parquet/csv/excel 산출물로 저장.
 - `review/`: offline review HTML, response collect/apply, allowlist/action plan state.
 - `review/fingerprint/`: review apply fingerprint resolution for flat files, workbook sheets, archive entries, CRC32 streams.
+- `review/collect/`: offline review response envelope read/validate/build/write helpers.
 - `scan/`: directory scan orchestration, source expansion, grouping, file sampling, batch/file scan orchestration.
 - `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
 - `scan/discovery/`: physical file discovery, pre-scan expansion, schema split/finalization helpers.
@@ -38,6 +39,11 @@
 - `review/fingerprint/ArchiveFingerprintResolver.scala`: archive identifier parsing L21, archive format dispatch L30.
 - `review/fingerprint/Crc32Stream.scala`: CRC32 stream calculation L16, temporary local archive helper L54.
 - `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L29, public `write` overloads L34-L68, `writeFindings` L84, JSON/sample rendering L885.
+- `review/ReviewCollectCommand.scala`: collect ADT L12-L65, `run` orchestration L68.
+- `review/collect/ResponseEnvelopeReader.scala`: inbox JSON read L13, response envelope parse L30.
+- `review/collect/ResponseValidator.scala`: envelope validation L9, response item validation L23.
+- `review/collect/ReviewStateBuilder.scala`: current state build L23, recurring/action-plan retention helpers L85.
+- `review/collect/ReviewStateWriter.scala`: action plan load L20, state write L47, atomic replace L60.
 - `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, metric planning L117.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.
