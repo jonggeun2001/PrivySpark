@@ -35,6 +35,15 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(workflow.contains("${{ steps.assets.outputs.asset_review_response_viewer }}"))
   }
 
+  test("review HTML renderer resources are available on the runtime classpath") {
+    Seq("review/review.html.template", "review/review.js").foreach { resourceName =>
+      assert(
+        Option(getClass.getClassLoader.getResource(resourceName)).nonEmpty,
+        s"$resourceName should be packaged with application resources"
+      )
+    }
+  }
+
   test("offline review response HTML example is self-contained and downloads response JSON") {
     val html = readText("samples/offline-review/review-response-example.html")
 
