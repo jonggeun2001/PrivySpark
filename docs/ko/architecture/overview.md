@@ -13,9 +13,10 @@
 - `util/DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
 - `detect/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
 - `hive/HiveTableLookup.scala`: Hive Metastore JDBC 조회, table `LOCATION` 정규화, longest-prefix lookup 인덱스, broadcast 생성
+- `scan/ScanPipeline.scala`: scan command orchestration, progress run, 최종 report merge, review HTML hook 연결
 - `scan/DirectoryScanner.scala`, `scan/GroupScanCoordinator.scala`: 입력 확장, 그룹화, 스캔 실행
 - `report/ReportWriter.scala`: 최종 리포트 저장과 포맷별 산출물 생성
-- `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, progress/최종 리포트 저장
+- `PrivySparkApp.scala`: CLI dispatch, SparkSession 생명주기, scan pipeline hook 주입
 - `Models.scala`: 결과/오류/규칙 모델
 
 ## 개발·검증 도구
@@ -72,15 +73,10 @@
 ```mermaid
 flowchart LR
   app[PrivySparkApp] --> cli[cli]
-  app --> config[config]
-  app --> format[format]
-  app --> fsio[fsio]
-  app --> hive[hive]
-  app --> model[model]
   app --> scan[scan]
   app --> review[review]
-  app --> progress[progress]
   app --> util[util]
+  scan --> cli
   scan --> format[format]
   scan --> config
   scan --> hive[hive]
@@ -102,6 +98,7 @@ sequenceDiagram
   participant PrivySparkApp
   participant CliParser as Cli
   participant Spark
+  participant ScanPipeline
   participant DirectoryScanner
   participant ProgressRunManager
   participant GroupScanCoordinator
@@ -112,18 +109,20 @@ sequenceDiagram
   PrivySparkApp->>CliParser: args 파싱
   CliParser-->>PrivySparkApp: Scan config
   PrivySparkApp->>Spark: SparkSession 생성
-  PrivySparkApp->>DirectoryScanner: scanDirectoryStructure(...)
-  DirectoryScanner-->>PrivySparkApp: DirectoryScanPlan 반환
-  PrivySparkApp->>ProgressRunManager: prepareProgressRun(...)
-  PrivySparkApp->>ProgressRunManager: startProgressHeartbeat(...)
-  PrivySparkApp->>GroupScanCoordinator: scanGroups(...)
+  PrivySparkApp->>ScanPipeline: run(spark, config, hooks)
+  ScanPipeline->>DirectoryScanner: scanDirectoryStructure(...)
+  DirectoryScanner-->>ScanPipeline: DirectoryScanPlan 반환
+  ScanPipeline->>ProgressRunManager: prepareProgressRun(...)
+  ScanPipeline->>ProgressRunManager: startProgressHeartbeat(...)
+  ScanPipeline->>GroupScanCoordinator: scanGroups(...)
   GroupScanCoordinator->>DetectionAggregator: aggregate / aggregateByFile
   DetectionAggregator-->>GroupScanCoordinator: ScanResult 집계
-  GroupScanCoordinator-->>PrivySparkApp: progress records 기록 후 group scan 완료
-  PrivySparkApp->>ProgressRunManager: mergeProgressReports(afterReportWrite)
+  GroupScanCoordinator-->>ScanPipeline: progress records 기록 후 group scan 완료
+  ScanPipeline->>ProgressRunManager: mergeProgressReports(afterReportWrite)
   ProgressRunManager->>ReportWriter: writeReports(...)
-  ProgressRunManager-->>PrivySparkApp: afterReportWrite(resultDf)
+  ProgressRunManager-->>ScanPipeline: afterReportWrite(resultDf)
   alt reviewStateRoot 설정 시
-    PrivySparkApp->>ReviewHtmlWriter: write(...)
+    ScanPipeline->>ReviewHtmlWriter: hooks.writeReviewHtml(...)
   end
+  ScanPipeline-->>PrivySparkApp: ScanSummary 반환
 ```

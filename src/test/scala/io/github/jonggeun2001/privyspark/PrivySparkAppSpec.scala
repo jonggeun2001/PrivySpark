@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, SuppressionSet}
+import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, SuppressionParser, SuppressionSet}
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.format.{CsvHeaderHeuristic, CsvInference}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
@@ -1509,7 +1509,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
           " customer_phone : phone_number \n" +
           "ns:email:email\n")
 
-      val parsed = PrivySparkApp.parseCliSuppressions(
+      val parsed = SuppressionParser.parseCliSuppressions(
         spark.sparkContext.hadoopConfiguration,
         Seq("foo:email", "profile:email:email"),
         Some(suppressionFile.toString)
@@ -1529,10 +1529,10 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
 
   test("warnUnknownSuppressions logs cli and file sources") {
     val logs = captureStderr {
-      PrivySparkApp.warnUnknownSuppressions(
+      SuppressionParser.warnUnknownSuppressions(
         Seq(
-          PrivySparkApp.ParsedSuppression(Suppression("prdctcd", "driver_licence_number"), "cli:1"),
-          PrivySparkApp.ParsedSuppression(Suppression("ns:email", "phonee"), "file:scan.suppressions:2")
+          SuppressionParser.ParsedSuppression(Suppression("prdctcd", "driver_licence_number"), "cli:1"),
+          SuppressionParser.ParsedSuppression(Suppression("ns:email", "phonee"), "file:scan.suppressions:2")
         ),
         Set("email", "phone_number")
       )

@@ -16,14 +16,17 @@
 - `review/`: offline review HTML, response collect/apply, allowlist/action plan state.
 - `review/fingerprint/`: review apply fingerprint resolution for flat files, workbook sheets, archive entries, CRC32 streams.
 - `review/collect/`: offline review response envelope read/validate/build/write helpers.
-- `scan/`: directory scan orchestration, source expansion, grouping, group route/fallback policy, file sampling, batch/file scan orchestration.
+- `scan/`: scan pipeline orchestration, directory scan, source expansion, grouping, group route/fallback policy, file sampling, batch/file scan orchestration.
 - `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
 - `scan/discovery/`: physical file discovery, pre-scan expansion, schema split/finalization helpers.
 - `util/`: driver logging, parallelism 설정, path identifier 정규화.
 
 ## 핵심 파일 포인터
 
-- `PrivySparkApp.scala`: `main` L32, `runMain` L36, `runScan` L157.
+- `PrivySparkApp.scala`: `main` L13, `runMain` L17, default scan dispatch L76, Excel compatibility warning L89.
+- `cli/CliArgumentValidator.scala`: command path validation L6, absolute path error logging L51.
+- `config/SuppressionParser.scala`: parsed suppression ADT L15, CLI/file suppression parsing L17/L25, unknown pii warning L35.
+- `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L41, report merge/review hook L204.
 - `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L22, pre-scan collect/group build L132, schema split/finalization delegate L210.
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
@@ -61,7 +64,7 @@
 ```text
 main
   -> runMain
-  -> runScan
+  -> ScanPipeline.run
   -> DirectoryScanner.scanDirectoryStructure
   -> ProgressRunManager.prepareProgressRun
   -> GroupScanCoordinator.scanGroups
