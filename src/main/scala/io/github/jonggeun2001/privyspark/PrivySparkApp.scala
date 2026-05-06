@@ -79,8 +79,8 @@ object PrivySparkApp {
       config,
       ScanPipeline.Hooks(
         warnUnusedExcelMaxRowsInMemory = warnUnusedExcelMaxRowsInMemory,
-        writeReviewHtml = (conf, outputPath, inputPath, resultDf, sampleMode, reviewHtmlDir) =>
-          ReviewHtmlWriter.write(conf, outputPath, inputPath, resultDf, sampleMode, reviewHtmlDir)
+        writeReviewHtml = (conf, outputPath, inputPath, resultDf, sampleMode, reviewHtmlDir, reviewStateRoot) =>
+          ReviewHtmlWriter.write(conf, outputPath, inputPath, resultDf, sampleMode, reviewHtmlDir, reviewStateRoot)
       )
     )
     println(summary.consoleLine)

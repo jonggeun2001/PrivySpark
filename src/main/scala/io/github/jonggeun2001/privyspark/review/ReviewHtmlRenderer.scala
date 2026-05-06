@@ -18,9 +18,12 @@ private[privyspark] object ReviewHtmlRenderer {
     scanPath: String,
     scanResultsFingerprint: String,
     findings: Seq[ReviewFinding],
-    sampleMode: String
+    sampleMode: String,
+    actionPlanStates: Map[String, ReviewActionPlanStatus] = Map.empty
   ): String = {
-    val findingJson = findings.map(ReviewSampleMasker.findingToJson(_, sampleMode)).mkString("[", ",", "]")
+    val findingJson = findings
+      .map(finding => ReviewSampleMasker.findingToJson(finding, sampleMode, actionPlanStates.get(finding.findingKey)))
+      .mkString("[", ",", "]")
     val reviewData =
       s"""{"schema_version":1,"scan_path":${jsonString(scanPath)},"scan_results_fingerprint":${jsonString(scanResultsFingerprint)},"findings":$findingJson}"""
     val safeReviewData = reviewData.replace("</", "<\\/")

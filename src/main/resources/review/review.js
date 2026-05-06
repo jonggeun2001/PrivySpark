@@ -147,6 +147,15 @@
       const rowValues = getFormState(index);
       return fields.map(field => rowValues[field] || '').join(' ');
     }
+    function existingActionSortText(finding) {
+      const state = finding.action_plan_state || {};
+      return [
+        state.status_label,
+        state.action_due_date,
+        state.action_plan,
+        state.responder
+      ].filter(Boolean).join(' ');
+    }
     function getSortValue(index) {
       const finding = REVIEW_DATA.findings[index];
       switch (sortState.key) {
@@ -168,6 +177,8 @@
           return sampleSortText(finding);
         case 'decision':
           return formSortText(index, ['decision']);
+        case 'existing_action_status':
+          return existingActionSortText(finding);
         case 'false_positive_reason':
         case 'action_plan':
         case 'action_due_date':
@@ -443,7 +454,7 @@
         finding.column_name,
         displayPiiType(finding.pii_type)
       ].filter(Boolean).join(' / ');
-      return `<td colspan="12" class="placeholder-cell"><span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">${escapeHtml(summary)}</span></td>`;
+      return `<td colspan="13" class="placeholder-cell"><span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">${escapeHtml(summary)}</span></td>`;
     }
     function renderSampleCell(finding) {
       const samples = finding.evidence_samples.map(sample =>
@@ -451,6 +462,18 @@
         escapeHtml(sample.sample_raw_value)
       ).join('\n---\n');
       return samples;
+    }
+    function renderExistingActionCell(finding) {
+      const state = finding.action_plan_state;
+      if (!state) {
+        return '<span class="existing-action-empty">-</span>';
+      }
+      const status = String(state.status || 'remediation_planned').replace(/[^a-z_]/g, '');
+      return `
+        <span class="action-status-badge action-status-${escapeHtml(status)}">${escapeHtml(state.status_label || '조치 필요')}</span>
+        <div class="existing-action-detail">계획: ${escapeHtml(state.action_plan || '-')}</div>
+        <div class="existing-action-detail">예정일: ${escapeHtml(state.action_due_date || '-')}</div>
+        <div class="existing-action-detail">응답자: ${escapeHtml(state.responder || '-')}</div>`;
     }
     function renderFindingCells(finding, index) {
       return `
@@ -468,6 +491,7 @@
             <button type="button" class="decision-button" data-index="${index}" data-decision-button="true_positive" aria-pressed="false">정탐</button>
           </div>
         </td>
+        <td class="existing-action-cell">${renderExistingActionCell(finding)}</td>
         <td class="reason-cell">
           <div class="decision-fields" data-decision-section="false_positive">
             <textarea data-index="${index}" data-field="false_positive_reason" aria-label="오탐 사유" placeholder="필수"></textarea>
