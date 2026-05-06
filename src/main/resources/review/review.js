@@ -300,6 +300,25 @@
       }
       applyValidationState(hydratedRows.get(numericIndex), numericIndex);
     }
+    const responderInput = document.getElementById('responder');
+    const responderField = document.getElementById('responderField');
+    const responderError = document.getElementById('responderError');
+    function clearResponderValidation() {
+      responderField.classList.remove('invalid-field');
+      responderInput.setAttribute('aria-invalid', 'false');
+      responderError.hidden = true;
+    }
+    function validateResponder() {
+      if (!isBlank(responderInput.value)) {
+        clearResponderValidation();
+        return true;
+      }
+      responderField.classList.add('invalid-field');
+      responderInput.setAttribute('aria-invalid', 'true');
+      responderError.hidden = false;
+      responderInput.focus();
+      return false;
+    }
     function validateResponses(responses) {
       const errors = [];
       responses.forEach((response, index) => {
@@ -626,6 +645,11 @@
     tbody.addEventListener('change', handleFormEvent);
     document.getElementById('applyBulkTruePositivePlan').addEventListener('click', applyBulkTruePositivePlan);
     document.getElementById('applyBulkFalsePositiveReason').addEventListener('click', applyBulkFalsePositiveReason);
+    responderInput.addEventListener('input', () => {
+      if (!isBlank(responderInput.value)) {
+        clearResponderValidation();
+      }
+    });
     renderFindings();
     document.getElementById('downloadResponse').addEventListener('click', () => {
       const values = collectFormValues();
@@ -646,18 +670,21 @@
         }, values[index] || {});
         return response;
       });
+      const responderIsValid = validateResponder();
       const responseValidationErrors = validateResponses(responses);
+      setValidationState(responseValidationErrors);
+      if (!responderIsValid) {
+        return;
+      }
       if (responseValidationErrors.length > 0) {
-        setValidationState(responseValidationErrors);
         focusFirstValidationError(firstValidationErrorInDisplayOrder(responseValidationErrors));
         return;
       }
-      setValidationState([]);
       const sanitizedResponses = responses.map(sanitizeResponse).filter(response => response.decision);
       const envelope = {
         schema_version: 1,
         scan_path: REVIEW_DATA.scan_path,
-        responder: document.getElementById('responder').value.trim(),
+        responder: responderInput.value.trim(),
         responded_at: new Date().toISOString(),
         responses: sanitizedResponses
       };

@@ -30,7 +30,10 @@
     .table-wrap { overflow: auto; max-height: 70vh; }
     .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .field { display: block; margin-bottom: 8px; }
-    .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
+    .field label > span { display: block; font-weight: 600; margin-bottom: 4px; }
+    .field-error { color: #a50e0e; display: block; font-size: 13px; margin-top: 4px; }
+    .invalid-field input { border-color: #d93025; }
+    .invalid-field input:focus { outline: 2px solid #d93025; outline-offset: 2px; }
     .decision-toggle { display: flex; gap: 6px; flex-wrap: wrap; }
     .decision-button { border: 1px solid #aeb6bf; background: #fff; border-radius: 4px; cursor: pointer; font-weight: 600; padding: 6px 10px; }
     .decision-button[aria-pressed="true"] { background: #1f6feb; border-color: #1f6feb; color: #fff; }
@@ -64,7 +67,10 @@
 <body>
   <h1>PrivySpark Review</h1>
   <p>Scan path: <code id="scanPath"></code></p>
-  <p><label>응답자 <input id="responder"></label></p>
+  <p class="field" id="responderField">
+    <label><span>응답자</span><input id="responder" required aria-invalid="false" aria-describedby="responderError"></label>
+    <span id="responderError" class="field-error" hidden>응답자를 입력하세요.</span>
+  </p>
   <div class="bulk-actions">
     <label>정탐 사유/계획 <textarea id="bulkTruePositivePlan" rows="2"></textarea></label>
     <label>조치 예정일 <input id="bulkTruePositiveDueDate" type="date"></label>

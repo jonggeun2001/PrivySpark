@@ -11,7 +11,7 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 - Only binary-looking unsupported inputs are recorded as `Unsupported file format`.
 - `--ignore` and `--ignore-file` define scan exclusions by basename or input-root-relative path.
 - `suppressions:` or `--suppress`, `--suppression-file` remove only selected `(column, pii_type)` result pairs.
-- `--review-state-root` applies the cumulative offline-review allowlist and writes `<output>/review/review.html` and `<output>/review/review.xlsm` by default. `--review-html-dir` can point the review file output directory to a separate absolute path or URI.
+- `--review-state-root` automatically collects `inbox/*.json` before the scan starts, updates cumulative offline-review state, applies the state allowlist, and writes `<output>/review/review.html` and `<output>/review/review.xlsm` by default. `--review-html-dir` can point the review file output directory to a separate absolute path or URI.
 
 ## Detection Model
 - Detection uses ruleset-based regexes directly.
