@@ -8,6 +8,7 @@ import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.util.Collections
 
 @RunWith(classOf[JUnitRunner])
 class ReviewHtmlWriterSpec extends AnyFunSuite {
@@ -24,6 +25,58 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains(""""scan_path":"/data/${REVIEW_APP_SCRIPT}/project""""))
     assert(html.contains("document.getElementById('scanPath').textContent = REVIEW_DATA.scan_path;"))
     assert(!html.contains(""""scan_path":"/data/    document.getElementById"""))
+  }
+
+  test("write shows matching pending true-positive action plan in review HTML") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-action-html-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-action-state-")
+    val currentDir = stateRoot.resolve("current")
+    Files.createDirectories(currentDir)
+    Files.write(
+      currentDir.resolve("action_plan.jsonl"),
+      Collections.singletonList(
+        """{"finding_key":"old-key","scan_path":"/data/project","file_identifier":"customers/old.parquet","hive_database":"mart","hive_table":"customers","hive_table_fqn":"mart.customers","column_name":"email","pii_type":"email","action_plan":"삭제 처리","action_due_date":"2999-12-31","responder":"owner","responded_at":"2026-05-01T00:00:00Z","status":"remediation_planned"}"""
+      ),
+      StandardCharsets.UTF_8
+    )
+    val result = ScanResult(
+      dataset_path = "/data/project",
+      scan_timestamp = "2026-05-06T10:00:00Z",
+      file_identifier = "customers/part-000.parquet",
+      column_name = "email",
+      pii_type = "email",
+      match_count = 3L,
+      sampled_row_count = 10L,
+      match_ratio = 0.3,
+      non_empty_match_ratio = 0.3,
+      confidence = 0.1,
+      sample_raw_value = "owner=alice@example.com",
+      sample_matched_fragment = "alice@example.com",
+      file_size = 128L,
+      file_mtime_epoch_ms = 1710000000000L,
+      hive_table_fqn = "mart.customers"
+    )
+
+    ReviewHtmlWriter.write(
+      new Configuration(),
+      outputRoot.toString,
+      "/data/project",
+      Seq(result),
+      sampleMode = "masked",
+      reviewHtmlDir = None,
+      reviewStateRoot = Some(stateRoot.toString)
+    )
+
+    val htmlPath = outputRoot.resolve("review").resolve("review.html")
+    val html = new String(Files.readAllBytes(htmlPath), StandardCharsets.UTF_8)
+
+    assert(html.contains("""data-sort-key="existing_action_status""""))
+    assert(html.contains("기존 조치 상태"))
+    assert(html.contains("삭제 조치 필요"))
+    assert(html.contains("삭제 처리"))
+    assert(html.contains("2999-12-31"))
+    assert(html.contains("owner"))
+    assert(html.contains("action_plan_state"))
   }
 
   test("write creates only review.html under the scan output review directory and includes masked samples") {
@@ -79,6 +132,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("table-layout: fixed;"))
     assert(html.contains("""<colgroup>"""))
     assert(html.contains("""<col class="col-path">"""))
+    assert(html.contains("""<col class="col-existing-action">"""))
     assert(html.contains("""<col class="col-due-date">"""))
     assert(html.contains(".col-path { width: 260px; }"))
     assert(html.contains(".col-sample { width: 280px; }"))
@@ -96,14 +150,18 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("""<th scope="col" data-sort-key="pii" aria-sort="none"><button type="button" class="sort-button">개인정보 유형 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<th scope="col" data-sort-key="sampled_row_count" aria-sort="none"><button type="button" class="sort-button">샘플 행 수 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<th scope="col" data-sort-key="match_count" aria-sort="none"><button type="button" class="sort-button">검출 건수 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
-    assert(html.contains("""<th scope="col" data-sort-key="non_empty_match_ratio" aria-sort="none"><button type="button" class="sort-button">검출 비율 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
-    assert(html.contains("""<th scope="col" data-sort-key="sample" aria-sort="none"><button type="button" class="sort-button">검출 샘플 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
+    assert(html.contains("""<th scope="col" data-sort-key="non_empty_match_ratio" aria-sort="none"><button type="button" class="sort-button">검출비율(%) <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
+    assert(html.contains("""<th scope="col" data-sort-key="sample" aria-sort="none"><button type="button" class="sort-button">검출샘플(검출값/데이터) <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
+    assert(!html.contains("""<button type="button" class="sort-button">검출 비율 <span class="sort-indicator" aria-hidden="true"></span></button>"""))
+    assert(!html.contains("""<button type="button" class="sort-button">검출 샘플 <span class="sort-indicator" aria-hidden="true"></span></button>"""))
     assert(html.contains("""<th scope="col" data-sort-key="decision" aria-sort="none"><button type="button" class="sort-button">판정 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
+    assert(html.contains("""<th scope="col" data-sort-key="existing_action_status" aria-sort="none"><button type="button" class="sort-button">기존 조치 상태 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<th scope="col" data-sort-key="false_positive_reason" aria-sort="none"><button type="button" class="sort-button">오탐 사유 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(!html.contains("""data-sort-key="file_identifier_pattern""""))
     assert(!html.contains("""data-sort-key="column_name_pattern""""))
     assert(!html.contains("""data-sort-key="pii_type_pattern""""))
-    assert(html.contains("""<th scope="col" data-sort-key="expires_at" aria-sort="none"><button type="button" class="sort-button">오탐 만료일 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
+    assert(!html.contains("""data-sort-key="expires_at""""))
+    assert(!html.contains("오탐 만료일"))
     assert(html.contains("""<th scope="col" data-sort-key="action_plan" aria-sort="none"><button type="button" class="sort-button">정탐 조치 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<th scope="col" data-sort-key="action_due_date" aria-sort="none"><button type="button" class="sort-button">조치 예정일 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span>"""))
@@ -111,7 +169,11 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains(".placeholder-summary { display: block; max-height: 120px; overflow: hidden; }"))
     assert(html.contains("""<td class="metric-cell">${escapeHtml(finding.sampled_row_count)}</td>"""))
     assert(html.contains("""<td class="metric-cell">${escapeHtml(finding.match_count)}</td>"""))
-    assert(html.contains("""<td class="metric-cell">${escapeHtml(finding.non_empty_match_ratio)}</td>"""))
+    assert(html.contains("""<td class="metric-cell">${escapeHtml(formatPercent(finding.non_empty_match_ratio))}</td>"""))
+    assert(html.contains("function formatPercent(value)"))
+    assert(html.contains("return (numeric * 100).toFixed(2);"))
+    assert(html.contains("escapeHtml(sample.sample_matched_fragment) + '\\n' +"))
+    assert(!html.contains("escapeHtml(sample.sample_matched_fragment) + '\\\\n' +"))
     assert(!html.contains("confidence=${escapeHtml(finding.confidence)}"))
     assert(!html.contains("<small>${escapeHtml(finding.finding_key)}</small>"))
     assert(html.contains("let sortState = { key: null, direction: 'asc' };"))
@@ -130,6 +192,8 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("function hydrateRow(row)"))
     assert(html.contains("function dehydrateRow(row)"))
     assert(html.contains("function sortRows(rows)"))
+    assert(html.contains("function renderExistingActionCell(finding)"))
+    assert(html.contains("function existingActionSortText(finding)"))
     assert(html.contains("tbody.replaceChildren(fragment);"))
     assert(!html.contains("document.querySelectorAll('[data-index]').forEach(input => {"))
     assert(!html.contains("tbody.innerHTML = '';"))
@@ -179,7 +243,8 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(!html.contains("const FINDING_GROUPS = buildFindingGroups();"))
     assert(html.contains("REVIEW_DATA.findings.map((finding, index) =>"))
     assert(!html.contains("allowlist_scope: 'exact'"))
-    assert(html.contains("expires_at: response.expires_at"))
+    assert(html.contains("const PermanentFalsePositiveExpiresAt = '9999-12-31';"))
+    assert(html.contains("expires_at: PermanentFalsePositiveExpiresAt"))
     assert(!html.contains("file_identifier_pattern: null"))
     assert(!html.contains("column_name_pattern: null"))
     assert(!html.contains("pii_type_pattern: null"))
@@ -192,11 +257,11 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(!html.contains("data-sort-key=\"file_identifier_pattern\""))
     assert(!html.contains("data-sort-key=\"column_name_pattern\""))
     assert(!html.contains("data-sort-key=\"pii_type_pattern\""))
-    assert(html.contains("data-sort-key=\"expires_at\""))
+    assert(!html.contains("data-sort-key=\"expires_at\""))
     assert(!html.contains("data-field=\"file_identifier_pattern\""))
     assert(!html.contains("data-field=\"column_name_pattern\""))
     assert(!html.contains("data-field=\"pii_type_pattern\""))
-    assert(html.contains("data-field=\"expires_at\""))
+    assert(!html.contains("data-field=\"expires_at\""))
     assert(!html.contains("sample.file_identifier,"))
     assert(!html.contains("escapeHtml(sample.file_identifier) +"))
     assert(!html.contains(".finding-summary"))
@@ -207,12 +272,12 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(!html.contains("case 'file_identifier_pattern':"))
     assert(!html.contains("case 'column_name_pattern':"))
     assert(!html.contains("case 'pii_type_pattern':"))
-    assert(html.contains("case 'expires_at':"))
+    assert(!html.contains("case 'expires_at':"))
     assert(!html.contains("class=\"pattern-cell\""))
     assert(html.contains("검토 안내"))
     assert(html.contains("오탐은 다음 스캔에서 제외하고, 정탐은 제외하지 않고 조치 계획만 남깁니다."))
     assert(html.contains("오탐 사유 예: <code>거래일시 포맷이 운전면허번호 규칙과 충돌</code>"))
-    assert(html.contains("오탐 만료일은 필수이며 만료일이 지난 항목은 다음 스캔에서 다시 검토 대상이 됩니다."))
+    assert(!html.contains("오탐 만료일은 필수이며 만료일이 지난 항목은 다음 스캔에서 다시 검토 대상이 됩니다."))
     assert(html.contains("정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>."))
     assert(html.contains("정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다."))
     assert(!html.contains("오탐 응답은 <code>exact</code> 범위로만 생성합니다."))
@@ -227,7 +292,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("focusFirstValidationError(firstValidationErrorInDisplayOrder(responseValidationErrors));"))
     assert(html.contains("field: 'decision'"))
     assert(html.contains("field: 'false_positive_reason'"))
-    assert(html.contains("field: 'expires_at'"))
+    assert(!html.contains("field: 'expires_at'"))
     assert(html.contains("field: 'action_plan'"))
     assert(html.contains("field: 'action_due_date'"))
     assert(html.contains("const ActionDueDateWindowDays = 30;"))
@@ -236,7 +301,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("function isActionDueDateWithinWindow(value)"))
     assert(html.contains("applyActionDueDateLimits(document.getElementById('bulkTruePositiveDueDate'));"))
     assert(html.contains("조치 예정일은 오늘부터 30일 이내여야 합니다."))
-    assert(html.contains("""<input data-index="${index}" data-field="expires_at" type="date" aria-label="오탐 만료일" placeholder="YYYY-MM-DD" min="${todayDateOnly()}">"""))
+    assert(!html.contains("""<input data-index="${index}" data-field="expires_at" type="date" aria-label="오탐 만료일" placeholder="YYYY-MM-DD" min="${todayDateOnly()}">"""))
     assert(html.contains("""<input data-index="${index}" data-field="action_due_date" type="date" aria-label="조치 예정일" placeholder="YYYY-MM-DD" min="${todayDateOnly()}" max="${maxActionDueDate()}">"""))
     assert(!html.contains("여러 파일 증거가 있는 pattern 오탐은 경로 패턴이 필요합니다."))
     assert(!html.contains("alice@example.com"))
@@ -338,7 +403,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(!html.contains("checksum 등 fingerprint metadata가 부족한 row는 exact 오탐으로 수집할 수 없어 오탐 선택을 비활성화합니다."))
     assert(!html.contains("개인정보 유형은 화면에 한글로 표시합니다."))
     assert(!html.contains("allowlist_scope: 'exact'"))
-    assert(html.contains("expires_at: response.expires_at"))
+    assert(html.contains("expires_at: PermanentFalsePositiveExpiresAt"))
     assert(html.contains("""data-decision-button="false_positive" aria-pressed="false">오탐</button>"""))
     assert(html.contains("data-decision-button=\"false_positive\""))
     assert(!html.contains("""data-field="decision""""))
@@ -348,7 +413,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(!html.contains("data-field=\"allowlist_scope\""))
     assert(!html.contains("<option value=\"pattern\">pattern</option>"))
     assert(!html.contains("data-field=\"file_identifier_pattern\""))
-    assert(html.contains("data-field=\"expires_at\""))
+    assert(!html.contains("data-field=\"expires_at\""))
     assert(!html.contains("class=\"hint\""))
   }
 }

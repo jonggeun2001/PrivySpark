@@ -5,7 +5,7 @@
   <title>PrivySpark Review</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; color: #17202a; }
-    table { border-collapse: collapse; table-layout: fixed; width: 100%; min-width: 2340px; }
+    table { border-collapse: collapse; table-layout: fixed; width: 100%; min-width: 2370px; }
     col { box-sizing: border-box; }
     .col-path { width: 260px; }
     .col-hive { width: 180px; }
@@ -16,8 +16,8 @@
     .col-ratio { width: 110px; }
     .col-sample { width: 280px; }
     .col-decision { width: 130px; }
+    .col-existing-action { width: 210px; }
     .col-reason { width: 240px; }
-    .col-fp-expires { width: 180px; }
     .col-plan { width: 240px; }
     .col-due-date { width: 180px; }
     th, td { border: 1px solid #d5d8dc; padding: 8px; vertical-align: top; overflow-wrap: anywhere; }
@@ -44,6 +44,13 @@
     .review-guide ul { margin: 8px 0 0; padding-left: 20px; }
     .review-guide code { background: #eef2f7; padding: 1px 4px; border-radius: 3px; }
     .metric-cell { text-align: right; white-space: nowrap; }
+    .existing-action-cell { font-size: 13px; line-height: 1.45; }
+    .existing-action-empty { color: #85929e; }
+    .action-status-badge { display: inline-block; border-radius: 4px; font-weight: 700; margin-bottom: 6px; padding: 2px 6px; }
+    .action-status-remediation_planned { background: #fff8e1; color: #7a4f00; }
+    .action-status-overdue { background: #fdecea; color: #a50e0e; }
+    .action-status-verified { background: #e6f4ea; color: #137333; }
+    .existing-action-detail { color: #34495e; margin-top: 2px; }
     .date-cell { min-width: 180px; }
     .reason-cell, .plan-cell { min-width: 220px; }
     .placeholder-cell { min-height: 120px; color: #566573; background: #fbfcfc; }
@@ -70,7 +77,7 @@
     <ul>
       <li>오탐은 다음 스캔에서 제외하고, 정탐은 제외하지 않고 조치 계획만 남깁니다.</li>
       <li>오탐은 Hive 테이블이 있으면 테이블/컬럼/개인정보 유형 기준, Hive 테이블이 없으면 경로/파일 식별자/컬럼/개인정보 유형 기준으로 반복 제외합니다.</li>
-      <li>오탐 만료일은 필수이며 만료일이 지난 항목은 다음 스캔에서 다시 검토 대상이 됩니다.</li>
+      <li>오탐은 별도 만료일 입력 없이 반복 제외 상태로 저장됩니다.</li>
       <li>오탐 사유 예: <code>거래일시 포맷이 운전면허번호 규칙과 충돌</code>, <code>테스트 데이터의 더미 식별자</code>, <code>마스킹된 샘플 값 오인식</code>.</li>
       <li>정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>.</li>
       <li>정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다.</li>
@@ -88,8 +95,8 @@
       <col class="col-ratio">
       <col class="col-sample">
       <col class="col-decision">
+      <col class="col-existing-action">
       <col class="col-reason">
-      <col class="col-fp-expires">
       <col class="col-plan">
       <col class="col-due-date">
     </colgroup>
@@ -101,11 +108,11 @@
         <th scope="col" data-sort-key="pii" aria-sort="none"><button type="button" class="sort-button">개인정보 유형 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="sampled_row_count" aria-sort="none"><button type="button" class="sort-button">샘플 행 수 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="match_count" aria-sort="none"><button type="button" class="sort-button">검출 건수 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="non_empty_match_ratio" aria-sort="none"><button type="button" class="sort-button">검출 비율 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="sample" aria-sort="none"><button type="button" class="sort-button">검출 샘플 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="non_empty_match_ratio" aria-sort="none"><button type="button" class="sort-button">검출비율(%) <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="sample" aria-sort="none"><button type="button" class="sort-button">검출샘플(검출값/데이터) <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="decision" aria-sort="none"><button type="button" class="sort-button">판정 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+        <th scope="col" data-sort-key="existing_action_status" aria-sort="none"><button type="button" class="sort-button">기존 조치 상태 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="false_positive_reason" aria-sort="none"><button type="button" class="sort-button">오탐 사유 <span class="sort-indicator" aria-hidden="true"></span></button></th>
-        <th scope="col" data-sort-key="expires_at" aria-sort="none"><button type="button" class="sort-button">오탐 만료일 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="action_plan" aria-sort="none"><button type="button" class="sort-button">정탐 조치 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>
         <th scope="col" data-sort-key="action_due_date" aria-sort="none"><button type="button" class="sort-button">조치 예정일 <span class="sort-indicator" aria-hidden="true"></span></button></th>
       </tr>

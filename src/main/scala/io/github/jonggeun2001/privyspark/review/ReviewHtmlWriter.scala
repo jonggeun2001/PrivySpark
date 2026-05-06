@@ -40,7 +40,24 @@ private[privyspark] object ReviewHtmlWriter {
       results.iterator,
       ReviewFindingBuilder.DefaultMaxEvidenceSamples
     )
-    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlDir)
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlDir, None)
+  }
+
+  def write(
+    conf: Configuration,
+    outputRoot: String,
+    scanPath: String,
+    results: Seq[ScanResult],
+    sampleMode: String,
+    reviewHtmlDir: Option[String],
+    reviewStateRoot: Option[String]
+  ): Unit = {
+    val normalizedSampleMode = normalizeSampleMode(sampleMode).getOrElse(DefaultSampleMode)
+    val findings = ReviewFindingBuilder.fromScanResultsIterator(
+      results.iterator,
+      ReviewFindingBuilder.DefaultMaxEvidenceSamples
+    )
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlDir, reviewStateRoot)
   }
 
   def write(
@@ -65,7 +82,24 @@ private[privyspark] object ReviewHtmlWriter {
       ScanResultsReader.iterateScanResults(resultDf, ordered = true),
       ReviewFindingBuilder.DefaultMaxEvidenceSamples
     )
-    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlDir)
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlDir, None)
+  }
+
+  def write(
+    conf: Configuration,
+    outputRoot: String,
+    scanPath: String,
+    resultDf: DataFrame,
+    sampleMode: String,
+    reviewHtmlDir: Option[String],
+    reviewStateRoot: Option[String]
+  ): Unit = {
+    val normalizedSampleMode = normalizeSampleMode(sampleMode).getOrElse(DefaultSampleMode)
+    val findings = ReviewFindingBuilder.fromScanResultsIterator(
+      ScanResultsReader.iterateScanResults(resultDf, ordered = true),
+      ReviewFindingBuilder.DefaultMaxEvidenceSamples
+    )
+    writeFindings(conf, outputRoot, scanPath, findings, normalizedSampleMode, reviewHtmlDir, reviewStateRoot)
   }
 
   private def writeFindings(
@@ -74,10 +108,15 @@ private[privyspark] object ReviewHtmlWriter {
     scanPath: String,
     findings: Seq[ReviewFinding],
     sampleMode: String,
-    reviewHtmlDir: Option[String]
+    reviewHtmlDir: Option[String],
+    reviewStateRoot: Option[String]
   ): Unit = {
     val scanResultsFingerprint = ReviewFindingBuilder.scanResultsFingerprint(findings)
-    val html = ReviewHtmlRenderer.render(scanPath, scanResultsFingerprint, findings, sampleMode)
+    val actionPlanStates = ReviewActionPlanStatus.matchFindings(
+      findings,
+      ReviewActionPlanStatus.load(conf, reviewStateRoot)
+    )
+    val html = ReviewHtmlRenderer.render(scanPath, scanResultsFingerprint, findings, sampleMode, actionPlanStates)
     val htmlPath = resolveHtmlPath(outputRoot, reviewHtmlDir)
     val fs = htmlPath.getFileSystem(conf)
     Option(htmlPath.getParent).foreach(fs.mkdirs)

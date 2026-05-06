@@ -35,7 +35,8 @@ private[privyspark] object ScanPipeline {
 
   final case class Hooks(
     warnUnusedExcelMaxRowsInMemory: Option[Int] => Unit = _ => (),
-    writeReviewHtml: (Configuration, String, String, DataFrame, String, Option[String]) => Unit = (_, _, _, _, _, _) => ()
+    writeReviewHtml: (Configuration, String, String, DataFrame, String, Option[String], Option[String]) => Unit =
+      (_, _, _, _, _, _, _) => ()
   )
 
   def run(spark: SparkSession, config: CliConfig, hooks: Hooks): ScanSummary = {
@@ -214,7 +215,8 @@ private[privyspark] object ScanPipeline {
               config.inputPath,
               resultDf,
               config.reviewSampleMode,
-              config.reviewHtmlDir
+              config.reviewHtmlDir,
+              config.reviewStateRoot
             )
           }
         }
