@@ -9,6 +9,8 @@ import org.scalatestplus.junit.JUnitRunner
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.Collections
+import java.util.zip.ZipFile
+import scala.io.Source
 
 @RunWith(classOf[JUnitRunner])
 class ReviewHtmlWriterSpec extends AnyFunSuite {
@@ -79,7 +81,86 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("action_plan_state"))
   }
 
-  test("write creates only review.html under the scan output review directory and includes masked samples") {
+  test("write also creates macro-enabled review workbook next to review HTML") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-xlsm-")
+    val result = ScanResult(
+      dataset_path = "/data/project",
+      scan_timestamp = "2026-04-27T10:00:00Z",
+      file_identifier = "customers/part-000.parquet",
+      column_name = "email",
+      pii_type = "email",
+      match_count = 3L,
+      sampled_row_count = 10L,
+      match_ratio = 0.3,
+      non_empty_match_ratio = 0.3,
+      confidence = 0.1,
+      sample_raw_value = "owner=alice@example.com",
+      sample_matched_fragment = "alice@example.com",
+      file_size = 128L,
+      file_mtime_epoch_ms = 1710000000000L,
+      hive_table_fqn = "mart.customers"
+    )
+    val truePositiveResult = result.copy(
+      file_identifier = "customers/part-001.parquet",
+      column_name = "phone",
+      pii_type = "phone_number",
+      match_count = 2L,
+      sampled_row_count = 20L,
+      match_ratio = 0.1,
+      non_empty_match_ratio = 0.1,
+      sample_raw_value = "phone=010-1234-5678",
+      sample_matched_fragment = "010-1234-5678"
+    )
+
+    ReviewHtmlWriter.write(
+      new Configuration(),
+      outputRoot.toString,
+      "/data/project",
+      Seq(result, truePositiveResult),
+      sampleMode = "masked"
+    )
+
+    val reviewDir = outputRoot.resolve("review")
+    val htmlPath = reviewDir.resolve("review.html")
+    val workbookPath = reviewDir.resolve("review.xlsm")
+
+    assert(Files.exists(htmlPath))
+    assert(Files.exists(workbookPath))
+    assert(Files.size(workbookPath) > 0)
+
+    val zip = new ZipFile(workbookPath.toFile)
+    try {
+      val entryStream = zip.getInputStream(zip.getEntry("[Content_Types].xml"))
+      val source = Source.fromInputStream(entryStream, StandardCharsets.UTF_8.name())
+      val contentTypes =
+        try source.mkString
+        finally source.close()
+      assert(contentTypes.contains("application/vnd.ms-excel.sheet.macroEnabled.main+xml"))
+      assert(zip.getEntry("xl/vbaProject.bin") != null)
+      assert(zip.getEntry("xl/drawings/vmlDrawing1.vml") != null)
+      val vmlSource = Source.fromInputStream(
+        zip.getInputStream(zip.getEntry("xl/drawings/vmlDrawing1.vml")),
+        StandardCharsets.UTF_8.name()
+      )
+      val vml =
+        try vmlSource.mkString
+        finally vmlSource.close()
+      assert(vml.contains("review.json 생성"))
+      assert(vml.contains("<x:FmlaMacro>[0]!say_hello</x:FmlaMacro>"))
+      val sheetSource = Source.fromInputStream(
+        zip.getInputStream(zip.getEntry("xl/worksheets/sheet1.xml")),
+        StandardCharsets.UTF_8.name()
+      )
+      val sheetXml =
+        try sheetSource.mkString
+        finally sheetSource.close()
+      assert(sheetXml.contains("<legacyDrawing "))
+    } finally {
+      zip.close()
+    }
+  }
+
+  test("write creates review files under the scan output review directory and includes masked samples") {
     val outputRoot = Files.createTempDirectory("privyspark-review-html-")
     val result = ScanResult(
       dataset_path = "/data/project",
@@ -109,9 +190,11 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
 
     val reviewDir = outputRoot.resolve("review")
     val htmlPath = reviewDir.resolve("review.html")
+    val workbookPath = reviewDir.resolve("review.xlsm")
     val html = new String(Files.readAllBytes(htmlPath), StandardCharsets.UTF_8)
 
     assert(Files.exists(htmlPath))
+    assert(Files.exists(workbookPath))
     assert(!Files.exists(reviewDir.resolve("responses")))
     assert(!Files.exists(reviewDir.resolve("state")))
     assert(html.contains("mart"))
@@ -312,6 +395,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     val outputRoot = Files.createTempDirectory("privyspark-review-html-output-")
     val customRoot = Files.createTempDirectory("privyspark-review-html-custom-")
     val customHtmlPath = customRoot.resolve("review.html")
+    val customWorkbookPath = customRoot.resolve("review.xlsm")
     val result = ScanResult(
       dataset_path = "/data/project",
       scan_timestamp = "2026-04-27T10:00:00Z",
@@ -339,10 +423,13 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     )
 
     val defaultHtmlPath = outputRoot.resolve("review").resolve("review.html")
+    val defaultWorkbookPath = outputRoot.resolve("review").resolve("review.xlsm")
     val html = new String(Files.readAllBytes(customHtmlPath), StandardCharsets.UTF_8)
 
     assert(Files.exists(customHtmlPath))
+    assert(Files.exists(customWorkbookPath))
     assert(!Files.exists(defaultHtmlPath))
+    assert(!Files.exists(defaultWorkbookPath))
     assert(html.contains("PrivySpark Review"))
     assert(!html.contains("bob@example.com"))
   }

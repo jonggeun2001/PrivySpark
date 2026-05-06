@@ -92,8 +92,9 @@ object Cli {
         if (lastSlashIndex >= 0) normalized.substring(lastSlashIndex + 1)
         else normalized
       val lowerLeafName = leafName.toLowerCase(Locale.ROOT)
-      if (lowerLeafName.endsWith(".html") || lowerLeafName.endsWith(".htm")) {
-        Some("review-html-dir must be a directory path, not an HTML file path")
+      if (lowerLeafName.endsWith(".html") || lowerLeafName.endsWith(".htm") ||
+          lowerLeafName.endsWith(".xlsm") || lowerLeafName.endsWith(".xlsx")) {
+        Some("review-html-dir must be a directory path, not a review file path")
       } else {
         None
       }
@@ -214,7 +215,7 @@ object Cli {
         .optional()
         .action((value, config) => config.copy(reviewHtmlDir = Some(value.trim)))
         .validate(value => validateReviewHtmlDir(value).fold(success)(failure))
-        .text("offline review HTML 파일 출력 디렉토리(미지정 시 <output>/review, 파일명은 review.html 고정)"),
+        .text("offline review HTML/XLSM 출력 디렉토리(미지정 시 <output>/review, 파일명은 review.html/review.xlsm 고정)"),
       opt[String]("review-sample-mode")
         .optional()
         .action((value, config) => config.copy(reviewSampleMode = value.trim.toLowerCase))

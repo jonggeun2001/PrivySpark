@@ -28,20 +28,24 @@ private[privyspark] object ResponseEnvelopeReader {
   }
 
   private[privyspark] def parseEnvelope(sourcePath: String, json: String): Either[String, ResponseEnvelope] = {
-    val schemaVersion = extractJsonStringField(json, "schema_version").orElse(extractNumericField(json, "schema_version")).getOrElse("")
+    val normalizedJson = stripLeadingBom(json)
+    val schemaVersion = extractJsonStringField(normalizedJson, "schema_version").orElse(extractNumericField(normalizedJson, "schema_version")).getOrElse("")
     if (schemaVersion != "1") {
       Left(s"unsupported schema_version: $schemaVersion")
     } else {
-      val responseObjects = extractJsonObjectArrayField(json, "responses").getOrElse(Seq.empty)
+      val responseObjects = extractJsonObjectArrayField(normalizedJson, "responses").getOrElse(Seq.empty)
       Right(ResponseEnvelope(
         sourcePath = sourcePath,
-        scanPath = extractJsonStringField(json, "scan_path").getOrElse(""),
-        responder = extractJsonStringField(json, "responder").getOrElse(""),
-        respondedAt = extractJsonStringField(json, "responded_at").getOrElse(""),
+        scanPath = extractJsonStringField(normalizedJson, "scan_path").getOrElse(""),
+        responder = extractJsonStringField(normalizedJson, "responder").getOrElse(""),
+        respondedAt = extractJsonStringField(normalizedJson, "responded_at").getOrElse(""),
         responses = responseObjects.map(parseItem)
       ))
     }
   }
+
+  private def stripLeadingBom(value: String): String =
+    if (value.nonEmpty && value.charAt(0) == '\uFEFF') value.substring(1) else value
 
   private def parseItem(json: String): ResponseItem = {
     val hiveTableFqn = extractJsonStringField(json, "hive_table_fqn").getOrElse("")

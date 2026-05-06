@@ -35,13 +35,30 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(workflow.contains("${{ steps.assets.outputs.asset_review_response_viewer }}"))
   }
 
-  test("review HTML renderer resources are available on the runtime classpath") {
-    Seq("review/review.html.template", "review/review.js").foreach { resourceName =>
+  test("review renderer resources are available on the runtime classpath") {
+    Seq("review/review.html.template", "review/review.js", "review/review_export.bas", "review/vbaProject.bin").foreach { resourceName =>
       assert(
         Option(getClass.getClassLoader.getResource(resourceName)).nonEmpty,
         s"$resourceName should be packaged with application resources"
       )
     }
+  }
+
+  test("review workbook export macro creates collector-compatible response JSON") {
+    val macroSource = readResource("review/review_export.bas")
+
+    assert(macroSource.contains("Sub say_hello()"))
+    assert(macroSource.contains("""InitialFileName:="review.json""""))
+    assert(macroSource.contains("""file_identifier_pattern"""))
+    assert(macroSource.contains("allowlist_scope"))
+    assert(macroSource.contains("recurring"))
+    assert(macroSource.contains("CellDateIso"))
+    assert(macroSource.contains("""DateAdd("d", 30, Date)"""))
+    assert(macroSource.contains("TimeZoneOffsetIso"))
+    assert(macroSource.contains("GetTimeZoneInformation"))
+    assert(!macroSource.contains("""TimeZoneOffsetIso = "Z""""))
+    assert(macroSource.contains("textStream.Position = 3"))
+    assert(macroSource.contains("textStream.CopyTo binaryStream"))
   }
 
   test("offline review response HTML example is self-contained and downloads response JSON") {
@@ -306,4 +323,14 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
 
   private def readText(path: java.nio.file.Path): String =
     new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
+
+  private def readResource(name: String): String = {
+    val stream = getClass.getClassLoader.getResourceAsStream(name)
+    assert(stream != null, s"$name should exist on the runtime classpath")
+    try {
+      scala.io.Source.fromInputStream(stream, StandardCharsets.UTF_8.name()).mkString
+    } finally {
+      stream.close()
+    }
+  }
 }
