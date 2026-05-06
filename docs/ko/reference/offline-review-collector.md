@@ -91,24 +91,26 @@ HDFS URI는 path slash 개수를 정규화합니다. 예를 들어 `hdfs:///user
       "non_empty_match_ratio": 0.12,
       "decision": "false_positive",
       "false_positive_reason": "테스트 계정 이메일 컬럼",
-      "expires_at": "2026-12-31"
+      "expires_at": "9999-12-31"
     }
   ]
 }
 ```
 
+`review.html`은 오탐 만료일 입력란을 표시하지 않고, 영구 반복 제외를 나타내는 내부값 `9999-12-31`을 자동으로 넣습니다.
+
 수집 후 `allowlist.jsonl`에는 다음처럼 저장됩니다.
 
 ```json
-{"entry_type":"recurring","scan_path":"hdfs:///user/username","hive_table_fqn":"mart.customers","file_identifier_pattern":"","column_name":"test_email","pii_type":"email","reason":"테스트 계정 이메일 컬럼","reviewer":"owner@example.com","reviewed_at":"2026-04-30T10:00:00Z","expires_at":"2026-12-31","source_finding_key":"sha256:...","sample_row_count":1000,"match_count":12,"non_empty_match_ratio":0.12}
+{"entry_type":"recurring","scan_path":"hdfs:///user/username","hive_table_fqn":"mart.customers","file_identifier_pattern":"","column_name":"test_email","pii_type":"email","reason":"테스트 계정 이메일 컬럼","reviewer":"owner@example.com","reviewed_at":"2026-04-30T10:00:00Z","expires_at":"9999-12-31","source_finding_key":"sha256:...","sample_row_count":1000,"match_count":12,"non_empty_match_ratio":0.12}
 ```
 
-다음 스캔에서 같은 `scan_path`, `hive_table_fqn`, `column_name`, `pii_type`가 검출되면 파일 checksum이 달라도 제외됩니다. `expires_at`이 지난 항목은 적용하지 않습니다.
+다음 스캔에서 같은 `scan_path`, `hive_table_fqn`, `column_name`, `pii_type`가 검출되면 파일 checksum이 달라도 제외됩니다. 수동으로 작성한 state에서 `expires_at`이 지난 항목은 적용하지 않습니다.
 
 Hive 매핑이 없으면 `file_identifier_pattern`을 사용합니다.
 
 ```json
-{"entry_type":"recurring","scan_path":"hdfs:///user/username","hive_table_fqn":"","file_identifier_pattern":"daily/customers/*.parquet","column_name":"test_email","pii_type":"email","reason":"반복 생성되는 테스트 데이터","reviewer":"owner@example.com","reviewed_at":"2026-04-30T10:00:00Z","expires_at":"2026-12-31","source_finding_key":"sha256:...","sample_row_count":1000,"match_count":12,"non_empty_match_ratio":0.12}
+{"entry_type":"recurring","scan_path":"hdfs:///user/username","hive_table_fqn":"","file_identifier_pattern":"daily/customers/*.parquet","column_name":"test_email","pii_type":"email","reason":"반복 생성되는 테스트 데이터","reviewer":"owner@example.com","reviewed_at":"2026-04-30T10:00:00Z","expires_at":"9999-12-31","source_finding_key":"sha256:...","sample_row_count":1000,"match_count":12,"non_empty_match_ratio":0.12}
 ```
 
 ## 정탐 응답 예시
@@ -150,7 +152,7 @@ collector는 response JSON에 대해 다음을 검증합니다.
 - envelope의 `scan_path`, `responder`, `responded_at`, `responses`는 필수
 - `responded_at`은 ISO-8601 instant
 - 각 response의 `finding_key`, `column_name`, `pii_type`, `decision`은 필수
-- 오탐은 `false_positive_reason`, `expires_at` 필수
+- 오탐은 `false_positive_reason`, `expires_at` 필수. `review.html`은 `expires_at`을 영구 반복 제외 내부값 `9999-12-31`로 자동 생성
 - 신규 recurring 오탐의 `column_name`, `pii_type`은 exact 값만 허용하며 `*` wildcard는 거부
 - Hive 매핑이 없는 오탐은 `file_identifier_pattern` 또는 `file_identifier` 필수
 - 정탐은 `action_plan`, `action_due_date` 필수
@@ -161,9 +163,9 @@ collector는 response JSON에 대해 다음을 검증합니다.
 
 `review.html`은 self-contained HTML입니다. 서버 호출 없이 브라우저에서 열고 응답 JSON을 다운로드합니다.
 
-표는 경로, Hive 테이블, 컬럼명, 개인정보 유형, 샘플 행 수, 검출 건수, 비어있지 않은 값 대비 검출 비율, 샘플, 판정, 오탐 사유, 오탐 만료일, 정탐 조치 계획, 조치 예정일을 분리된 컬럼으로 표시합니다.
+표는 경로, Hive 테이블, 컬럼명, 개인정보 유형, 샘플 행 수, 검출 건수, `검출비율(%)`, `검출샘플(검출값/데이터)`, 판정, 오탐 사유, 정탐 조치 계획, 조치 예정일을 분리된 컬럼으로 표시합니다. 검출 비율은 퍼센트 기준 소수점 둘째 자리까지 표시하고, 검출 샘플은 검출값과 원본 데이터 컨텍스트를 실제 줄바꿈으로 분리합니다.
 
-오탐 선택 시에는 recurring 응답만 생성합니다. exact/pattern 선택지는 표시하지 않습니다. 정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다.
+오탐 선택 시에는 recurring 응답만 생성합니다. exact/pattern 선택지와 오탐 만료일 입력란은 표시하지 않습니다. 정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다.
 
 ## 기존 review apply와의 관계
 

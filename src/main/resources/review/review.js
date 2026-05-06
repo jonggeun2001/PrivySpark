@@ -44,7 +44,6 @@
     const FormFieldDefaults = {
       decision: '',
       false_positive_reason: '',
-      expires_at: '',
       action_plan: '',
       action_due_date: ''
     };
@@ -54,6 +53,7 @@
     const validationState = new Map();
     const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
     const ActionDueDateWindowDays = 30;
+    const PermanentFalsePositiveExpiresAt = '9999-12-31';
     function dateOnlyFromLocal(date) {
       const pad = value => String(value).padStart(2, '0');
       return String(date.getFullYear()) + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
@@ -133,6 +133,16 @@
         sample.sample_raw_value
       ].join(' ')).join(' ');
     }
+    function formatPercent(value) {
+      if (value === null || value === undefined || value === '') {
+        return '';
+      }
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return '';
+      }
+      return (numeric * 100).toFixed(2);
+    }
     function formSortText(index, fields) {
       const rowValues = getFormState(index);
       return fields.map(field => rowValues[field] || '').join(' ');
@@ -159,7 +169,6 @@
         case 'decision':
           return formSortText(index, ['decision']);
         case 'false_positive_reason':
-        case 'expires_at':
         case 'action_plan':
         case 'action_due_date':
           return formSortText(index, [sortState.key]);
@@ -287,11 +296,6 @@
           if (isBlank(response.false_positive_reason)) {
             errors.push({ index, field: 'false_positive_reason', message: '오탐 사유를 입력하세요.' });
           }
-          if (isBlank(response.expires_at)) {
-            errors.push({ index, field: 'expires_at', message: '오탐 만료일을 입력하세요.' });
-          } else if (!isDateOnly(response.expires_at)) {
-            errors.push({ index, field: 'expires_at', message: '오탐 만료일은 YYYY-MM-DD 형식이어야 합니다.' });
-          }
         } else if (response.decision === 'true_positive') {
           if (isBlank(response.action_plan)) {
             errors.push({ index, field: 'action_plan', message: '정탐 조치 계획을 입력하세요.' });
@@ -410,7 +414,7 @@
       if (response.decision === 'false_positive') {
         return compactResponseFields(Object.assign(responseBase(response), {
           false_positive_reason: response.false_positive_reason,
-          expires_at: response.expires_at
+          expires_at: PermanentFalsePositiveExpiresAt
         }));
       }
       if (response.decision === 'true_positive') {
@@ -439,13 +443,13 @@
         finding.column_name,
         displayPiiType(finding.pii_type)
       ].filter(Boolean).join(' / ');
-      return `<td colspan="13" class="placeholder-cell"><span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">${escapeHtml(summary)}</span></td>`;
+      return `<td colspan="12" class="placeholder-cell"><span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">${escapeHtml(summary)}</span></td>`;
     }
     function renderSampleCell(finding) {
       const samples = finding.evidence_samples.map(sample =>
-        escapeHtml(sample.sample_matched_fragment) + '\\n' +
+        escapeHtml(sample.sample_matched_fragment) + '\n' +
         escapeHtml(sample.sample_raw_value)
-      ).join('\\n---\\n');
+      ).join('\n---\n');
       return samples;
     }
     function renderFindingCells(finding, index) {
@@ -456,7 +460,7 @@
         <td>${escapeHtml(displayPiiType(finding.pii_type))}</td>
         <td class="metric-cell">${escapeHtml(finding.sampled_row_count)}</td>
         <td class="metric-cell">${escapeHtml(finding.match_count)}</td>
-        <td class="metric-cell">${escapeHtml(finding.non_empty_match_ratio)}</td>
+        <td class="metric-cell">${escapeHtml(formatPercent(finding.non_empty_match_ratio))}</td>
         <td class="sample">${renderSampleCell(finding)}</td>
         <td>
           <div class="decision-toggle" role="group" aria-label="판정" data-validation-field="decision" aria-invalid="false">
@@ -467,11 +471,6 @@
         <td class="reason-cell">
           <div class="decision-fields" data-decision-section="false_positive">
             <textarea data-index="${index}" data-field="false_positive_reason" aria-label="오탐 사유" placeholder="필수"></textarea>
-          </div>
-        </td>
-        <td class="date-cell">
-          <div class="decision-fields" data-decision-section="false_positive">
-            <input data-index="${index}" data-field="expires_at" type="date" aria-label="오탐 만료일" placeholder="YYYY-MM-DD" min="${todayDateOnly()}">
           </div>
         </td>
         <td class="plan-cell">
@@ -576,7 +575,6 @@
       updateFormState(index, 'decision', currentDecision === decision ? '' : decision);
       clearValidationField(index, 'decision');
       clearValidationField(index, 'false_positive_reason');
-      clearValidationField(index, 'expires_at');
       clearValidationField(index, 'action_plan');
       clearValidationField(index, 'action_due_date');
       const row = button.closest('tr');
