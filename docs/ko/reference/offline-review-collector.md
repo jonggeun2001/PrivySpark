@@ -13,7 +13,7 @@ privyspark scan \
   --review-state-root hdfs:///review-state-root
 ```
 
-2. 담당자는 `<scan-output>/review/review.html` 또는 `--review-html-dir`에 생성된 `review.html`에서 각 finding을 오탐/정탐으로 판정합니다. Excel 검토가 필요하면 같은 디렉토리의 `review.xlsm`을 열고 매크로를 허용한 뒤 `review.json 생성` 버튼으로 response JSON을 저장합니다.
+2. 담당자는 `<scan-output>/review/review.html` 또는 `--review-html-dir`에 생성된 `review.html`에서 응답자를 입력하고 각 finding을 오탐/정탐으로 판정합니다. Excel 검토가 필요하면 같은 디렉토리의 `review.xlsm`을 열고 매크로를 허용한 뒤 응답자를 입력하고 `review.json 생성` 버튼으로 response JSON을 저장합니다.
 
 3. 다운로드한 `response-<scan-path>-YYYYMMDD-HHMMSS.json`을 `<review-state-root>/inbox/*.json`에 업로드합니다.
 
@@ -165,11 +165,11 @@ collector는 response JSON에 대해 다음을 검증합니다.
 
 표는 경로, Hive 테이블, 컬럼명, 개인정보 유형, 샘플 행 수, 검출 건수, `검출비율(%)`, `검출샘플(검출값/데이터)`, 판정, 기존 조치 상태, 오탐 사유, 정탐 조치 계획, 조치 예정일을 분리된 컬럼으로 표시합니다. 검출 비율은 `검출 건수 / 샘플 행 수 * 100`으로 계산해 소수점 둘째 자리까지 표시하고, 검출 샘플은 검출값과 원본 데이터 컨텍스트를 실제 줄바꿈으로 분리합니다.
 
-오탐 선택 시에는 recurring 응답만 생성합니다. exact/pattern 선택지와 오탐 만료일 입력란은 표시하지 않습니다. 정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다.
+오탐 선택 시에는 recurring 응답만 생성합니다. exact/pattern 선택지와 오탐 만료일 입력란은 표시하지 않습니다. 응답자가 비어 있으면 response JSON을 생성하지 않고 입력란에 포커스합니다. 정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다.
 
 ## review.xlsm
 
-`review.xlsm`은 `review.html`과 같은 finding, 기존 조치 상태, 판정 입력 컬럼을 담는 Excel 매크로 사용 통합 문서입니다. 담당자는 `판정` 컬럼에 `오탐` 또는 `정탐`을 선택하고, 오탐이면 `오탐 사유`, 정탐이면 `정탐 조치 계획`과 `조치 예정일`을 입력합니다. `review.json 생성` 버튼은 미응답/필수 누락 셀을 붉게 표시한 뒤 첫 오류 셀로 이동하고, 검증을 통과하면 `review collect`가 읽을 수 있는 `review.json`을 저장합니다.
+`review.xlsm`은 `review.html`과 같은 finding, 기존 조치 상태, 판정 입력 컬럼을 담는 Excel 매크로 사용 통합 문서입니다. 담당자는 응답자를 입력하고 `판정` 컬럼에 `오탐` 또는 `정탐`을 선택하며, 오탐이면 `오탐 사유`, 정탐이면 `정탐 조치 계획`과 `조치 예정일`을 입력합니다. `review.json 생성` 버튼은 응답자/미응답/필수 누락 셀을 붉게 표시한 뒤 첫 오류 셀로 이동하고, 검증을 통과하면 `review collect`가 읽을 수 있는 `review.json`을 저장합니다.
 
 사내 보안 정책으로 Excel 파일이 암호화될 수 있으므로 `review collect`는 `.xlsm` 파일 자체를 읽지 않습니다. 반드시 `review.xlsm`에서 생성한 `.json` 파일을 `<review-state-root>/inbox`에 넣습니다.
 

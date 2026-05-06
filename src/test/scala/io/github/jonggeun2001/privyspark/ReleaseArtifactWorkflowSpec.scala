@@ -59,6 +59,9 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(!macroSource.contains("""TimeZoneOffsetIso = "Z""""))
     assert(macroSource.contains("textStream.Position = 3"))
     assert(macroSource.contains("textStream.CopyTo binaryStream"))
+    assert(macroSource.contains("If responder = \"\" Then"))
+    assert(macroSource.contains("MsgBox \"Responder is required.\", vbExclamation"))
+    assert(macroSource.contains("ws.Cells(3, 2).Select"))
   }
 
   test("offline review response HTML example is self-contained and downloads response JSON") {
@@ -107,6 +110,18 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(!html.contains("response.json 다운로드"))
     assert(!html.contains("link.download = 'privyspark-response.json'"))
     assert(!html.contains("owner@example.test"))
+    assert(html.contains("id=\"responderField\""))
+    assert(html.contains("""<input id="responder" required aria-invalid="false" aria-describedby="responderError">"""))
+    assert(html.contains("""<span id="responderError" class="field-error" hidden>응답자를 입력하세요.</span>"""))
+    assert(html.contains("function clearResponderValidation()"))
+    assert(html.contains("function validateResponder()"))
+    assert(html.contains("responderField.classList.add('invalid-field');"))
+    assert(html.contains("responderInput.setAttribute('aria-invalid', 'true');"))
+    assert(html.contains("responderError.hidden = false;"))
+    assert(html.contains("responderInput.focus();"))
+    assert(html.contains("const responderIsValid = validateResponder();"))
+    assert(html.contains("if (!responderIsValid) {"))
+    assert(html.contains("responderInput.addEventListener('input'"))
     assert(html.contains("""<th scope="col" data-sort-key="path" aria-sort="none"><button type="button" class="sort-button">경로 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<th scope="col" data-sort-key="hive" aria-sort="none"><button type="button" class="sort-button">Hive 테이블 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<th scope="col" data-sort-key="column" aria-sort="none"><button type="button" class="sort-button">컬럼명 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))

@@ -31,7 +31,10 @@
     .table-wrap { overflow: auto; max-height: 70vh; }
     .sample { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .field { display: block; margin-bottom: 8px; }
-    .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
+    .field label > span { display: block; font-weight: 600; margin-bottom: 4px; }
+    .field-error { color: #a50e0e; display: block; font-size: 13px; margin-top: 4px; }
+    .invalid-field input { border-color: #d93025; }
+    .invalid-field input:focus { outline: 2px solid #d93025; outline-offset: 2px; }
     .decision-toggle { display: flex; gap: 6px; flex-wrap: wrap; }
     .decision-button { border: 1px solid #aeb6bf; background: #fff; border-radius: 4px; cursor: pointer; font-weight: 600; padding: 6px 10px; }
     .decision-button[aria-pressed="true"] { background: #1f6feb; border-color: #1f6feb; color: #fff; }
@@ -65,7 +68,10 @@
 <body>
   <h1>PrivySpark Review Response Example</h1>
   <p>Scan path: <code id="scanPath"></code></p>
-  <p><label>응답자 <input id="responder"></label></p>
+  <p class="field" id="responderField">
+    <label><span>응답자</span><input id="responder" required aria-invalid="false" aria-describedby="responderError"></label>
+    <span id="responderError" class="field-error" hidden>응답자를 입력하세요.</span>
+  </p>
   <div class="bulk-actions">
     <label>정탐 사유/계획 <textarea id="bulkTruePositivePlan" rows="2"></textarea></label>
     <label>조치 예정일 <input id="bulkTruePositiveDueDate" type="date"></label>
@@ -502,6 +508,25 @@
       }
       applyValidationState(hydratedRows.get(numericIndex), numericIndex);
     }
+    const responderInput = document.getElementById('responder');
+    const responderField = document.getElementById('responderField');
+    const responderError = document.getElementById('responderError');
+    function clearResponderValidation() {
+      responderField.classList.remove('invalid-field');
+      responderInput.setAttribute('aria-invalid', 'false');
+      responderError.hidden = true;
+    }
+    function validateResponder() {
+      if (!isBlank(responderInput.value)) {
+        clearResponderValidation();
+        return true;
+      }
+      responderField.classList.add('invalid-field');
+      responderInput.setAttribute('aria-invalid', 'true');
+      responderError.hidden = false;
+      responderInput.focus();
+      return false;
+    }
     function validateResponses(responses) {
       const errors = [];
       responses.forEach((response, index) => {
@@ -828,6 +853,11 @@
     tbody.addEventListener('change', handleFormEvent);
     document.getElementById('applyBulkTruePositivePlan').addEventListener('click', applyBulkTruePositivePlan);
     document.getElementById('applyBulkFalsePositiveReason').addEventListener('click', applyBulkFalsePositiveReason);
+    responderInput.addEventListener('input', () => {
+      if (!isBlank(responderInput.value)) {
+        clearResponderValidation();
+      }
+    });
     renderFindings();
     document.getElementById('downloadResponse').addEventListener('click', () => {
       const values = collectFormValues();
@@ -848,18 +878,21 @@
         }, values[index] || {});
         return response;
       });
+      const responderIsValid = validateResponder();
       const responseValidationErrors = validateResponses(responses);
+      setValidationState(responseValidationErrors);
+      if (!responderIsValid) {
+        return;
+      }
       if (responseValidationErrors.length > 0) {
-        setValidationState(responseValidationErrors);
         focusFirstValidationError(firstValidationErrorInDisplayOrder(responseValidationErrors));
         return;
       }
-      setValidationState([]);
       const sanitizedResponses = responses.map(sanitizeResponse).filter(response => response.decision);
       const envelope = {
         schema_version: 1,
         scan_path: REVIEW_DATA.scan_path,
-        responder: document.getElementById('responder').value.trim(),
+        responder: responderInput.value.trim(),
         responded_at: new Date().toISOString(),
         responses: sanitizedResponses
       };
