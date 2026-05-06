@@ -93,6 +93,7 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - CLI 값을 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`을 적용합니다.
 - executor-side `xlsx` 스트리머는 한 workbook sheet를 하나의 Spark task에서 읽습니다. 단일 시트 자체를 row 단위로 split해서 여러 executor가 나눠 읽게 만들지는 않으며, cache/persist도 추가하지 않아 여러 action에서는 workbook zip을 다시 읽습니다.
 - workbook ZIP 엔트리 순회는 Spark/Hadoop 런타임에 번들된 구버전 `commons-compress`와 호환되는 API를 사용합니다. 따라서 `xlsx` scan의 `NoSuchMethodError` 회피를 위해 cluster 공통 classpath를 별도로 덮어쓸 필요가 없습니다.
+- Shadow fat JAR는 `commons-compress`를 앱 내부 패키지로 relocate합니다. 이 설정은 Spark/Hadoop 런타임의 구버전 `commons-compress`가 먼저 잡히는 환경에서도 `review.xlsm` 생성 등 POI 기반 workbook write 경로가 자체 포함된 호환 버전을 사용하게 합니다.
 
 ## 샘플링
 - `--sample-ratio`는 비결정적 row sampling입니다.

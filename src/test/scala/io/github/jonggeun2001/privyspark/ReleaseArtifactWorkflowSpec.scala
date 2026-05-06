@@ -132,9 +132,17 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(html.contains(".placeholder-summary { display: block; max-height: 120px; overflow: hidden; }"))
     assert(html.contains("""<td class="metric-cell">${escapeHtml(finding.sampled_row_count)}</td>"""))
     assert(html.contains("""<td class="metric-cell">${escapeHtml(finding.match_count)}</td>"""))
-    assert(html.contains("""<td class="metric-cell">${escapeHtml(formatPercent(finding.non_empty_match_ratio))}</td>"""))
-    assert(html.contains("function formatPercent(value)"))
-    assert(html.contains("return (numeric * 100).toFixed(2);"))
+    assert(html.contains("""<td class="metric-cell">${escapeHtml(formatDetectionPercent(finding))}</td>"""))
+    assert(html.contains("function detectionPercentValue(finding)"))
+    assert(html.contains("const matchCount = Number(finding.match_count);"))
+    assert(html.contains("const sampledRowCount = Number(finding.sampled_row_count);"))
+    assert(html.contains("return matchCount / sampledRowCount * 100;"))
+    assert(html.contains("function formatDetectionPercent(finding)"))
+    assert(html.contains("const percent = detectionPercentValue(finding);"))
+    assert(html.contains("return percent === null ? '' : percent.toFixed(2);"))
+    assert(html.contains("return detectionPercentValue(finding) ?? 0;"))
+    assert(!html.contains("formatPercent(finding.non_empty_match_ratio)"))
+    assert(!html.contains("function formatPercent(value)"))
     assert(html.contains("escapeHtml(sample.sample_matched_fragment) + '\\n' +"))
     assert(!html.contains("escapeHtml(sample.sample_matched_fragment) + '\\\\n' +"))
     assert(!html.contains("confidence=${escapeHtml(finding.confidence)}"))
@@ -308,6 +316,15 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(
       !buildScript.contains("""implementation("org.mariadb.jdbc:mariadb-java-client:"""),
       "MariaDB JDBC driver must not be an implementation dependency"
+    )
+  }
+
+  test("shadow jar relocates commons-compress away from Spark runtime classpath") {
+    val buildScript = readText("build.gradle.kts")
+
+    assert(
+      buildScript.contains("""relocate("org.apache.commons.compress", "io.github.jonggeun2001.privyspark.shaded.org.apache.commons.compress")"""),
+      "Shadow JAR should isolate commons-compress so POI workbook writes do not link against Spark/Hadoop's older copy"
     )
   }
 

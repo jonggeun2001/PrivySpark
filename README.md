@@ -106,6 +106,7 @@ bash scripts/verify-worktree.sh
 - `--output-format`은 반복 지정 가능하고, 기본값은 `parquet`입니다. 지원값은 `parquet`, `csv`, `excel`입니다.
 - `--suppress`는 반복 지정 가능하며 `column:pii_type` 형식입니다. `--suppression-file`은 같은 형식을 줄 단위로 읽고, ruleset `suppressions:`와 union으로 합쳐집니다.
 - Hive table 매핑은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 기본 JDBC driver class는 `org.mariadb.jdbc.Driver`이고, MySQL 등 다른 driver를 쓰면 `--hive-metastore-jdbc-driver-class <CLASS>` 또는 Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`로 지정합니다. CLI 값이 Spark conf보다 우선합니다. JDBC driver JAR는 fat JAR에 포함하지 않으므로 cluster classpath에 두거나 `PRIVYSPARK_JARS=/path/to/driver.jar`로 함께 제출합니다. driver가 없거나 JDBC 접속/query가 실패하면 warning 후 `hive_table_fqn`은 빈 문자열로 남습니다.
+- Shadow fat JAR는 `commons-compress`를 앱 내부 패키지로 relocate합니다. 따라서 Spark/Hadoop 런타임의 구버전 `commons-compress`가 먼저 잡혀도 `review.xlsm` 생성 같은 POI 기반 workbook write 경로가 런타임 `NoSuchMethodError`에 영향을 받지 않습니다.
 - 기본 ruleset은 [config/rules/default.yaml](config/rules/default.yaml)에 있습니다.
 
 ### 결과를 확인하는 위치

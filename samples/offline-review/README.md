@@ -10,7 +10,7 @@
 - PII types are displayed as Korean names such as `이메일` and `운전면허번호`; downloaded JSON keeps the collector's raw `pii_type` values.
 - Select decisions with the false-positive and true-positive buttons. The top guidance block contains the shared examples instead of repeating hints in every row.
 - The top guidance block includes false-positive reason examples, such as `거래일시 포맷이 운전면허번호 규칙과 충돌`.
-- The detection ratio column displays percentages with two decimal places, and the detection sample column separates matched fragments from raw sample context with actual line breaks; path, column, and PII type stay in their separate columns.
+- The detection ratio column calculates `match_count / sampled_row_count * 100` and displays percentages with two decimal places, while the detection sample column separates matched fragments from raw sample context with actual line breaks; path, column, and PII type stay in their separate columns.
 - False-positive responses use recurring review state only; exact scope and pattern selector controls are not shown.
 - False-positive reason and true-positive action-plan fields are split into individual columns and shown based on the selected decision. False-positive expiry is not shown in the review UI.
 - Use the bulk true-positive button to fill `action_plan` and `action_due_date` for findings already marked `true_positive`, or the bulk false-positive button to fill `false_positive_reason` for findings already marked `false_positive`.

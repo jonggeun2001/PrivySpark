@@ -91,6 +91,7 @@ These settings do not directly guarantee executor fan-out. Actual executor distr
 - When the CLI option is omitted, PrivySpark uses the `spark.privyspark.excel.byteArrayMaxOverride` Spark conf, and if that conf is also absent it applies the default value `300000000`.
 - The executor-side `xlsx` streamer reads one workbook sheet in one Spark task. It does not make a single sheet row-splittable across executors, and it intentionally avoids cache/persist, so repeated actions reread the workbook zip.
 - Workbook ZIP entry iteration uses an API compatible with older `commons-compress` versions bundled by Spark/Hadoop runtimes. Operators do not need to override the cluster common classpath to avoid `NoSuchMethodError` during `xlsx` scans.
+- The Shadow fat JAR relocates `commons-compress` into a PrivySpark-internal package. This keeps POI-based workbook write paths such as `review.xlsm` generation on the bundled compatible copy even when Spark/Hadoop exposes an older `commons-compress` first.
 
 ## Sampling
 - `--sample-ratio` is non-deterministic row sampling.
