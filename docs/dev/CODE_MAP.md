@@ -44,7 +44,7 @@
 - `review/fingerprint/ArchiveFingerprintResolver.scala`: archive identifier parsing L21, archive format dispatch L30.
 - `review/fingerprint/Crc32Stream.scala`: CRC32 stream calculation L16, temporary local archive helper L54.
 - `review/ReviewCollectCommand.scala`: collect ADT L12-L65, lock/strict validation/write orchestration L68.
-- `review/collect/ReviewCollectLock.scala`: collect lock path L31, atomic lock acquire L34, release L48.
+- `review/collect/ReviewCollectLock.scala`: collect lock path L31, atomic lock acquire L34, release L55.
 - `review/collect/ResponseEnvelopeReader.scala`: inbox JSON read L13, response envelope parse L30.
 - `review/collect/ResponseValidator.scala`: envelope validation L9, response item validation L23.
 - `review/collect/ReviewStateBuilder.scala`: current state build L23, recurring/action-plan retention helpers L85.

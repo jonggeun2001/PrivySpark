@@ -32,8 +32,10 @@ private[privyspark] object ReviewCollectLock {
     s"${reviewStateRoot.stripSuffix("/")}/$LockFileName"
 
   private def acquire(fs: FileSystem, lock: Path): Unit = {
+    var created = false
     try {
       val output = fs.create(lock, false)
+      created = true
       try {
         output.write(lockMetadata().getBytes(StandardCharsets.UTF_8))
       } finally {
@@ -42,12 +44,17 @@ private[privyspark] object ReviewCollectLock {
     } catch {
       case e: FileAlreadyExistsException =>
         throw new IllegalStateException(s"Review collect lock already exists: ${lock.toString}", e)
+      case NonFatal(e) =>
+        if (created) {
+          deleteQuietly(fs, lock)
+        }
+        throw e
     }
   }
 
   private def release(fs: FileSystem, lock: Path): Unit = {
     try {
-      if (fs.exists(lock) && !fs.delete(lock, false)) {
+      if (!deleteQuietly(fs, lock)) {
         DriverLogger.warn("review_collect_lock_release_failed", "lock" -> lock.toString)
       }
     } catch {
@@ -59,6 +66,9 @@ private[privyspark] object ReviewCollectLock {
         )
     }
   }
+
+  private def deleteQuietly(fs: FileSystem, lock: Path): Boolean =
+    !fs.exists(lock) || fs.delete(lock, false)
 
   private def lockMetadata(): String =
     s"run_id=${UUID.randomUUID().toString}\ncreated_at=${Instant.now().toString}\n"
