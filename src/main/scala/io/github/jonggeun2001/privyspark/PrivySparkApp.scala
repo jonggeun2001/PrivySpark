@@ -47,6 +47,9 @@ object PrivySparkApp {
       session.sparkContext.setLogLevel("WARN")
       command match {
         case CliCommand.Scan(config) =>
+          config.reviewStateRoot.foreach { root =>
+            runReviewCollectCommand(session, ReviewCollectCliConfig(reviewStateRoot = root))
+          }
           runScanCommand(session, config)
         case CliCommand.ReviewApply(config) =>
           runReviewApplyCommand(session, config)

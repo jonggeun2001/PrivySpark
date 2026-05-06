@@ -127,16 +127,17 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
       responseEnvelope("/data/project", Seq(response)).getBytes(StandardCharsets.UTF_8)
     )
 
-    ReviewCollectCommand.run(
-      spark,
-      ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
-    )
+    val thrown = intercept[IllegalStateException] {
+      ReviewCollectCommand.run(
+        spark,
+        ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
+      )
+    }
 
-    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
-    val ledger = read(stateRoot.resolve("current/response_ledger.jsonl"))
-
-    assert(allowlist.trim.isEmpty)
-    assert(ledger.trim.isEmpty)
+    assert(thrown.getMessage.contains("Rejected review responses"))
+    assert(thrown.getMessage.contains("unsupported allowlist_scope: exact"))
+    assert(!Files.exists(stateRoot.resolve("current/allowlist.jsonl")))
+    assert(!Files.exists(stateRoot.resolve(".collect.lock")))
   }
 
   test("collect rejects wildcard column or pii fields in new recurring false positive responses") {
@@ -162,16 +163,34 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
       responseEnvelope("/data/project", Seq(wildcardColumn, wildcardPii)).getBytes(StandardCharsets.UTF_8)
     )
 
-    ReviewCollectCommand.run(
-      spark,
-      ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
-    )
+    val thrown = intercept[IllegalStateException] {
+      ReviewCollectCommand.run(
+        spark,
+        ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
+      )
+    }
 
-    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
-    val ledger = read(stateRoot.resolve("current/response_ledger.jsonl"))
+    assert(thrown.getMessage.contains("Rejected review responses"))
+    assert(thrown.getMessage.contains("column_name and pii_type must be exact values without wildcard '*'"))
+    assert(!Files.exists(stateRoot.resolve("current/allowlist.jsonl")))
+    assert(!Files.exists(stateRoot.resolve(".collect.lock")))
+  }
 
-    assert(allowlist.trim.isEmpty)
-    assert(ledger.trim.isEmpty)
+  test("collect fails while review state collect lock exists") {
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-lock-held-")
+    Files.createDirectories(stateRoot.resolve("inbox"))
+    Files.write(stateRoot.resolve(".collect.lock"), "locked by another run\n".getBytes(StandardCharsets.UTF_8))
+
+    val thrown = intercept[IllegalStateException] {
+      ReviewCollectCommand.run(
+        spark,
+        ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
+      )
+    }
+
+    assert(thrown.getMessage.contains("Review collect lock already exists"))
+    assert(Files.exists(stateRoot.resolve(".collect.lock")))
+    assert(!Files.exists(stateRoot.resolve("current/allowlist.jsonl")))
   }
 
   test("collect removes recurring allowlist entry when same finding is later reviewed as true positive") {

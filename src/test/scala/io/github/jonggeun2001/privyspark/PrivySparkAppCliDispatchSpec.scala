@@ -8,6 +8,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
 import java.util.concurrent.atomic.AtomicReference
+import scala.collection.mutable.ArrayBuffer
 
 @RunWith(classOf[JUnitRunner])
 class PrivySparkAppCliDispatchSpec extends AnyFunSuite with BeforeAndAfterAll {
@@ -83,6 +84,60 @@ class PrivySparkAppCliDispatchSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(executedScan.get().isEmpty)
     assert(executedReview.get().isEmpty)
     assert(executedCollect.get().exists(_.reviewStateRoot == "/data/review-state"))
+  }
+
+  test("runMain collects review state before scan when review-state-root is configured") {
+    val calls = ArrayBuffer.empty[String]
+    val executedScan = new AtomicReference[Option[CliConfig]](None)
+    val executedCollect = new AtomicReference[Option[ReviewCollectCliConfig]](None)
+
+    PrivySparkApp.runMain(
+      Array(
+        "--path",
+        "/data/input",
+        "--output",
+        "/data/output",
+        "--review-state-root",
+        "/data/review-state"
+      ),
+      createSparkSession = () => testSpark,
+      exitWith = _ => (),
+      runScanCommand = (_, config) => {
+        calls += "scan"
+        executedScan.set(Some(config))
+      },
+      runReviewCollectCommand = (_, config) => {
+        calls += "collect"
+        executedCollect.set(Some(config))
+      }
+    )
+
+    assert(calls.toSeq == Seq("collect", "scan"))
+    assert(executedCollect.get().exists(_.reviewStateRoot == "/data/review-state"))
+    assert(executedScan.get().exists(_.reviewStateRoot.contains("/data/review-state")))
+  }
+
+  test("runMain fails scan before execution when automatic review collect fails") {
+    val exitCode = new AtomicReference[Option[Int]](None)
+    val executedScan = new AtomicReference[Option[CliConfig]](None)
+
+    PrivySparkApp.runMain(
+      Array(
+        "--path",
+        "/data/input",
+        "--output",
+        "/data/output",
+        "--review-state-root",
+        "/data/review-state"
+      ),
+      createSparkSession = () => testSpark,
+      exitWith = code => exitCode.set(Some(code)),
+      runScanCommand = (_, config) => executedScan.set(Some(config)),
+      runReviewCollectCommand = (_, _) => throw new IllegalStateException("Rejected review responses")
+    )
+
+    assert(exitCode.get().contains(1))
+    assert(executedScan.get().isEmpty)
   }
 
   test("runMain rejects relative review html directory before creating Spark session") {

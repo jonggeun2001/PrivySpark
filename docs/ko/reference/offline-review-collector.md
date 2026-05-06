@@ -17,14 +17,7 @@ privyspark scan \
 
 3. 다운로드한 `response-<scan-path>-YYYYMMDD-HHMMSS.json`을 `<review-state-root>/inbox/*.json`에 업로드합니다.
 
-4. collector를 실행합니다.
-
-```bash
-privyspark review collect \
-  --review-state-root hdfs:///review-state-root
-```
-
-5. 다음 스캔은 같은 `--review-state-root`를 지정합니다. 오탐은 recurring allowlist에 매칭되면 결과에서 제외되고, 정탐은 제외하지 않고 조치 상태만 누적됩니다.
+4. 다음 스캔을 같은 `--review-state-root`로 실행합니다. scan 명령은 본 스캔을 시작하기 전에 `<review-state-root>/inbox/*.json`을 자동 수집해 `<review-state-root>/current`를 갱신합니다. 오탐은 recurring allowlist에 매칭되면 결과에서 제외되고, 정탐은 제외하지 않고 조치 상태만 누적됩니다.
 
 `review collect`는 response JSON 자체에 포함된 컨텍스트를 사용합니다. `--scan-results`는 더 이상 필요하지 않으며, 지정해도 recurring 수집 판단에는 사용하지 않습니다.
 
@@ -34,6 +27,7 @@ collector는 `<review-state-root>/current` 아래 파일을 갱신합니다.
 
 ```text
 review-state-root/
+  .collect.lock
   inbox/
     response-*.json
   current/
@@ -47,6 +41,8 @@ review-state-root/
 - `action_plan.jsonl`: 정탐 조치 계획
 - `finding_status.jsonl`: 최근 수집 응답과 기존 조치 계획의 상태 요약
 - `response_ledger.jsonl`: 수집된 응답 감사 로그
+
+`scan --review-state-root`와 `review collect`는 state 갱신 중 `<review-state-root>/.collect.lock`을 생성합니다. 이미 lock 파일이 있으면 동시 갱신을 막기 위해 명령이 실패합니다. 수집이 정상 종료되거나 검증 실패로 중단되면 lock 파일은 삭제됩니다.
 
 `scan`은 `current/allowlist.jsonl`만 suppress 판단에 사용합니다. `action_plan.jsonl`은 finding을 숨기지 않습니다.
 
@@ -158,6 +154,8 @@ collector는 response JSON에 대해 다음을 검증합니다.
 - 정탐은 `action_plan`, `action_due_date` 필수
 - `expires_at`, `action_due_date`는 `YYYY-MM-DD`
 - `allowlist_scope=exact` 등 recurring이 아닌 scope는 거부
+
+invalid response가 하나라도 있으면 collector는 `<review-state-root>/current`를 갱신하지 않고 실패합니다. `scan --review-state-root`에서 자동 수집 중 같은 실패가 발생하면 스캔 본 작업을 시작하지 않습니다.
 
 ## review.html
 

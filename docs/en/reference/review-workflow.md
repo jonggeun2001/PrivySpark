@@ -23,9 +23,6 @@ privyspark scan \
   --path /abs/input \
   --output /abs/output \
   --review-state-root /abs/review-state
-
-privyspark review collect \
-  --review-state-root /abs/review-state
 ```
 
-Upload returned response JSON files into `/abs/review-state/inbox/*.json` before running `review collect`.
+Upload returned response JSON files into `/abs/review-state/inbox/*.json`. The next `scan --review-state-root /abs/review-state` automatically collects them before scanning. If any response is invalid or another collect holds `/abs/review-state/.collect.lock`, the scan fails before the scan work starts.

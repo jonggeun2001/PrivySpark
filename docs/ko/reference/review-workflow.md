@@ -25,9 +25,6 @@ privyspark scan \
   --path /abs/input \
   --output /abs/output \
   --review-state-root /abs/review-state
-
-privyspark review collect \
-  --review-state-root /abs/review-state
 ```
 
-회수한 response JSON은 `/abs/review-state/inbox/*.json`에 업로드합니다. `review.xlsm`을 사용한 경우 Excel 파일 자체가 아니라 통합 문서의 `review.json 생성` 버튼으로 만든 JSON 파일을 업로드합니다.
+회수한 response JSON은 `/abs/review-state/inbox/*.json`에 업로드합니다. 다음 `scan --review-state-root /abs/review-state`는 스캔 시작 전에 자동으로 수집을 실행합니다. invalid response가 있거나 다른 collect가 `/abs/review-state/.collect.lock`을 보유 중이면 스캔은 시작하지 않고 실패합니다. `review.xlsm`을 사용한 경우 Excel 파일 자체가 아니라 통합 문서의 `review.json 생성` 버튼으로 만든 JSON 파일을 업로드합니다.
