@@ -43,7 +43,7 @@
 ## `review collect` CLI Arguments
 - `--review-state-root <ABS_PATH_OR_URI>`: state root where response JSON files are read and cumulative review state is written
 
-`review collect` reads only `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`. `--scan-results` is no longer required. Later scans with the same `--review-state-root` apply the recurring false-positive allowlist.
+`review collect` reads only `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`. `--scan-results` is no longer required. Later scans with the same `--review-state-root` apply the recurring false-positive allowlist and show prior true-positive action plans for still-detected findings in the existing action status (`기존 조치 상태`) review HTML column.
 
 ## Ignore Patterns
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`

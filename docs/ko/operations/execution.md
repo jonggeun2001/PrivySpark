@@ -43,7 +43,7 @@
 ## `review collect` CLI 인자
 - `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
 
-`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. `--scan-results`는 더 이상 필요하지 않습니다. 다음 스캔은 같은 `--review-state-root`를 지정해 recurring 오탐 allowlist를 반영합니다.
+`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. `--scan-results`는 더 이상 필요하지 않습니다. 다음 스캔은 같은 `--review-state-root`를 지정해 recurring 오탐 allowlist를 반영하고, 계속 검출되는 정탐은 `review.html`의 `기존 조치 상태` 컬럼에 이전 조치 계획을 표시합니다.
 
 오프라인 리뷰 identity와 allowlist 매칭에서는 HDFS URI path의 중복 slash를 정규화합니다. 예를 들어 `hdfs:///user/name`과 `hdfs:////user/name`은 같은 스캔 경로로 취급됩니다.
 

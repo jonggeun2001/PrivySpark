@@ -8,6 +8,7 @@ import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.util.Collections
 
 @RunWith(classOf[JUnitRunner])
 class ReviewHtmlWriterSpec extends AnyFunSuite {
@@ -24,6 +25,58 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains(""""scan_path":"/data/${REVIEW_APP_SCRIPT}/project""""))
     assert(html.contains("document.getElementById('scanPath').textContent = REVIEW_DATA.scan_path;"))
     assert(!html.contains(""""scan_path":"/data/    document.getElementById"""))
+  }
+
+  test("write shows matching pending true-positive action plan in review HTML") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-action-html-")
+    val stateRoot = Files.createTempDirectory("privyspark-review-action-state-")
+    val currentDir = stateRoot.resolve("current")
+    Files.createDirectories(currentDir)
+    Files.write(
+      currentDir.resolve("action_plan.jsonl"),
+      Collections.singletonList(
+        """{"finding_key":"old-key","scan_path":"/data/project","file_identifier":"customers/old.parquet","hive_database":"mart","hive_table":"customers","hive_table_fqn":"mart.customers","column_name":"email","pii_type":"email","action_plan":"삭제 처리","action_due_date":"2999-12-31","responder":"owner","responded_at":"2026-05-01T00:00:00Z","status":"remediation_planned"}"""
+      ),
+      StandardCharsets.UTF_8
+    )
+    val result = ScanResult(
+      dataset_path = "/data/project",
+      scan_timestamp = "2026-05-06T10:00:00Z",
+      file_identifier = "customers/part-000.parquet",
+      column_name = "email",
+      pii_type = "email",
+      match_count = 3L,
+      sampled_row_count = 10L,
+      match_ratio = 0.3,
+      non_empty_match_ratio = 0.3,
+      confidence = 0.1,
+      sample_raw_value = "owner=alice@example.com",
+      sample_matched_fragment = "alice@example.com",
+      file_size = 128L,
+      file_mtime_epoch_ms = 1710000000000L,
+      hive_table_fqn = "mart.customers"
+    )
+
+    ReviewHtmlWriter.write(
+      new Configuration(),
+      outputRoot.toString,
+      "/data/project",
+      Seq(result),
+      sampleMode = "masked",
+      reviewHtmlDir = None,
+      reviewStateRoot = Some(stateRoot.toString)
+    )
+
+    val htmlPath = outputRoot.resolve("review").resolve("review.html")
+    val html = new String(Files.readAllBytes(htmlPath), StandardCharsets.UTF_8)
+
+    assert(html.contains("""data-sort-key="existing_action_status""""))
+    assert(html.contains("기존 조치 상태"))
+    assert(html.contains("삭제 조치 필요"))
+    assert(html.contains("삭제 처리"))
+    assert(html.contains("2999-12-31"))
+    assert(html.contains("owner"))
+    assert(html.contains("action_plan_state"))
   }
 
   test("write creates only review.html under the scan output review directory and includes masked samples") {
@@ -79,6 +132,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("table-layout: fixed;"))
     assert(html.contains("""<colgroup>"""))
     assert(html.contains("""<col class="col-path">"""))
+    assert(html.contains("""<col class="col-existing-action">"""))
     assert(html.contains("""<col class="col-due-date">"""))
     assert(html.contains(".col-path { width: 260px; }"))
     assert(html.contains(".col-sample { width: 280px; }"))
@@ -101,6 +155,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(!html.contains("""<button type="button" class="sort-button">검출 비율 <span class="sort-indicator" aria-hidden="true"></span></button>"""))
     assert(!html.contains("""<button type="button" class="sort-button">검출 샘플 <span class="sort-indicator" aria-hidden="true"></span></button>"""))
     assert(html.contains("""<th scope="col" data-sort-key="decision" aria-sort="none"><button type="button" class="sort-button">판정 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
+    assert(html.contains("""<th scope="col" data-sort-key="existing_action_status" aria-sort="none"><button type="button" class="sort-button">기존 조치 상태 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<th scope="col" data-sort-key="false_positive_reason" aria-sort="none"><button type="button" class="sort-button">오탐 사유 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(!html.contains("""data-sort-key="file_identifier_pattern""""))
     assert(!html.contains("""data-sort-key="column_name_pattern""""))
@@ -110,7 +165,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("""<th scope="col" data-sort-key="action_plan" aria-sort="none"><button type="button" class="sort-button">정탐 조치 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<th scope="col" data-sort-key="action_due_date" aria-sort="none"><button type="button" class="sort-button">조치 예정일 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span>"""))
-    assert(html.contains("""<td colspan="12" class="placeholder-cell">"""))
+    assert(html.contains("""<td colspan="13" class="placeholder-cell">"""))
     assert(html.contains(".placeholder-summary { display: block; max-height: 120px; overflow: hidden; }"))
     assert(html.contains("""<td class="metric-cell">${escapeHtml(finding.sampled_row_count)}</td>"""))
     assert(html.contains("""<td class="metric-cell">${escapeHtml(finding.match_count)}</td>"""))
@@ -137,6 +192,8 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("function hydrateRow(row)"))
     assert(html.contains("function dehydrateRow(row)"))
     assert(html.contains("function sortRows(rows)"))
+    assert(html.contains("function renderExistingActionCell(finding)"))
+    assert(html.contains("function existingActionSortText(finding)"))
     assert(html.contains("tbody.replaceChildren(fragment);"))
     assert(!html.contains("document.querySelectorAll('[data-index]').forEach(input => {"))
     assert(!html.contains("tbody.innerHTML = '';"))
