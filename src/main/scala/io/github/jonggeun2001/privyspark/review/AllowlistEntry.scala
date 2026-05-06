@@ -21,7 +21,8 @@ final case class AllowlistEntry(
   fileChecksumAlgo: String,
   fileChecksum: String
 ) {
-  def key: AllowlistKey = AllowlistKey(datasetPath, fileIdentifier, columnName, piiType)
+  def key: AllowlistKey =
+    AllowlistKey(ReviewPathNormalizer.normalizeScanPath(datasetPath), fileIdentifier, columnName, piiType)
 }
 
 final case class PatternAllowlistKey(
@@ -42,7 +43,47 @@ final case class PatternAllowlistEntry(
   expiresAt: String,
   sourceFindingKey: String
 ) {
-  def key: PatternAllowlistKey = PatternAllowlistKey(datasetPath, fileIdentifierPattern, columnNamePattern, piiTypePattern)
+  def key: PatternAllowlistKey =
+    PatternAllowlistKey(
+      ReviewPathNormalizer.normalizeScanPath(datasetPath),
+      fileIdentifierPattern,
+      columnNamePattern,
+      piiTypePattern
+  )
+}
+
+final case class RecurringAllowlistKey(
+  scanPath: String,
+  hiveTableFqn: String,
+  fileIdentifierPattern: String,
+  columnName: String,
+  piiType: String
+)
+
+final case class RecurringAllowlistEntry(
+  scanPath: String,
+  hiveTableFqn: String,
+  fileIdentifierPattern: String,
+  columnName: String,
+  piiType: String,
+  reason: String,
+  reviewer: String,
+  reviewedAt: String,
+  expiresAt: String,
+  sourceFindingKey: String,
+  sampleRowCount: Long,
+  matchCount: Long,
+  nonEmptyMatchRatio: Double,
+  fieldWildcardsEnabled: Boolean = false
+) {
+  def key: RecurringAllowlistKey =
+    RecurringAllowlistKey(
+      ReviewPathNormalizer.normalizeScanPath(scanPath),
+      hiveTableFqn,
+      fileIdentifierPattern,
+      columnName,
+      piiType
+    )
 }
 
 final case class ResolvedFileFingerprint(

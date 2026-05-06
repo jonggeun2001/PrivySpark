@@ -130,19 +130,33 @@ object RulesetLoader {
 
   private def parseSuppressions(root: java.util.Map[String, Object]): Seq[Suppression] = {
     Option(root.get("suppressions"))
-      .map(_.asInstanceOf[java.util.List[java.util.Map[String, Object]]].asScala.map(parseSuppression).toSeq)
+      .map(_.asInstanceOf[java.util.List[java.util.Map[String, Object]]].asScala.flatMap(parseSuppression).toSeq)
       .getOrElse(Seq.empty)
   }
 
-  private def parseSuppression(item: java.util.Map[String, Object]): Suppression = {
-    val columnName = Option(item.get("column")).map(_.toString.trim).getOrElse("")
+  private def parseSuppression(item: java.util.Map[String, Object]): Seq[Suppression] = {
+    val columnNames = parseSuppressionColumns(item)
     val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
 
-    if (columnName.isEmpty || piiType.isEmpty) {
-      throw new IllegalArgumentException("Each suppression must include column and pii_type")
+    if (columnNames.isEmpty || piiType.isEmpty) {
+      throw new IllegalArgumentException("Each suppression must include column or columns and pii_type")
     }
 
-    Suppression(columnName, piiType)
+    columnNames.map(columnName => Suppression(columnName, piiType))
+  }
+
+  private def parseSuppressionColumns(item: java.util.Map[String, Object]): Seq[String] = {
+    val rawColumns = Option(item.get("columns")).orElse(Option(item.get("column")))
+    rawColumns.map(parseStringList).getOrElse(Seq.empty)
+  }
+
+  private def parseStringList(rawValue: Object): Seq[String] = {
+    rawValue match {
+      case values: java.util.List[_] =>
+        values.asScala.flatMap(value => Option(value).map(_.toString.trim)).filter(_.nonEmpty).toSeq
+      case value =>
+        Option(value).map(_.toString.trim).filter(_.nonEmpty).toSeq
+    }
   }
 }
 

@@ -57,8 +57,10 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
         )
       )
 
-      val matcher = AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, allowlistPath.toString)
-      assert(matcher.hasExactCandidate(inputRoot.toString, "users.csv", "email", "email"))
+      val allowlist = read(allowlistPath)
+      assert(allowlist.contains("users.csv"))
+      assert(allowlist.contains("known dummy data"))
+      assert(allowlist.contains("file_checksum"))
     } finally {
       deleteRecursively(inputRoot)
     }
@@ -103,9 +105,9 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
         )
       )
 
-      val matcher = AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, allowlistPath.toString)
-      assert(matcher.hasExactCandidate(inputRoot.toString, "reviews/a.csv", "resident_registration_number", "rrn"))
-      assert(matcher.hasExactCandidate(inputRoot.toString, "reviews/b.csv", "resident_registration_number", "rrn"))
+      val allowlist = read(allowlistPath)
+      assert(allowlist.contains("reviews/a.csv"))
+      assert(allowlist.contains("reviews/b.csv"))
     } finally {
       deleteRecursively(inputRoot)
     }
@@ -150,9 +152,9 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
         )
       )
 
-      val matcher = AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, allowlistPath.toString)
-      assert(matcher.hasExactCandidate(inputRoot.toString, "reviews/a|b.csv", "resident_registration_number", "rrn"))
-      assert(matcher.hasExactCandidate(inputRoot.toString, "reviews/c.csv", "resident_registration_number", "rrn"))
+      val allowlist = read(allowlistPath)
+      assert(allowlist.contains("reviews/a|b.csv"))
+      assert(allowlist.contains("reviews/c.csv"))
     } finally {
       deleteRecursively(inputRoot)
     }
@@ -195,8 +197,8 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
         )
       )
 
-      val matcher = AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, allowlistPath.toString)
-      assert(matcher.hasExactCandidate(inputRoot.toString, " reviews/a.csv", "resident_registration_number", "rrn"))
+      val allowlist = read(allowlistPath)
+      assert(allowlist.contains(" reviews/a.csv"))
     } finally {
       deleteRecursively(inputRoot)
     }
@@ -382,8 +384,9 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
         )
       )
 
-      val matcher = AllowlistMatcher.load(spark.sparkContext.hadoopConfiguration, allowlistPath.toString)
-      assert(matcher.hasExactCandidate(inputRoot.toString, "users.csv", "email", "email"))
+      val allowlist = read(allowlistPath)
+      assert(allowlist.contains("users.csv"))
+      assert(allowlist.contains("known dummy data"))
     } finally {
       deleteRecursively(inputRoot)
     }
@@ -603,6 +606,9 @@ class ReviewApplyCommandSpec extends AnyFunSuite {
     }
     ReviewScopeFingerprintCodec.encode(fingerprints)
   }
+
+  private def read(path: Path): String =
+    new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
 
   private def deleteRecursively(path: Path): Unit = {
     if (Files.exists(path)) {

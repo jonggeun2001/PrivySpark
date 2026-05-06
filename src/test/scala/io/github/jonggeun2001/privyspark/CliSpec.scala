@@ -257,8 +257,6 @@ class CliSpec extends AnyFunSuite {
       Array(
         "review",
         "collect",
-        "--scan-results",
-        "/data/output/parquet/scan_results",
         "--review-state-root",
         "/data/review-state"
       )
@@ -268,7 +266,7 @@ class CliSpec extends AnyFunSuite {
     assert(parsed.get.isInstanceOf[CliCommand.ReviewCollect])
 
     val config = parsed.get.asInstanceOf[CliCommand.ReviewCollect].config
-    assert(config.scanResultsPath == "/data/output/parquet/scan_results")
+    assert(config.scanResultsPath == "")
     assert(config.reviewStateRoot == "/data/review-state")
   }
 

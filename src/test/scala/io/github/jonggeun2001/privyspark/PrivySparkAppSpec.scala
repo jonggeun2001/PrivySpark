@@ -1,77 +1,52 @@
 package io.github.jonggeun2001.privyspark
 
-import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, SuppressionSet}
+import io.github.jonggeun2001.privyspark.config.{IgnoreMatcher, SuppressionParser, SuppressionSet}
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.format.{CsvHeaderHeuristic, CsvInference}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CsvDialect, DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult, Suppression}
 import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
-import io.github.jonggeun2001.privyspark.report.ReportWriter
-import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanner, ParseOkCache, SchemaSignatureCache}
-import io.github.jonggeun2001.privyspark.util.{DriverLogger, ParallelismConfig}
-import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
-import org.apache.commons.compress.archivers.tar.{TarArchiveEntry, TarArchiveOutputStream}
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream
-import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
-import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream
-import org.apache.commons.compress.compressors.zstandard.ZstdCompressorOutputStream
-import org.apache.poi.ss.usermodel.{DataFormatter, WorkbookFactory}
+import io.github.jonggeun2001.privyspark.report.{ReportWriter, WriteReportsRequest}
+import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanCoordinator, ParseOkCache, SchemaSignatureCache}
+import io.github.jonggeun2001.privyspark.util.ParallelismConfig
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.scheduler.{SparkListener, SparkListenerStageSubmitted}
 import org.junit.runner.RunWith
-import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
-import java.io.{BufferedWriter, ByteArrayOutputStream, IOException, OutputStreamWriter, PrintStream}
+import java.io.IOException
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.nio.file.attribute.{FileTime, PosixFilePermissions}
 import java.time.Instant
-import java.util.Comparator
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
-import java.util.zip.{ZipEntry, ZipOutputStream}
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.{Await, Future}
-import scala.util.control.ControlThrowable
 
 @RunWith(classOf[JUnitRunner])
-class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
-  private val spark = SparkSession.builder()
-    .appName("PrivySparkAppSpec")
-    .master("local[2]")
-    .config("spark.ui.enabled", "false")
-    .getOrCreate()
-
-  override def afterAll(): Unit = {
-    spark.stop()
-    super.afterAll()
-  }
-
-  private def capturePersistedRddNames[T](block: => T): (T, Seq[String]) = {
-    val persistedRdds = new ConcurrentLinkedQueue[String]()
-    val listener = new SparkListener {
-      override def onStageSubmitted(stageSubmitted: SparkListenerStageSubmitted): Unit = {
-        stageSubmitted.stageInfo.rddInfos.foreach { rddInfo =>
-          val storageLevel = rddInfo.storageLevel
-          if (storageLevel.useMemory || storageLevel.useDisk || storageLevel.useOffHeap) {
-            persistedRdds.add(s"${rddInfo.name}:${storageLevel.description}")
-          }
-        }
-      }
-    }
-
-    spark.sparkContext.addSparkListener(listener)
-    try {
-      (block, persistedRdds.toArray(new Array[String](0)).toSeq.distinct)
-    } finally {
-      spark.sparkContext.removeSparkListener(listener)
-    }
+class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
+  private def writeReportsRequest(
+    outputRoot: String,
+    results: Seq[ScanResult],
+    errors: Seq[ScanError],
+    outputFormats: Seq[String],
+    beforePromote: () => Unit
+  ): Unit = {
+    import spark.implicits._
+    ReportWriter.writeReports(
+      spark,
+      WriteReportsRequest(
+        outputRoot,
+        spark.createDataset(results).toDF(),
+        spark.createDataset(errors).toDF(),
+        outputFormats,
+        beforePromote
+      )
+    )
   }
 
   test("executeInParallel preserves task order while allowing concurrent execution") {
@@ -420,7 +395,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       ))
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         parquetGroups.head,
@@ -1393,7 +1368,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val group = plan.groups.head
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -1460,7 +1435,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val results = GroupScanner.scanGroupBatch(
+      val results = GroupScanCoordinator.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -1505,7 +1480,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("phone_number", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val results = GroupScanner.scanGroupBatch(
+      val results = GroupScanCoordinator.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -1534,7 +1509,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
           " customer_phone : phone_number \n" +
           "ns:email:email\n")
 
-      val parsed = PrivySparkApp.parseCliSuppressions(
+      val parsed = SuppressionParser.parseCliSuppressions(
         spark.sparkContext.hadoopConfiguration,
         Seq("foo:email", "profile:email:email"),
         Some(suppressionFile.toString)
@@ -1554,10 +1529,10 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   test("warnUnknownSuppressions logs cli and file sources") {
     val logs = captureStderr {
-      PrivySparkApp.warnUnknownSuppressions(
+      SuppressionParser.warnUnknownSuppressions(
         Seq(
-          PrivySparkApp.ParsedSuppression(Suppression("prdctcd", "driver_licence_number"), "cli:1"),
-          PrivySparkApp.ParsedSuppression(Suppression("ns:email", "phonee"), "file:scan.suppressions:2")
+          SuppressionParser.ParsedSuppression(Suppression("prdctcd", "driver_licence_number"), "cli:1"),
+          SuppressionParser.ParsedSuppression(Suppression("ns:email", "phonee"), "file:scan.suppressions:2")
         ),
         Set("email", "phone_number")
       )
@@ -1568,31 +1543,6 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(logs.contains("suppression_source=file:scan.suppressions:2"))
     assert(logs.contains("pii_type=driver_licence_number"))
     assert(logs.contains("pii_type=phonee"))
-  }
-
-  test("selectSampledFileKeys keeps at least one uniformly sampled file") {
-    val sampledKeys = GroupScanner.selectSampledFileKeys(Seq("a", "b", "c", "d"), 0.01)
-
-    assert(sampledKeys.size == 1)
-    assert(sampledKeys.forall(Set("a", "b", "c", "d").contains))
-  }
-
-  test("selectSampledFileKeys uses ceiling for sampled file count") {
-    val sampledKeys = GroupScanner.selectSampledFileKeys(Seq("a", "b", "c", "d"), 0.51)
-
-    assert(sampledKeys.size == 3)
-    assert(sampledKeys.distinct.size == sampledKeys.size)
-    assert(sampledKeys.forall(Set("a", "b", "c", "d").contains))
-  }
-
-  test("selectSampledFileKeys is stable for the same file set") {
-    val fileKeys = Seq("part-0001.csv", "part-0002.csv", "part-0003.csv", "part-0004.csv", "part-0005.csv")
-    val sampledRuns = (1 to 20).map(_ => GroupScanner.selectSampledFileKeys(fileKeys, 0.4, "reviews"))
-    val reversedInputSample = GroupScanner.selectSampledFileKeys(fileKeys.reverse, 0.4, "reviews").toSet
-
-    assert(sampledRuns.distinct.size == 1)
-    assert(sampledRuns.head.size == 2)
-    assert(sampledRuns.head.toSet == reversedInputSample)
   }
 
   test("scanGroupBatch retries when a transiently missing file becomes readable") {
@@ -1625,7 +1575,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val results = GroupScanner.scanGroupBatch(
+      val results = GroupScanCoordinator.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -1697,7 +1647,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         useDirectoryIdentifier = true
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -1914,7 +1864,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -1955,7 +1905,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("email", "sales@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
       )
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2042,7 +1992,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         useDirectoryIdentifier = true
       )
 
-      val (rootResults, rootErrors) = GroupScanner.scanGroup(
+      val (rootResults, rootErrors) = GroupScanCoordinator.scanGroup(
         spark,
         datasetDir.toString,
         rootGroup,
@@ -2050,7 +2000,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         sampleRatio = 1.0,
         timestamp = timestamp
       )
-      val (nestedResults, nestedErrors) = GroupScanner.scanGroup(
+      val (nestedResults, nestedErrors) = GroupScanCoordinator.scanGroup(
         spark,
         datasetDir.toString,
         nestedGroup,
@@ -2127,7 +2077,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       var scanResult = (Seq.empty[ScanResult], Seq.empty[ScanError])
       val logs = captureStderr {
-        scanResult = GroupScanner.scanGroup(
+        scanResult = GroupScanCoordinator.scanGroup(
           spark,
           inputDir.toString,
           group,
@@ -2171,7 +2121,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2214,7 +2164,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2255,7 +2205,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2300,7 +2250,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2349,7 +2299,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2388,7 +2338,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2427,7 +2377,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
       val logs = captureStderr {
-        GroupScanner.scanGroup(
+        GroupScanCoordinator.scanGroup(
           spark,
           inputDir.toString,
           group,
@@ -2465,7 +2415,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2524,7 +2474,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         groupedDir.toString,
         group,
@@ -2586,7 +2536,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2649,7 +2599,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
       )
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2692,7 +2642,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -2733,7 +2683,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val sequential = GroupScanner.scanGroupByFile(
+      val sequential = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2742,7 +2692,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         timestamp = timestamp,
         fileParallelism = 1
       )
-      val parallel = GroupScanner.scanGroupByFile(
+      val parallel = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -2776,7 +2726,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val results = GroupScanner.scanGroupBatch(
+      val results = GroupScanCoordinator.scanGroupBatch(
         spark,
         inputDir.toString,
         group,
@@ -2816,7 +2766,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          GroupScanner.scanGroupBatch(
+          GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2860,7 +2810,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          val results = GroupScanner.scanGroupBatch(
+          val results = GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2906,7 +2856,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          val results = GroupScanner.scanGroupBatch(
+          val results = GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -2958,7 +2908,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val snapshots = (1 to 4).map { _ =>
-        GroupScanner.scanGroupBatch(
+        GroupScanCoordinator.scanGroupBatch(
           spark,
           inputDir.toString,
           group,
@@ -3010,7 +2960,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDriverLogLevel("warn") {
-          val results = GroupScanner.scanGroupBatch(
+          val results = GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -3063,7 +3013,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          val results = GroupScanner.scanGroupBatch(
+          val results = GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -3113,7 +3063,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          GroupScanner.scanGroupBatch(
+          GroupScanCoordinator.scanGroupBatch(
             spark,
             inputDir.toString,
             group,
@@ -3156,7 +3106,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -3201,7 +3151,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
 
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -3244,7 +3194,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val (results, persistedRdds) = capturePersistedRddNames {
-        GroupScanner.scanGroupBatch(
+        GroupScanCoordinator.scanGroupBatch(
           spark,
           inputDir.toString,
           group,
@@ -3284,7 +3234,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val ((results, errors), persistedRdds) = capturePersistedRddNames {
-        GroupScanner.scanGroupByFile(
+        GroupScanCoordinator.scanGroupByFile(
           spark,
           inputDir.toString,
           group,
@@ -3327,7 +3277,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val logs = captureStderr {
         withDebugLoggingEnabled {
-          val (results, errors) = GroupScanner.scanGroupByFile(
+          val (results, errors) = GroupScanCoordinator.scanGroupByFile(
             spark,
             inputDir.toString,
             group,
@@ -3378,7 +3328,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val snapshots = (1 to 6).map { _ =>
-        val (results, errors) = GroupScanner.scanGroupByFile(
+        val (results, errors) = GroupScanCoordinator.scanGroupByFile(
           spark,
           inputDir.toString,
           group,
@@ -3445,7 +3395,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
 
-      val sequential = GroupScanner.scanGroups(
+      val sequential = GroupScanCoordinator.scanGroups(
         spark,
         inputDir.toString,
         plan.groups,
@@ -3454,7 +3404,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
         timestamp = timestamp,
         groupParallelism = 1
       )
-      val parallel = GroupScanner.scanGroups(
+      val parallel = GroupScanCoordinator.scanGroups(
         spark,
         inputDir.toString,
         plan.groups,
@@ -3486,7 +3436,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputDir.toString, inputDir.toString, timestamp)
 
-      val outcomes = GroupScanner.scanGroups(
+      val outcomes = GroupScanCoordinator.scanGroups(
         spark,
         inputDir.toString,
         plan.groups,
@@ -3527,7 +3477,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
 
     plan.groups.foreach { group =>
-      val (groupResults, groupErrors) = GroupScanner.scanGroup(
+      val (groupResults, groupErrors) = GroupScanCoordinator.scanGroup(
         spark,
         datasetDir.toString,
         group,
@@ -4889,8 +4839,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       ReportWriter.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
 
       val error = intercept[RuntimeException] {
-        ReportWriter.writeReports(
-          spark,
+        writeReportsRequest(
           outputDir.toString,
           replacementResults,
           Seq.empty,
@@ -4933,8 +4882,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       ReportWriter.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
 
       val error = intercept[IllegalStateException] {
-        ReportWriter.writeReports(
-          spark,
+        writeReportsRequest(
           outputDir.toString,
           initialResults,
           Seq.empty,
@@ -4983,8 +4931,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       ReportWriter.writeReports(spark, outputDir.toString, initialResults, Seq.empty)
 
       intercept[IllegalStateException] {
-        ReportWriter.writeReports(
-          spark,
+        writeReportsRequest(
           outputDir.toString,
           initialResults,
           Seq.empty,
@@ -4997,8 +4944,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       }
 
       intercept[RuntimeException] {
-        ReportWriter.writeReports(
-          spark,
+        writeReportsRequest(
           outputDir.toString,
           initialResults,
           Seq.empty,
@@ -5361,7 +5307,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -5430,7 +5376,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroupByFile(
+      val (results, errors) = GroupScanCoordinator.scanGroupByFile(
         spark,
         inputDir.toString,
         group,
@@ -5489,7 +5435,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
       val scanFuture = Future {
-        GroupScanner.scanGroupByFile(
+        GroupScanCoordinator.scanGroupByFile(
           spark,
           inputDir.toString,
           group,
@@ -5540,7 +5486,7 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
 
       val rules = Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"))
-      val (results, errors) = GroupScanner.scanGroup(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
         inputDir.toString,
         group,
@@ -5590,421 +5536,6 @@ class PrivySparkAppSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  private def writeText(path: Path, content: String): Unit = {
-    Files.write(path, content.getBytes(StandardCharsets.UTF_8))
-  }
-
-  private def writeTextViaHadoop(path: Path, content: String): Unit = {
-    val hadoopPath = new org.apache.hadoop.fs.Path(path.toString)
-    val fs = hadoopPath.getFileSystem(spark.sparkContext.hadoopConfiguration)
-    val writer = new BufferedWriter(new OutputStreamWriter(fs.create(hadoopPath, true), StandardCharsets.UTF_8))
-    try {
-      writer.write(content)
-    } finally {
-      writer.close()
-    }
-  }
-
-  private def writeBytes(path: Path, content: Array[Byte]): Unit = {
-    Files.write(path, content)
-  }
-
-  private def captureStderr[A](block: => A): String = {
-    val output = new ByteArrayOutputStream()
-    val originalErr = System.err
-    val captureErr = new PrintStream(output, true, StandardCharsets.UTF_8.name())
-    try {
-      System.setErr(captureErr)
-      block
-    } finally {
-      captureErr.flush()
-      System.setErr(originalErr)
-    }
-    output.toString(StandardCharsets.UTF_8.name())
-  }
-
-  private def withDebugLoggingEnabled[A](block: => A): A = {
-    withDriverLogLevel("debug")(block)
-  }
-
-  private def withDriverLogLevel[A](level: String)(block: => A): A = {
-    val previous = sys.props.get("privyspark.debug")
-    PrivySparkApp.resetDebugCache()
-    DriverLogger.resetCache()
-    System.setProperty("privyspark.debug", level)
-    try {
-      block
-    } finally {
-      previous match {
-        case Some(value) => System.setProperty("privyspark.debug", value)
-        case None => System.clearProperty("privyspark.debug")
-      }
-      PrivySparkApp.resetDebugCache()
-      DriverLogger.resetCache()
-    }
-  }
-
-  private def scanWithRules(
-    inputPath: String,
-    datasetPath: String,
-    rules: Seq[PiiRule],
-    timestamp: String
-  ): (Seq[ScanResult], Seq[ScanError]) = {
-    val plan = DirectoryScanner.scanDirectoryStructure(
-      spark,
-      inputPath,
-      datasetPath,
-      timestamp
-    )
-
-    val results = ArrayBuffer.empty[ScanResult]
-    val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
-
-    plan.groups.foreach { group =>
-      val (groupResults, groupErrors) = GroupScanner.scanGroup(
-        spark,
-        datasetPath,
-        group,
-        rules,
-        sampleRatio = 1.0,
-        timestamp = timestamp
-      )
-      results ++= groupResults
-      errors ++= groupErrors
-    }
-
-    (results.toSeq, errors.toSeq)
-  }
-
-  private case class ExitCalled(code: Int) extends ControlThrowable
-
-  private def createColumnarDataFile(outputDir: Path, format: String): String = {
-    import spark.implicits._
-
-    val sourceDf = Seq(
-      ("alpha@example.com", "010-1111-2222", "ok"),
-      ("invalid-email", "not-phone", "skip"),
-      ("beta@example.com", "031-555-7777", "ok")
-    ).toDF("email", "phone", "message")
-
-    val targetDir = outputDir.resolve(s"fixture-$format")
-    format match {
-      case "parquet" => sourceDf.coalesce(1).write.mode("overwrite").parquet(targetDir.toString)
-      case "orc" => sourceDf.coalesce(1).write.mode("overwrite").orc(targetDir.toString)
-      case "avro" => sourceDf.coalesce(1).write.mode("overwrite").format("avro").save(targetDir.toString)
-      case _ => fail(s"Unsupported columnar fixture format: $format")
-    }
-
-    findDataFile(targetDir, s".$format")
-      .map(_.toString)
-      .getOrElse(fail(s"Failed to locate generated $format data file under $targetDir"))
-  }
-
-  private def createSpreadsheetFile(outputDir: Path): String = {
-    val workbook = new XSSFWorkbook()
-    try {
-      val sheet = workbook.createSheet("Contacts")
-      val header = sheet.createRow(0)
-      header.createCell(0).setCellValue("email")
-      header.createCell(1).setCellValue("phone")
-
-      val row1 = sheet.createRow(1)
-      row1.createCell(0).setCellValue("alpha@example.com")
-      row1.createCell(1).setCellValue("010-1111-2222")
-
-      val row2 = sheet.createRow(2)
-      row2.createCell(0).setCellValue("invalid-email")
-      row2.createCell(1).setCellValue("not-phone")
-
-      val row3 = sheet.createRow(3)
-      row3.createCell(0).setCellValue("beta@example.com")
-      row3.createCell(1).setCellValue("031-555-7777")
-
-      val workbookPath = outputDir.resolve("contacts.xlsx")
-      val outputStream = Files.newOutputStream(workbookPath)
-      try {
-        workbook.write(outputStream)
-      } finally {
-        outputStream.close()
-      }
-      workbookPath.toString
-    } finally {
-      workbook.close()
-    }
-  }
-
-  private def createArchiveFile(path: Path, entries: Seq[(String, String)]): String = {
-    createArchiveFileWithBytes(
-      path,
-      entries.map { case (entryName, content) => entryName -> content.getBytes(StandardCharsets.UTF_8) }
-    )
-  }
-
-  private def createArchiveFileWithBytes(path: Path, entries: Seq[(String, Array[Byte])]): String = {
-    val outputStream = new ZipOutputStream(Files.newOutputStream(path))
-    try {
-      entries.foreach {
-        case (entryName, content) =>
-          outputStream.putNextEntry(new ZipEntry(entryName))
-          outputStream.write(content)
-          outputStream.closeEntry()
-      }
-    } finally {
-      outputStream.close()
-    }
-    path.toString
-  }
-
-  private def createArchiveBytes(entries: Seq[(String, Array[Byte])]): Array[Byte] = {
-    val outputStream = new ByteArrayOutputStream()
-    val zipOutputStream = new ZipOutputStream(outputStream)
-    try {
-      entries.foreach {
-        case (entryName, content) =>
-          zipOutputStream.putNextEntry(new ZipEntry(entryName))
-          zipOutputStream.write(content)
-          zipOutputStream.closeEntry()
-      }
-    } finally {
-      zipOutputStream.close()
-    }
-    outputStream.toByteArray
-  }
-
-  private def createGzipFile(path: Path, content: String): String = {
-    val outputStream = new GzipCompressorOutputStream(Files.newOutputStream(path))
-    try {
-      outputStream.write(content.getBytes(StandardCharsets.UTF_8))
-    } finally {
-      outputStream.close()
-    }
-    path.toString
-  }
-
-  private def createTarArchiveFile(path: Path, entries: Seq[(String, String)], codec: Option[String] = None): String = {
-    val rawOutputStream = Files.newOutputStream(path)
-    val compressedOutputStream = codec match {
-      case Some("gz") => new GzipCompressorOutputStream(rawOutputStream)
-      case Some("bz2") => new BZip2CompressorOutputStream(rawOutputStream)
-      case Some("xz") => new XZCompressorOutputStream(rawOutputStream)
-      case Some("zst") => new ZstdCompressorOutputStream(rawOutputStream)
-      case None => rawOutputStream
-      case Some(other) => throw new IllegalArgumentException(s"Unsupported tar test codec: $other")
-    }
-    val tarOutputStream = new TarArchiveOutputStream(compressedOutputStream)
-    tarOutputStream.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
-    try {
-      entries.foreach {
-        case (entryName, content) =>
-          val bytes = content.getBytes(StandardCharsets.UTF_8)
-          val entry = new TarArchiveEntry(entryName)
-          entry.setSize(bytes.length.toLong)
-          tarOutputStream.putArchiveEntry(entry)
-          tarOutputStream.write(bytes)
-          tarOutputStream.closeArchiveEntry()
-      }
-      tarOutputStream.finish()
-    } finally {
-      tarOutputStream.close()
-    }
-    path.toString
-  }
-
-  private def createSevenZArchiveFile(path: Path, entries: Seq[(String, String)]): String = {
-    val outputFile = new SevenZOutputFile(path.toFile)
-    try {
-      entries.foreach {
-        case (entryName, content) =>
-          val bytes = content.getBytes(StandardCharsets.UTF_8)
-          val entry = outputFile.createArchiveEntry(path.toFile, entryName)
-          entry.setSize(bytes.length.toLong)
-          outputFile.putArchiveEntry(entry)
-          outputFile.write(bytes)
-          outputFile.closeArchiveEntry()
-      }
-      outputFile.finish()
-    } finally {
-      outputFile.close()
-    }
-    path.toString
-  }
-
-  private def copyClasspathResource(resourcePath: String, destination: Path): String = {
-    val inputStream = Option(getClass.getResourceAsStream(resourcePath)).getOrElse {
-      fail(s"Missing classpath resource: $resourcePath")
-    }
-    try {
-      Files.copy(inputStream, destination)
-    } finally {
-      inputStream.close()
-    }
-    destination.toString
-  }
-
-  private def readWorkbookRows(path: Path, sheetName: String): Seq[Seq[String]] = {
-    val inputStream = Files.newInputStream(path)
-    val formatter = new DataFormatter()
-    try {
-      val workbook = WorkbookFactory.create(inputStream)
-      try {
-        val sheet = workbook.getSheet(sheetName)
-        assert(sheet != null, s"expected workbook $path to contain sheet $sheetName")
-        (0 to sheet.getLastRowNum).flatMap { rowIndex =>
-          Option(sheet.getRow(rowIndex)).map { row =>
-            (0 until row.getLastCellNum).map { cellIndex =>
-              formatter.formatCellValue(row.getCell(cellIndex))
-            }
-          }
-        }
-      } finally {
-        workbook.close()
-      }
-    } finally {
-      inputStream.close()
-    }
-  }
-
-  private def findDataFile(root: Path, extension: String): Option[Path] = {
-    val stream = Files.walk(root)
-    try {
-      val iter = stream.iterator()
-      var found: Option[Path] = None
-      while (iter.hasNext && found.isEmpty) {
-        val candidate = iter.next()
-        if (Files.isRegularFile(candidate) && candidate.getFileName.toString.toLowerCase.endsWith(extension)) {
-          found = Some(candidate)
-        }
-      }
-      found
-    } finally {
-      stream.close()
-    }
-  }
-
-  private def countPartFiles(root: Path): Long = {
-    if (!Files.exists(root)) {
-      0L
-    } else {
-      val stream = Files.walk(root)
-      try {
-        val iter = stream.iterator()
-        var count = 0L
-        while (iter.hasNext) {
-          val candidate = iter.next()
-          if (Files.isRegularFile(candidate) && candidate.getFileName.toString.startsWith("part-")) {
-            count += 1L
-          }
-        }
-        count
-      } finally {
-        stream.close()
-      }
-    }
-  }
-
-  private def countFilesWithExtension(root: Path, extension: String): Long = {
-    if (!Files.exists(root)) {
-      0L
-    } else {
-      val stream = Files.walk(root)
-      try {
-        val iter = stream.iterator()
-        var count = 0L
-        while (iter.hasNext) {
-          val candidate = iter.next()
-          if (Files.isRegularFile(candidate) && candidate.getFileName.toString.endsWith(extension)) {
-            count += 1L
-          }
-        }
-        count
-      } finally {
-        stream.close()
-      }
-    }
-  }
-
-  private def waitForCondition(timeoutMillis: Long, pollMillis: Long)(condition: => Boolean): Boolean = {
-    val deadline = System.nanoTime() + timeoutMillis * 1000000L
-    while (System.nanoTime() < deadline) {
-      if (condition) {
-        return true
-      }
-      Thread.sleep(pollMillis)
-    }
-    condition
-  }
-
-  private def normalizeResults(results: Seq[ScanResult]): Seq[(String, String, String, Long, Long, Double, Double, Double)] = {
-    results
-      .map(result =>
-        (
-          result.file_identifier,
-          result.column_name,
-          result.pii_type,
-          result.match_count,
-          result.sampled_row_count,
-          result.match_ratio,
-          result.non_empty_match_ratio,
-          result.confidence
-        )
-      )
-      .sortBy(identity)
-  }
-
-  private def normalizeErrors(errors: Seq[ScanError]): Seq[(String, String)] = {
-    errors
-      .map(error => (error.file_identifier, error.error_message))
-      .sortBy(identity)
-  }
-
-  private def normalizeOutcomeResults(
-    outcomes: Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])]
-  ): Seq[(String, String, String, Long, Long, Double, Double, Double)] = {
-    normalizeResults(outcomes.flatMap(_._2))
-  }
-
-  private def normalizeOutcomeErrors(
-    outcomes: Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])]
-  ): Seq[(String, String)] = {
-    normalizeErrors(outcomes.flatMap(_._3))
-  }
-
-  private def normalizePlanGroups(
-    groups: Seq[ScanGroup]
-  ): Seq[(String, String, String, Seq[String], Boolean, Boolean, Boolean)] = {
-    groups
-      .map(group =>
-        (
-          group.directoryPath,
-          group.format,
-          group.schemaSignature,
-          group.logicalIdentifiersByKey.values.toSeq.sorted,
-          group.schemaSampled,
-          group.csvHasHeader,
-          group.allowDirectoryIdentifier
-        )
-      )
-      .sortBy { case (directoryPath, format, schemaSignature, logicalIdentifiers, schemaSampled, csvHasHeader, allowDirectoryIdentifier) =>
-        (directoryPath, format, schemaSignature, logicalIdentifiers.mkString("|"), schemaSampled, csvHasHeader, allowDirectoryIdentifier)
-      }
-  }
-
-  private def resolveResourcePath(resource: String): Path = {
-    val resourceUrl = Option(getClass.getClassLoader.getResource(resource))
-      .getOrElse(fail(s"Missing test resource: $resource"))
-    Paths.get(resourceUrl.toURI)
-  }
-
-  private def deleteRecursively(path: Path): Unit = {
-    if (Files.exists(path)) {
-      val stream = Files.walk(path)
-      try {
-        stream.sorted(Comparator.reverseOrder()).forEach(pathToDelete => Files.deleteIfExists(pathToDelete))
-      } finally {
-        stream.close()
-      }
-    }
-  }
 }
 
 object PartialReadFileSystem {

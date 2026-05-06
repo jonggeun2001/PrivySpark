@@ -69,7 +69,7 @@ private[privyspark] object ReviewFindingBuilder {
     resultToEvidence(result).sortBy(e => (e.fileIdentifier, e.fileChecksum))
 
   def normalizeScanPath(scanPath: String): String =
-    Option(scanPath).map(_.trim.stripSuffix("/")).getOrElse("")
+    ReviewPathNormalizer.normalizeScanPath(scanPath)
 
   private def resultToEvidence(result: ScanResult): Seq[ReviewEvidence] = {
     val decodedFingerprints = ReviewScopeFingerprintCodec.decode(result.review_scope_file_fingerprints).getOrElse(Seq.empty)

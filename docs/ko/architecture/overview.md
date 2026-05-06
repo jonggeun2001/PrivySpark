@@ -13,9 +13,10 @@
 - `util/DriverLogger.scala`: driver 로그 레벨 해석과 공통 로그 포맷
 - `detect/DetectionAggregator.scala`: 규칙별 집계와 fallback 전략
 - `hive/HiveTableLookup.scala`: Hive Metastore JDBC 조회, table `LOCATION` 정규화, longest-prefix lookup 인덱스, broadcast 생성
-- `scan/DirectoryScanner.scala`, `scan/GroupScanner.scala`: 입력 확장, 그룹화, 스캔 실행
+- `scan/ScanPipeline.scala`: scan command orchestration, progress run, 최종 report merge, review HTML hook 연결
+- `scan/DirectoryScanner.scala`, `scan/GroupScanCoordinator.scala`: 입력 확장, 그룹화, 스캔 실행
 - `report/ReportWriter.scala`: 최종 리포트 저장과 포맷별 산출물 생성
-- `PrivySparkApp.scala`: 입력 확장, 그룹화, exact split, 스캔 orchestration, progress/최종 리포트 저장
+- `PrivySparkApp.scala`: CLI dispatch, SparkSession 생명주기, scan pipeline hook 주입
 - `Models.scala`: 결과/오류/규칙 모델
 
 ## 개발·검증 도구
@@ -66,3 +67,62 @@
 - 종료 훅 대신 다음 실행 cleanup을 택한 이유는 YARN 강제 종료나 `kill -9` 상황에서 훅 신뢰도가 낮기 때문입니다.
 - `_progress-preparing.json`을 active marker보다 먼저 두는 이유는 startup race에서 서로의 fresh root를 지우지 않게 하기 위해서입니다.
 - unreadable `active-run.json`을 owner run이 `meta/run.json`으로 self-heal하는 이유는 marker 손상이 live run을 불필요하게 실패시키지 않게 하기 위해서입니다.
+
+## 컴포넌트 의존성
+
+```mermaid
+flowchart LR
+  app[PrivySparkApp] --> cli[cli]
+  app --> scan[scan]
+  app --> review[review]
+  app --> util[util]
+  scan --> cli
+  scan --> format[format]
+  scan --> config
+  scan --> hive[hive]
+  scan --> detect[detect]
+  scan --> fsio[fsio]
+  scan --> progress
+  scan --> model[model]
+  detect --> model
+  report --> model
+  review --> report
+  review --> model
+  progress --> report
+  progress --> model
+  scan --> util[util]
+```
+
+```mermaid
+sequenceDiagram
+  participant PrivySparkApp
+  participant CliParser as Cli
+  participant Spark
+  participant ScanPipeline
+  participant DirectoryScanner
+  participant ProgressRunManager
+  participant GroupScanCoordinator
+  participant DetectionAggregator
+  participant ReportWriter
+  participant ReviewHtmlWriter
+
+  PrivySparkApp->>CliParser: args 파싱
+  CliParser-->>PrivySparkApp: Scan config
+  PrivySparkApp->>Spark: SparkSession 생성
+  PrivySparkApp->>ScanPipeline: run(spark, config, hooks)
+  ScanPipeline->>DirectoryScanner: scanDirectoryStructure(...)
+  DirectoryScanner-->>ScanPipeline: DirectoryScanPlan 반환
+  ScanPipeline->>ProgressRunManager: prepareProgressRun(...)
+  ScanPipeline->>ProgressRunManager: startProgressHeartbeat(...)
+  ScanPipeline->>GroupScanCoordinator: scanGroups(...)
+  GroupScanCoordinator->>DetectionAggregator: aggregate / aggregateByFile
+  DetectionAggregator-->>GroupScanCoordinator: ScanResult 집계
+  GroupScanCoordinator-->>ScanPipeline: progress records 기록 후 group scan 완료
+  ScanPipeline->>ProgressRunManager: mergeProgressReports(afterReportWrite)
+  ProgressRunManager->>ReportWriter: writeReports(...)
+  ProgressRunManager-->>ScanPipeline: afterReportWrite(resultDf)
+  alt reviewStateRoot 설정 시
+    ScanPipeline->>ReviewHtmlWriter: hooks.writeReviewHtml(...)
+  end
+  ScanPipeline-->>PrivySparkApp: ScanSummary 반환
+```

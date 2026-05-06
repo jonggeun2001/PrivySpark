@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator.{AggregationConfig, FileMatchCount}
+import io.github.jonggeun2001.privyspark.detect.testing.DetectionFaultInjectors
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType, Suppression}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
@@ -67,7 +68,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val forcedFallback = DetectionAggregator.aggregate(
       df,
       rules,
-      AggregationConfig(maxExpressionsPerAgg = 2, legacyFallbackThreshold = 1)
+      config = AggregationConfig(maxExpressionsPerAgg = 2, legacyFallbackThreshold = 1)
     )
 
     val expected = legacyCounts(df, rules)
@@ -90,7 +91,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       DetectionAggregator.aggregate(
         df,
         rules,
-        AggregationConfig(maxExpressionsPerAgg = 2, legacyFallbackThreshold = 1)
+        config = AggregationConfig(maxExpressionsPerAgg = 2, legacyFallbackThreshold = 1)
       )
     }
 
@@ -111,11 +112,11 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val logs = captureStderr {
-      val actual = DetectionAggregator.withForcedDatasetBatchFailure {
+      val actual = DetectionFaultInjectors.withForcedDatasetBatchFailure {
         DetectionAggregator.aggregate(
           df,
           rules,
-          AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
+          config = AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
         )
       }
       val expected = legacyCounts(df, rules)
@@ -166,7 +167,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
         DetectionAggregator.aggregate(
           df,
           rules,
-          AggregationConfig(maxExpressionsPerAgg = 2, legacyFallbackThreshold = 1)
+          config = AggregationConfig(maxExpressionsPerAgg = 2, legacyFallbackThreshold = 1)
         )
       }
     }
@@ -280,7 +281,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val actual = DetectionAggregator.aggregate(
       df,
       rules,
-      AggregationConfig(maxExpressionsPerAgg = 80, legacyFallbackThreshold = 10000)
+      config = AggregationConfig(maxExpressionsPerAgg = 80, legacyFallbackThreshold = 10000)
     )
 
     val expected = rowBasedExpected(df, rules)
@@ -325,9 +326,9 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val config = AggregationConfig(maxExpressionsPerAgg = 1, legacyFallbackThreshold = 1)
-    val matchCounts = DetectionAggregator.aggregate(df, rules, config)
+    val matchCounts = DetectionAggregator.aggregate(df, rules, config = config)
     val logs = captureStderr {
-      val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts, config)
+      val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts, config = config)
       val emailMatch = matchCounts.find(matchCount => matchCount.columnName == "c_email" && matchCount.piiType == "email").get
       val phoneMatch = matchCounts.find(matchCount => matchCount.columnName == "c_phone" && matchCount.piiType == "phone").get
       assert(samples(emailMatch.metricAlias).sampleMatchedFragment == "alpha@example.com")
@@ -444,7 +445,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       df,
       "file_id",
       rules,
-      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
+      config = AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
     )
     assert(sortByFileKey(batched) == expected)
 
@@ -452,7 +453,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       df,
       "file_id",
       rules,
-      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
+      config = AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
     )
     assert(sortByFileKey(forcedFallback) == expected)
   }
@@ -471,7 +472,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
         df,
         "file_id",
         rules,
-        AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
+        config = AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
       )
     }
 
@@ -493,12 +494,12 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val logs = captureStderr {
-      val actual = DetectionAggregator.withForcedFileBatchFailure {
+      val actual = DetectionFaultInjectors.withForcedFileBatchFailure {
         DetectionAggregator.aggregateByFile(
           df,
           "file_id",
           rules,
-          AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
+          config = AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
         )
       }
       val expected = legacyCountsByFile(df, "file_id", rules)
@@ -645,9 +646,9 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val config = AggregationConfig(maxExpressionsPerAgg = 1, legacyFallbackThreshold = 1)
-    val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules, config)
+    val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules, config = config)
     val logs = captureStderr {
-      val samples = DetectionAggregator.sampleMatchesByFile(df, "file_id", rules, matchCounts, config)
+      val samples = DetectionAggregator.sampleMatchesByFile(df, "file_id", rules, matchCounts, config = config)
       val alphaEmail = matchCounts.find(matchCount =>
         matchCount.fileIdentifier == "alpha.csv" && matchCount.columnName == "c_email" && matchCount.piiType == "email"
       ).get
@@ -677,13 +678,13 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     val matchCounts = DetectionAggregator.aggregateByFile(df, "file_id", rules)
     val logs = captureStderr {
-      val samples = DetectionAggregator.withForcedFileSampleBatchFailure {
+      val samples = DetectionFaultInjectors.withForcedFileSampleBatchFailure {
         DetectionAggregator.sampleMatchesByFile(
           df,
           "file_id",
           rules,
           matchCounts,
-          AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
+          config = AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 10000)
         )
       }
 
@@ -880,12 +881,12 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val batched = DetectionAggregator.aggregate(
       df,
       rules,
-      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1000)
+      config = AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1000)
     )
     val fallback = DetectionAggregator.aggregate(
       df,
       rules,
-      AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
+      config = AggregationConfig(maxExpressionsPerAgg = 8, legacyFallbackThreshold = 1)
     )
 
     assert(sortByKey(batched) == sortByKey(fallback))
@@ -978,7 +979,6 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
 
   private def withDriverLogLevel[A](level: String)(block: => A): A = {
     val previous = sys.props.get("privyspark.debug")
-    DetectionAggregator.resetDebugCache()
     DriverLogger.resetCache()
     System.setProperty("privyspark.debug", level)
     try {
@@ -988,7 +988,6 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
         case Some(value) => System.setProperty("privyspark.debug", value)
         case None => System.clearProperty("privyspark.debug")
       }
-      DetectionAggregator.resetDebugCache()
       DriverLogger.resetCache()
     }
   }

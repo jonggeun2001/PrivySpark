@@ -41,10 +41,9 @@
 - `--dry-run`: calculates staged entries without writing the output file
 
 ## `review collect` CLI Arguments
-- `--scan-results <ABS_PATH_OR_URI>`: current `scan_results` path. `csv`, `parquet`, and `xlsx` (`scan_results` sheet) are supported.
 - `--review-state-root <ABS_PATH_OR_URI>`: state root where response JSON files are read and cumulative review state is written
 
-`review collect` reads `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`.
+`review collect` reads only `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`. `--scan-results` is no longer required. Later scans with the same `--review-state-root` apply the recurring false-positive allowlist.
 
 ## Ignore Patterns
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`
@@ -57,7 +56,7 @@
 
 The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `.crc`, log dumps, or backup directories do not inflate I/O, error rows, or report noise.
 
-Allowlists are intentionally different from ignore rules. Ignore rules skip files before scanning, while allowlists suppress only reviewed false positives at the `(dataset_path, file_identifier, column_name, pii_type)` level after detection.
+Allowlists are intentionally different from ignore rules. Ignore rules skip files before scanning, while allowlists suppress only reviewed recurring false positives after detection. When Hive mapping exists the key is `(scan_path, hive_table_fqn, column_name, pii_type)`; otherwise the key is `(scan_path, file_identifier_pattern, column_name, pii_type)`. New recurring responses require exact `column_name` and `pii_type` values; `*` wildcards are rejected for those fields.
 
 ## Suppression
 - Suppression removes only a specific `(column, pii_type)` result pair. Column names are matched case-insensitively by exact equality.
@@ -134,4 +133,4 @@ This design keeps long-running progress observable without mixing partial output
 - The release workflow runs `./gradlew clean shadowJar packageSampleDatasets`.
 - Release assets are `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, and `privyspark-<tag>-review-response-viewer.html`.
 - `privyspark-<tag>-review-response-example.html` is a self-contained example for checking the offline owner review response JSON download flow. Production files are generated at `<scan-output>/review/review.html` after running `scan --review-state-root`.
-- `privyspark-<tag>-review-response-viewer.html` is a self-contained operator page for inspecting a collected `response-YYYYMMDD-HHMMSS.json` locally by choosing, dragging and dropping, or pasting the file contents, including envelope metadata, validation messages, and per-finding decisions.
+- `privyspark-<tag>-review-response-viewer.html` is a self-contained operator page for inspecting a collected `response-<scan-path>-YYYYMMDD-HHMMSS.json` locally by choosing, dragging and dropping, or pasting the file contents, including envelope metadata, validation messages, and per-finding decisions.

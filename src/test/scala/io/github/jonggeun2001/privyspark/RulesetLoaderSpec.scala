@@ -213,6 +213,38 @@ class RulesetLoaderSpec extends AnyFunSuite {
     }
   }
 
+  test("loadBundle expands suppression column arrays for a pii type") {
+    val rulesetPath = Files.createTempFile("privyspark-ruleset-array-suppressions", ".yaml")
+    val yaml =
+      """rules:
+        |  - pii_type: driver_license_number
+        |    regex: '[0-9]{2}-[0-9]{6}-[0-9]{2}'
+        |  - pii_type: phone_number
+        |    regex: '01[0-9]-?[0-9]{3,4}-?[0-9]{4}'
+        |suppressions:
+        |  - column:
+        |      - tr_dt
+        |      - trade_time
+        |    pii_type: driver_license_number
+        |  - columns: [prdctcd, legacy_code]
+        |    pii_type: phone_number
+        |""".stripMargin
+
+    Files.write(rulesetPath, yaml.getBytes(StandardCharsets.UTF_8))
+    try {
+      val bundle = RulesetLoader.loadBundle(rulesetPath.toString)
+
+      assert(bundle.suppressions == Seq(
+        Suppression("tr_dt", "driver_license_number"),
+        Suppression("trade_time", "driver_license_number"),
+        Suppression("prdctcd", "phone_number"),
+        Suppression("legacy_code", "phone_number")
+      ))
+    } finally {
+      Files.deleteIfExists(rulesetPath)
+    }
+  }
+
   test("loadBundle returns empty suppressions when the key is absent") {
     val rulesetPath = Files.createTempFile("privyspark-ruleset-no-suppressions", ".yaml")
     val yaml =
@@ -246,7 +278,7 @@ class RulesetLoaderSpec extends AnyFunSuite {
       val error = intercept[IllegalArgumentException] {
         RulesetLoader.loadBundle(rulesetPath.toString)
       }
-      assert(error.getMessage.contains("Each suppression must include column and pii_type"))
+      assert(error.getMessage.contains("Each suppression must include column or columns and pii_type"))
     } finally {
       Files.deleteIfExists(rulesetPath)
     }

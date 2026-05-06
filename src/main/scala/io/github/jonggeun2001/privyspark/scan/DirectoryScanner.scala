@@ -1,108 +1,22 @@
 package io.github.jonggeun2001.privyspark.scan
 
-import io.github.jonggeun2001.privyspark.scan.ArchiveStaging.ArchiveFormats
-import io.github.jonggeun2001.privyspark.format.ByteProbe.{isZeroBytePhysicalFile, shouldProbeForFormat}
-import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
-import io.github.jonggeun2001.privyspark.format.CsvInference._
-import io.github.jonggeun2001.privyspark.format.FormatDetector
+import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging.ArchiveFormats
+import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
-import io.github.jonggeun2001.privyspark.util.PathIdentifiers._
+import io.github.jonggeun2001.privyspark.scan.discovery.{DirectoryDiscovery, PreScanExecutor, SchemaGroupSplitter}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
 import io.github.jonggeun2001.privyspark.util.DriverLogger
-import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
-import io.github.jonggeun2001.privyspark.scan.SourceExpansion.expandPhysicalSource
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
-import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, PreScanFileOutcome, ScanError, ScanFileEntry, ScanGroup, ScanReadOptions}
+import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, ScanError, ScanFileEntry, ScanGroup, ScanReadOptions}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
 
-import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
 private[privyspark] object DirectoryScanner {
-  private val PreScanProgressLogInterval = 10000
-
   private def elapsedMillis(startNanos: Long): Long = {
     (System.nanoTime() - startNanos) / 1000000L
-  }
-
-  private def refineCsvLikeEntries(
-    spark: SparkSession,
-    entries: Seq[ScanFileEntry],
-    csvHeadCache: CsvHeadCache
-  ): Seq[ScanFileEntry] = {
-    entries.map { entry =>
-      val (format, readOptions) = CsvDialectDetector.refineDetectedFormat(
-        spark,
-        entry.physicalPath,
-        entry.format,
-        entry.readOptions,
-        csvHeadCache
-      )
-      if (format == entry.format && readOptions == entry.readOptions) {
-        entry
-      } else {
-        entry.copy(format = format, readOptions = readOptions)
-      }
-    }
-  }
-
-  def resolvePreScanProgressInterval(fileCount: Int): Int = {
-    if (fileCount <= 0) 1 else math.min(fileCount, PreScanProgressLogInterval)
-  }
-
-  private def discoverPhysicalFiles(
-    fs: org.apache.hadoop.fs.FileSystem,
-    rootPath: Path,
-    inputPath: String,
-    ignoreMatcher: IgnoreMatcher,
-    parallelism: Int
-  ): (Seq[String], Seq[(String, String)]) = {
-    val discoveredFiles = ArrayBuffer.empty[String]
-    val ignoredPaths = ArrayBuffer.empty[(String, String)]
-
-    var currentLevelDirectories = Seq(rootPath)
-    while (currentLevelDirectories.nonEmpty) {
-      val nextLevelDirectories = ArrayBuffer.empty[Path]
-
-      currentLevelDirectories
-        .sortBy(_.toString)
-        .grouped(math.max(1, parallelism))
-        .foreach { directoryBatch =>
-          val listedDirectories = executeInParallel(
-            parallelism,
-            directoryBatch.map { directory =>
-              () => Option(fs.listStatus(directory)).getOrElse(Array.empty).sortBy(_.getPath.toString)
-            }
-          )
-
-          listedDirectories.foreach { children =>
-            children.foreach { status =>
-              val childPath = status.getPath.toString
-              if (status.isDirectory) {
-                ignoreMatcher.matched(childPath, inputPath, isDirectory = true) match {
-                  case Some(pattern) =>
-                    ignoredPaths += ((childPath, pattern))
-                  case None =>
-                    nextLevelDirectories += status.getPath
-                }
-              } else if (status.isFile) {
-                ignoreMatcher.matched(childPath, inputPath) match {
-                  case Some(pattern) =>
-                    ignoredPaths += ((childPath, pattern))
-                  case None =>
-                    discoveredFiles += childPath
-                }
-              }
-            }
-          }
-        }
-
-      currentLevelDirectories = nextLevelDirectories.toSeq
-    }
-
-    (discoveredFiles.toSeq.sorted, ignoredPaths.toSeq)
   }
 
   def scanDirectoryStructure(
@@ -148,7 +62,7 @@ private[privyspark] object DirectoryScanner {
           "input_path" -> inputPath,
           "parallelism" -> resolvedDiscoveryParallelism
         )
-        discoverPhysicalFiles(fs, path, inputPath, ignoreMatcher, resolvedDiscoveryParallelism)
+        DirectoryDiscovery.discover(fs, path, inputPath, ignoreMatcher, resolvedDiscoveryParallelism)
       }
       ignoredFiles.foreach {
         case (filePath, pattern) =>
@@ -184,121 +98,17 @@ private[privyspark] object DirectoryScanner {
       )
 
       val preScanStartedAt = System.nanoTime()
-      val preScanProgressInterval = resolvePreScanProgressInterval(files.size)
-      val completedPreScanFiles = new AtomicInteger(0)
-      DriverLogger.debug(
-        "scan_directory_pre_scan_execute_start",
-        "input_path" -> inputPath,
-        "files" -> files.size,
-        "parallelism" -> resolvedPreScanParallelism,
-        "progress_interval" -> preScanProgressInterval
+      val preScanOutcomes = PreScanExecutor.runPreScan(
+        spark,
+        files,
+        datasetPath,
+        inputPath,
+        timestamp,
+        resolvedPreScanParallelism,
+        readOptions,
+        ignoreMatcher,
+        csvHeadCache
       )
-
-      val preScanOutcomes = executeInParallel(resolvedPreScanParallelism, files.map { filePath =>
-        () => {
-          val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
-          val groupingDirectory = normalizeHiveLayoutGroupingPath(parentDirectory, inputPath)
-          val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
-          val pathInferredFormat = FormatDetector.infer(filePath)
-          val probeRequired = shouldProbeForFormat(filePath, pathInferredFormat)
-          val preScanErrorScope = pathInferredFormat match {
-            case Some(format) if ArchiveFormats.contains(format) || format == XlsxFormat => logicalIdentifier
-            case _ => groupingDirectory
-          }
-          val localStagingPaths = ArrayBuffer.empty[String]
-
-          val outcome =
-            try {
-              val zeroByteStatus = try {
-                Right(isZeroBytePhysicalFile(conf, filePath))
-              } catch {
-                case NonFatal(e) => Left(e)
-              }
-
-              zeroByteStatus match {
-                case Left(e) =>
-                  PreScanFileOutcome(
-                    filePath = filePath,
-                    groupingDirectoryPath = groupingDirectory,
-                    preScanErrorScope = preScanErrorScope,
-                    expandedEntries = Seq.empty,
-                    expandedErrors = Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
-                    ignoredEntries = 0,
-                    stagingPaths = localStagingPaths.toSeq,
-                    pathInferredFormat = pathInferredFormat,
-                    probeRequired = probeRequired
-                  )
-                case Right(true) =>
-                  PreScanFileOutcome(
-                    filePath = filePath,
-                    groupingDirectoryPath = groupingDirectory,
-                    preScanErrorScope = preScanErrorScope,
-                    expandedEntries = Seq.empty,
-                    expandedErrors = Seq.empty,
-                    ignoredEntries = 0,
-                    stagingPaths = localStagingPaths.toSeq,
-                    pathInferredFormat = pathInferredFormat,
-                    probeRequired = probeRequired,
-                    skipped = true
-                  )
-                case Right(false) =>
-                  val fileStatus = fs.getFileStatus(new Path(filePath))
-                  val (expandedEntries, expandedErrors, ignoredEntries) =
-                    expandPhysicalSource(
-                      conf,
-                      datasetPath,
-                      timestamp,
-                      filePath,
-                      logicalIdentifier,
-                      groupingDirectory,
-                      localStagingPaths,
-                      fileSize = fileStatus.getLen,
-                      fileMtimeEpochMs = fileStatus.getModificationTime,
-                      readOptions = readOptions,
-                      ignoreMatcher = ignoreMatcher
-                    )
-                  val refinedEntries = refineCsvLikeEntries(spark, expandedEntries, csvHeadCache)
-                  PreScanFileOutcome(
-                    filePath = filePath,
-                    groupingDirectoryPath = groupingDirectory,
-                    preScanErrorScope = preScanErrorScope,
-                    expandedEntries = refinedEntries,
-                    expandedErrors = expandedErrors,
-                    ignoredEntries = ignoredEntries,
-                    stagingPaths = localStagingPaths.toSeq,
-                    pathInferredFormat = pathInferredFormat,
-                    probeRequired = probeRequired
-                  )
-              }
-            } catch {
-              case NonFatal(e) =>
-                PreScanFileOutcome(
-                  filePath = filePath,
-                  groupingDirectoryPath = groupingDirectory,
-                  preScanErrorScope = preScanErrorScope,
-                  expandedEntries = Seq.empty,
-                  expandedErrors = Seq.empty,
-                  ignoredEntries = 0,
-                  stagingPaths = localStagingPaths.toSeq,
-                  pathInferredFormat = pathInferredFormat,
-                  probeRequired = probeRequired,
-                  failure = Some(e)
-                )
-            }
-
-          val completedFiles = completedPreScanFiles.incrementAndGet()
-          if (completedFiles == files.size || completedFiles % preScanProgressInterval == 0) {
-            DriverLogger.debug(
-              "scan_directory_pre_scan_progress",
-              "input_path" -> inputPath,
-              "completed_files" -> completedFiles,
-              "total_files" -> files.size,
-              "elapsed_ms" -> elapsedMillis(preScanStartedAt)
-            )
-          }
-          outcome
-        }
-      })
       val ignoredArchiveEntryCount = preScanOutcomes.map(_.ignoredEntries).sum
       val totalIgnoredCount = ignoredFiles.size + ignoredArchiveEntryCount
 
@@ -397,72 +207,22 @@ private[privyspark] object DirectoryScanner {
         "duration_ms" -> elapsedMillis(groupBuildStartedAt)
       )
 
-      val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
-      val schemaSplitParallelism = resolveParallelism(groupedByDirectoryAndFormat.size, resolvedPreScanParallelism)
-      DriverLogger.debug(
-        "scan_directory_schema_split_parallelism",
-        "groups" -> groupedByDirectoryAndFormat.size,
-        "parallelism" -> schemaSplitParallelism
+      val splitAndFinalizeResult = SchemaGroupSplitter.splitAndFinalize(
+        spark,
+        datasetPath,
+        inputPath,
+        timestamp,
+        inputPathIsFile,
+        groupedByDirectoryAndFormat,
+        directoriesWithPreScanErrors.toSet,
+        resolvedPreScanParallelism,
+        csvHeadCache,
+        schemaSigCache,
+        parseOkCache
       )
-      val schemaSplitOutcomes = executeInParallel(schemaSplitParallelism, groupedByDirectoryAndFormat.map { group =>
-        () =>
-          val (splitGroups, splitErrors) = splitGroupBySchemaFast(
-            spark,
-            datasetPath,
-            timestamp,
-            group,
-            csvHeadCache,
-            schemaSigCache,
-            parseOkCache
-          )
-          (group, splitGroups, splitErrors)
-      })
-
-      schemaSplitOutcomes.foreach {
-        case (group, splitGroups, splitErrors) =>
-          schemaAwareGroups ++= splitGroups
-          errors ++= splitErrors
-          DriverLogger.debug(
-            "scan_directory_group_schema_split",
-            "directory" -> group.directoryPath,
-            "format" -> group.format,
-            "input_files" -> group.filePaths.size,
-            "split_groups" -> splitGroups.size,
-            "split_errors" -> splitErrors.size
-          )
-          if (splitErrors.nonEmpty) {
-            directoriesWithPreScanErrors += group.directoryPath
-          }
-      }
-
-      val groupsPerDirectory = schemaAwareGroups.groupBy(_.directoryPath).map {
-        case (directoryPath, groups) => directoryPath -> groups.size
-      }
-
-      val finalizedGroups = schemaAwareGroups.map { group =>
-        val isInputRootGroup = comparableGroupingPath(group.directoryPath) == comparableGroupingPath(inputPath)
-        val directoryIdentifierEligible =
-          !inputPathIsFile &&
-          group.allowDirectoryIdentifier &&
-            groupsPerDirectory.getOrElse(group.directoryPath, 0) == 1 &&
-            (group.filePaths.size > 1 || !isInputRootGroup) &&
-            !directoriesWithPreScanErrors.contains(group.directoryPath)
-        val finalizedGroup = group.copy(
-          useDirectoryIdentifier = directoryIdentifierEligible && !group.schemaSampled,
-          directoryIdentifierEligible = directoryIdentifierEligible
-        )
-        DriverLogger.debug(
-          "scan_group_planned",
-          "directory" -> finalizedGroup.directoryPath,
-          "format" -> finalizedGroup.format,
-          "schema" -> finalizedGroup.schemaSignature,
-          "files" -> finalizedGroup.filePaths.size,
-          "use_directory_identifier" -> finalizedGroup.useDirectoryIdentifier,
-          "schema_sampled" -> finalizedGroup.schemaSampled,
-          "csv_has_header" -> finalizedGroup.csvHasHeader
-        )
-        finalizedGroup
-      }
+      errors ++= splitAndFinalizeResult.errors
+      directoriesWithPreScanErrors ++= splitAndFinalizeResult.directoriesWithPreScanErrors
+      val finalizedGroups = splitAndFinalizeResult.groups
 
       val nonSkippedPreScanOutcomes = preScanOutcomes.filterNot(_.skipped)
       val directoryCount = nonSkippedPreScanOutcomes
@@ -507,112 +267,15 @@ private[privyspark] object DirectoryScanner {
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
     parseOkCache: ParseOkCache = new ParseOkCache()
   ): (Seq[ScanGroup], Seq[ScanError]) = {
-    if (group.filePaths.size <= 1 || group.readOptionsByKey.nonEmpty) {
-      splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache)
-    } else {
-      DriverLogger.debug(
-        "scan_group_schema_sample_start",
-        "directory" -> group.directoryPath,
-        "format" -> group.format,
-        "files" -> group.filePaths.size
-      )
-
-      val sampledSourceKey = group.filePaths.head
-      val sampledPhysicalPath = resolvePhysicalPath(group, sampledSourceKey)
-      val sampledReadOptions = resolveReadOptions(group, sampledSourceKey)
-      val sampledSchemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, sampledPhysicalPath, csvHeadCache, schemaSigCache, sampledReadOptions)
-      } else {
-        inferSchemaSignature(spark, group.format, sampledPhysicalPath, sampledReadOptions, schemaSigCache)
-          .map(signature => (signature, true))
-      }
-
-      sampledSchemaResult match {
-        case Right((schemaSignature, csvHasHeader)) =>
-          val (validatedFilePaths, validationErrors) =
-            if (group.format == "json") {
-              validateSampledJsonFiles(spark, datasetPath, timestamp, group, parseOkCache)
-            } else {
-              (group.filePaths, Seq.empty)
-            }
-
-          if (validatedFilePaths.isEmpty) {
-            return (Seq.empty, validationErrors)
-          }
-
-          val sampledGroup = group.copy(
-            schemaSignature = schemaSignature,
-            filePaths = validatedFilePaths.sorted,
-            schemaSampled = validatedFilePaths.size > 1,
-            csvHasHeader = csvHasHeader
-          )
-          DriverLogger.debug(
-            "scan_group_schema_sample_complete",
-            "directory" -> group.directoryPath,
-            "format" -> group.format,
-            "schema" -> schemaSignature,
-            "files" -> validatedFilePaths.size,
-            "filtered_errors" -> validationErrors.size,
-            "csv_has_header" -> csvHasHeader
-          )
-          (Seq(sampledGroup), validationErrors)
-        case Left(errorMessage) =>
-          DriverLogger.debug(
-            "scan_group_schema_sample_fallback",
-            "directory" -> group.directoryPath,
-            "format" -> group.format,
-            "files" -> group.filePaths.size,
-            "reason" -> errorMessage
-          )
-          splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache)
-      }
-    }
-  }
-
-  private def validateSampledJsonFiles(
-    spark: SparkSession,
-    datasetPath: String,
-    timestamp: String,
-    group: ScanGroup,
-    parseOkCache: ParseOkCache = new ParseOkCache()
-  ): (Seq[String], Seq[ScanError]) = {
-    val validFilePaths = ArrayBuffer.empty[String]
-    val errors = ArrayBuffer.empty[ScanError]
-
-    group.filePaths.foreach { sourceKey =>
-      val physicalPath = resolvePhysicalPath(group, sourceKey)
-      val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
-      if (parseOkCache.isOk(physicalPath)) {
-        validFilePaths += sourceKey
-      } else {
-        try {
-          withFileReadRetry(spark, Seq(physicalPath), "schema_detection") {
-            readSchemaSource(spark, group.format, physicalPath, group.csvHasHeader)
-            ()
-          }
-          parseOkCache.markOk(physicalPath)
-          validFilePaths += sourceKey
-        } catch {
-          case NonFatal(e) =>
-            val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
-            DriverLogger.debug(
-              "group_schema_signature_failed",
-              "directory" -> group.directoryPath,
-              "file" -> physicalPath,
-              "format" -> group.format,
-              "reason" -> errorMessage
-            )
-            errors += ScanError(
-              datasetPath,
-              timestamp,
-              logicalIdentifier,
-              s"Schema detection failed: $errorMessage"
-            )
-        }
-      }
-    }
-
-    (validFilePaths.toSeq, errors.toSeq)
+    SchemaGroupSplitter.splitGroupBySchemaFast(
+      spark,
+      datasetPath,
+      timestamp,
+      group,
+      csvHeadCache,
+      schemaSigCache,
+      parseOkCache
+    )
   }
 
   def splitGroupBySchema(
@@ -623,86 +286,13 @@ private[privyspark] object DirectoryScanner {
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
   ): (Seq[ScanGroup], Seq[ScanError]) = {
-    DriverLogger.debug(
-      "scan_group_schema_split_start",
-      "directory" -> group.directoryPath,
-      "format" -> group.format,
-      "files" -> group.filePaths.size
+    SchemaGroupSplitter.splitGroupBySchema(
+      spark,
+      datasetPath,
+      timestamp,
+      group,
+      csvHeadCache,
+      schemaSigCache
     )
-    val filesBySchema = scala.collection.mutable.Map.empty[(String, Boolean), ArrayBuffer[String]]
-    val errors = ArrayBuffer.empty[ScanError]
-
-    group.filePaths.foreach { sourceKey =>
-      val physicalPath = resolvePhysicalPath(group, sourceKey)
-      val readOptions = resolveReadOptions(group, sourceKey)
-      val schemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, physicalPath, csvHeadCache, schemaSigCache, readOptions)
-      } else {
-        inferSchemaSignature(spark, group.format, physicalPath, readOptions, schemaSigCache)
-          .map(signature => (signature, true))
-      }
-
-      schemaResult match {
-        case Right((schemaSignature, csvHasHeader)) =>
-          val groupedFiles = filesBySchema.getOrElseUpdate((schemaSignature, csvHasHeader), ArrayBuffer.empty[String])
-          groupedFiles += sourceKey
-          DriverLogger.debug(
-            "group_schema_signature_detected",
-            "directory" -> group.directoryPath,
-            "file" -> physicalPath,
-            "format" -> group.format,
-            "schema" -> schemaSignature,
-            "csv_has_header" -> csvHasHeader
-          )
-        case Left(errorMessage) =>
-          if (isEmptyWorkbookSheetSchemaError(group.format, errorMessage)) {
-            DriverLogger.debug(
-              "group_schema_signature_empty_xlsx_sheet",
-              "directory" -> group.directoryPath,
-              "file" -> physicalPath,
-              "format" -> group.format,
-              "file_identifier" -> resolveLogicalIdentifier(group, datasetPath, sourceKey)
-            )
-          } else {
-            DriverLogger.debug(
-              "group_schema_signature_failed",
-              "directory" -> group.directoryPath,
-              "file" -> physicalPath,
-              "format" -> group.format,
-              "reason" -> errorMessage
-            )
-            errors += ScanError(
-              datasetPath,
-              timestamp,
-              resolveLogicalIdentifier(group, datasetPath, sourceKey),
-              s"Schema detection failed: $errorMessage"
-            )
-          }
-      }
-    }
-
-    val groups = filesBySchema.toSeq
-      .sortBy { case ((schemaSignature, csvHasHeader), _) => (schemaSignature, csvHasHeader) }
-      .map {
-        case ((schemaSignature, csvHasHeader), groupedFiles) =>
-          group.copy(
-            schemaSignature = schemaSignature,
-            filePaths = groupedFiles.toSeq.sorted,
-            schemaSampled = false,
-            csvHasHeader = csvHasHeader
-          )
-      }
-
-    DriverLogger.debug(
-      "scan_group_schema_split_complete",
-      "directory" -> group.directoryPath,
-      "format" -> group.format,
-      "schema_groups" -> groups.size,
-      "errors" -> errors.size
-    )
-    (groups, errors.toSeq)
   }
-
-  private def isEmptyWorkbookSheetSchemaError(format: String, errorMessage: String): Boolean =
-    format == XlsxFormat && errorMessage == "head of empty list"
 }

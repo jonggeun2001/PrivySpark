@@ -9,17 +9,18 @@
 - Review location, Hive table, column, PII type, and metrics in separate Korean-labeled columns; findings with the same path remain separate rows so each PII type can be judged independently.
 - PII types are displayed as Korean names such as `이메일` and `운전면허번호`; downloaded JSON keeps the collector's raw `pii_type` values.
 - Select decisions with the false-positive and true-positive buttons. The top guidance block contains the shared examples instead of repeating hints in every row.
+- The top guidance block includes false-positive reason examples, such as `거래일시 포맷이 운전면허번호 규칙과 충돌`.
 - The detection sample column shows only matched fragments and raw sample context; path, column, and PII type stay in their separate columns.
-- False-positive responses always use `allowlist_scope=exact`; the scope selector column is not shown.
-- False-positive fields and true-positive action-plan fields are split into individual columns and shown based on the selected decision.
+- False-positive responses use recurring review state only; exact scope and pattern selector controls are not shown.
+- False-positive reason, false-positive expiry date, and true-positive action-plan fields are split into individual columns and shown based on the selected decision.
 - Use the bulk true-positive button to fill `action_plan` and `action_due_date` for findings already marked `true_positive`, or the bulk false-positive button to fill `false_positive_reason` for findings already marked `false_positive`.
-- The download button validates every finding before creating JSON. Missing decisions, false-positive reasons, action plans, or due dates are highlighted in red and the first invalid cell is focused.
-- Direct true-positive due-date inputs use the browser date picker.
-- Click the download button to create a `response-YYYYMMDD-HHMMSS.json` file.
+- The download button validates every finding before creating JSON. Missing decisions, false-positive reasons, false-positive expiry dates, action plans, due dates, or due dates outside the next 30 days are highlighted in red and the first invalid cell is focused.
+- Direct true-positive due-date inputs use the browser date picker and only allow dates from today through 30 days from today.
+- Click the download button to create a `response-<scan-path>-YYYYMMDD-HHMMSS.json` file.
 - The downloaded JSON contains one response object per finding, so it can be consumed by the existing collector schema.
 - The sample data is synthetic and masked; production `review.html` files are generated under `<scan-output>/review/review.html`.
 
-`review-response-viewer.html` is a local operator page for inspecting a returned `response-YYYYMMDD-HHMMSS.json`.
+`review-response-viewer.html` is a local operator page for inspecting a returned `response-<scan-path>-YYYYMMDD-HHMMSS.json`.
 
 - Open it directly in a browser.
 - Choose the response JSON file, drop it onto the upload area, or paste its contents.

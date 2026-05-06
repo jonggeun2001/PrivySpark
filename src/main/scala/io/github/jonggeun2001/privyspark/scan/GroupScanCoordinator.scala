@@ -6,7 +6,7 @@ import io.github.jonggeun2001.privyspark.model.{PiiRule, ProgressRun, ScanError,
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
-import io.github.jonggeun2001.privyspark.scan.SourceExpansion.supportsBatchScan
+import io.github.jonggeun2001.privyspark.scan.GroupScanRoute.{BatchScan, FileScan, SampledExact}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
 import org.apache.spark.broadcast.Broadcast
@@ -136,15 +136,15 @@ private[privyspark] object GroupScanCoordinator {
       "schema_sampled" -> group.schemaSampled,
       "csv_has_header" -> group.csvHasHeader
     )
-    if (group.schemaSampled && group.filePaths.size > 1) {
-      val exactSplitResult = AllowlistApplier.rescanSampledGroupWithExactSplit(
+    def rescanSampledGroupWithExactSplit(mode: String): (Seq[ScanResult], Seq[ScanError]) =
+      AllowlistApplier.rescanSampledGroupWithExactSplit(
         spark,
         datasetPath,
         group,
         rules,
         sampleRatio,
         timestamp,
-        "sampled_exact_split",
+        mode,
         fileParallelism,
         fileSampleRatio,
         fileSampleMinFiles,
@@ -155,22 +155,9 @@ private[privyspark] object GroupScanCoordinator {
         csvHeadCache,
         hiveLookup
       )
-      DriverLogger.debug(
-        "group_scan_complete",
-        "directory" -> group.directoryPath,
-        "format" -> group.format,
-        "schema" -> group.schemaSignature,
-        "result_rows" -> exactSplitResult._1.size,
-        "error_rows" -> exactSplitResult._2.size,
-        "mode" -> "sampled_exact_split"
-      )
-      return exactSplitResult
-    }
 
-    if (!supportsBatchScan(group) || group.useDirectoryIdentifier) {
-      val effectiveSelectedSourceKeys =
-        selectedSourceKeys.getOrElse(FileMetricsScanner.resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
-      val fallbackResult = GroupFileScanner.scanGroupByFile(
+    def scanCurrentGroupByFile(selectedKeys: Seq[String]): (Seq[ScanResult], Seq[ScanError]) =
+      GroupFileScanner.scanGroupByFile(
         spark,
         datasetPath,
         group,
@@ -185,147 +172,87 @@ private[privyspark] object GroupScanCoordinator {
         csvHeadCache,
         fileSampleRatio,
         fileSampleMinFiles,
-        selectedSourceKeys = Some(effectiveSelectedSourceKeys),
+        selectedSourceKeys = Some(selectedKeys),
         hiveLookup = hiveLookup
       )
-      DriverLogger.debug(
-        "group_scan_complete",
-        "directory" -> group.directoryPath,
-        "format" -> group.format,
-        "schema" -> group.schemaSignature,
-        "result_rows" -> fallbackResult._1.size,
-        "error_rows" -> fallbackResult._2.size,
-        "mode" -> (if (group.useDirectoryIdentifier) "directory_file_scan" else "direct_file_scan")
-      )
-      return fallbackResult
-    }
 
-    val effectiveSelectedSourceKeys =
-      selectedSourceKeys.getOrElse(FileMetricsScanner.resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
-
-    try {
-      val results = scanGroupBatch(
-        spark,
-        datasetPath,
-        group,
-        rules,
-        sampleRatio,
-        timestamp,
-        fileSampleRatio,
-        fileSampleMinFiles,
-        suppressions,
-        allowlistMatcher,
-        allowlistInputRoot,
-        selectedSourceKeys = Some(effectiveSelectedSourceKeys),
-        progressRun = progressRun,
-        hiveLookup = hiveLookup
-      )
-      progressRun.foreach { run =>
-        persistProgressRecords(
-          spark.sparkContext.hadoopConfiguration,
-          run,
-          "group",
-          group.directoryPath,
-          results,
-          Seq.empty
-        )
-      }
-      DriverLogger.debug(
-        "group_scan_complete",
-        "directory" -> group.directoryPath,
-        "format" -> group.format,
-        "schema" -> group.schemaSignature,
-        "result_rows" -> results.size,
-        "error_rows" -> 0,
-        "mode" -> "group_batch_scan"
-      )
-      (results, Seq.empty)
-    } catch {
-      case NonFatal(e) =>
-        DriverLogger.warn(
-          "group_scan_fallback",
-          "directory" -> group.directoryPath,
-          "format" -> group.format,
-          "schema" -> group.schemaSignature,
-          "files" -> group.filePaths.size,
-          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
-        )
-        val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+    GroupScanRouter.routeOf(group) match {
+      case SampledExact =>
+        val exactSplitResult = rescanSampledGroupWithExactSplit("sampled_exact_split")
         DriverLogger.debug(
-          "group_scan_fallback_requested",
+          "group_scan_complete",
           "directory" -> group.directoryPath,
           "format" -> group.format,
           "schema" -> group.schemaSignature,
-          "files" -> group.filePaths.size,
-          "reason" -> errorMessage
+          "result_rows" -> exactSplitResult._1.size,
+          "error_rows" -> exactSplitResult._2.size,
+          "mode" -> "sampled_exact_split"
         )
-        if (group.schemaSampled) {
-          DriverLogger.warn(
-            "group_scan_fallback_execute",
-            "directory" -> group.directoryPath,
-            "format" -> group.format,
-            "schema" -> group.schemaSignature,
-            "files" -> group.filePaths.size,
-            "mode" -> "schema_resplit"
-          )
-          val exactSplitResult = AllowlistApplier.rescanSampledGroupWithExactSplit(
-            spark,
-            datasetPath,
-            group,
-            rules,
-            sampleRatio,
-            timestamp,
-            "fallback_schema_resplit",
-            fileParallelism,
-            fileSampleRatio,
-            fileSampleMinFiles,
-            suppressions,
-            allowlistMatcher,
-            allowlistInputRoot,
-            progressRun,
-            csvHeadCache,
-            hiveLookup
-          )
+        exactSplitResult
 
-          DriverLogger.debug(
-            "group_scan_complete",
-            "directory" -> group.directoryPath,
-            "format" -> group.format,
-            "schema" -> group.schemaSignature,
-            "result_rows" -> exactSplitResult._1.size,
-            "error_rows" -> exactSplitResult._2.size,
-            "mode" -> "fallback_schema_resplit"
-          )
-          exactSplitResult
-        } else {
-          val fallbackResult = GroupFileScanner.scanGroupByFile(
+      case FileScan =>
+        val effectiveSelectedSourceKeys =
+          selectedSourceKeys.getOrElse(FileMetricsScanner.resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
+        val fallbackResult = scanCurrentGroupByFile(effectiveSelectedSourceKeys)
+        DriverLogger.debug(
+          "group_scan_complete",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "result_rows" -> fallbackResult._1.size,
+          "error_rows" -> fallbackResult._2.size,
+          "mode" -> (if (group.useDirectoryIdentifier) "directory_file_scan" else "direct_file_scan")
+        )
+        fallbackResult
+
+      case BatchScan =>
+        val effectiveSelectedSourceKeys =
+          selectedSourceKeys.getOrElse(FileMetricsScanner.resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
+        try {
+          val results = scanGroupBatch(
             spark,
             datasetPath,
             group,
             rules,
             sampleRatio,
             timestamp,
-            fileParallelism,
+            fileSampleRatio,
+            fileSampleMinFiles,
             suppressions,
             allowlistMatcher,
             allowlistInputRoot,
-            progressRun,
-            csvHeadCache,
-            fileSampleRatio,
-            fileSampleMinFiles,
             selectedSourceKeys = Some(effectiveSelectedSourceKeys),
+            progressRun = progressRun,
             hiveLookup = hiveLookup
           )
+          progressRun.foreach { run =>
+            persistProgressRecords(
+              spark.sparkContext.hadoopConfiguration,
+              run,
+              "group",
+              group.directoryPath,
+              results,
+              Seq.empty
+            )
+          }
           DriverLogger.debug(
             "group_scan_complete",
             "directory" -> group.directoryPath,
             "format" -> group.format,
             "schema" -> group.schemaSignature,
-            "result_rows" -> fallbackResult._1.size,
-            "error_rows" -> fallbackResult._2.size,
-            "mode" -> "fallback_file_scan"
+            "result_rows" -> results.size,
+            "error_rows" -> 0,
+            "mode" -> "group_batch_scan"
           )
-          fallbackResult
+          (results, Seq.empty)
+        } catch {
+          case NonFatal(e) =>
+            GroupScanFallbackPolicy.fallback(
+              group,
+              e,
+              () => rescanSampledGroupWithExactSplit("fallback_schema_resplit"),
+              () => scanCurrentGroupByFile(effectiveSelectedSourceKeys)
+            )
         }
     }
   }

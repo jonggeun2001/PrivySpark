@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.review
 
 import io.github.jonggeun2001.privyspark.model.PiiRule
-import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanner}
+import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanCoordinator}
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
@@ -18,36 +18,32 @@ class AllowlistScanSpec extends AnyFunSuite {
     .config("spark.ui.enabled", "false")
     .getOrCreate()
 
-  test("scanGroups suppresses allowlisted file-column-pii matches") {
+  test("scanGroups suppresses recurring file-column-pii matches") {
     val inputRoot = Files.createTempDirectory("privyspark-allowlist-scan-")
 
     try {
       val csvFile = inputRoot.resolve("users.csv")
       Files.write(csvFile, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
-      val fingerprint = FileIdentifierResolver.resolveFingerprints(
-        spark.sparkContext.hadoopConfiguration,
-        inputRoot.toString,
-        "users.csv"
-      ).right.get.head
-      val matcher = AllowlistMatcher.fromEntries(Seq(
-        AllowlistEntry(
-          datasetPath = inputRoot.toString,
-          fileIdentifier = "users.csv",
+      val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+        RecurringAllowlistEntry(
+          scanPath = inputRoot.toString,
+          hiveTableFqn = "",
+          fileIdentifierPattern = "users.csv",
           columnName = "email",
           piiType = "email",
           reason = "known dummy data",
           reviewer = "reviewer@example.com",
           reviewedAt = "2026-04-20T00:00:00Z",
-          sourceRunId = "",
-          fileSize = fingerprint.fileSize,
-          fileMtimeEpochMs = fingerprint.fileMtimeEpochMs,
-          fileChecksumAlgo = fingerprint.fileChecksumAlgo,
-          fileChecksum = fingerprint.fileChecksum
+          expiresAt = "2999-12-31",
+          sourceFindingKey = "finding",
+          sampleRowCount = 10L,
+          matchCount = 1L,
+          nonEmptyMatchRatio = 1.0
         )
       ))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,
@@ -64,7 +60,7 @@ class AllowlistScanSpec extends AnyFunSuite {
     }
   }
 
-  test("scanGroups keeps invalidated matches with review metadata when checksum changed") {
+  test("scanGroups ignores legacy exact allowlist entries") {
     val inputRoot = Files.createTempDirectory("privyspark-allowlist-invalidated-")
 
     try {
@@ -93,7 +89,7 @@ class AllowlistScanSpec extends AnyFunSuite {
       ))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,
@@ -107,8 +103,96 @@ class AllowlistScanSpec extends AnyFunSuite {
       val results = scanned.flatMap(_._2)
       assert(results.size == 1)
       assert(results.head.review_status == "pending")
-      assert(results.head.review_reason == "known dummy data")
-      assert(results.head.review_invalidated)
+      assert(results.head.review_reason == "")
+      assert(!results.head.review_invalidated)
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
+  test("scanGroups suppresses recurring directory finding using the finding identifier with scoped evidence") {
+    val inputRoot = Files.createTempDirectory("privyspark-allowlist-directory-recurring-")
+
+    try {
+      val reviewsDir = Files.createDirectories(inputRoot.resolve("reviews"))
+      Files.write(reviewsDir.resolve("a.csv"), "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      Files.write(reviewsDir.resolve("b.csv"), "name,email\nbob,bob@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+        RecurringAllowlistEntry(
+          scanPath = inputRoot.toString,
+          hiveTableFqn = "",
+          fileIdentifierPattern = "reviews",
+          columnName = "email",
+          piiType = "email",
+          reason = "known dummy data",
+          reviewer = "reviewer@example.com",
+          reviewedAt = "2026-04-20T00:00:00Z",
+          expiresAt = "2999-12-31",
+          sourceFindingKey = "finding",
+          sampleRowCount = 2L,
+          matchCount = 2L,
+          nonEmptyMatchRatio = 1.0
+        )
+      ))
+      val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
+
+      val scanned = GroupScanCoordinator.scanGroups(
+        spark,
+        inputRoot.toString,
+        plan.groups,
+        Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")),
+        sampleRatio = 1.0,
+        timestamp = "2026-04-20T00:00:00Z",
+        allowlistMatcher = matcher,
+        allowlistInputRoot = Some(inputRoot.toString)
+      )
+
+      assert(scanned.flatMap(_._2).isEmpty)
+    } finally {
+      deleteRecursively(inputRoot)
+    }
+  }
+
+  test("scanGroups keeps directory finding when recurring allowlist covers only one scoped child") {
+    val inputRoot = Files.createTempDirectory("privyspark-allowlist-directory-partial-")
+
+    try {
+      val reviewsDir = Files.createDirectories(inputRoot.resolve("reviews"))
+      Files.write(reviewsDir.resolve("a.csv"), "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
+      Files.write(reviewsDir.resolve("b.csv"), "name,email\nbob,bob@example.com\n".getBytes(StandardCharsets.UTF_8))
+      val matcher = AllowlistMatcher.fromRecurringEntries(Seq(
+        RecurringAllowlistEntry(
+          scanPath = inputRoot.toString,
+          hiveTableFqn = "",
+          fileIdentifierPattern = "reviews/a.csv",
+          columnName = "email",
+          piiType = "email",
+          reason = "known dummy data",
+          reviewer = "reviewer@example.com",
+          reviewedAt = "2026-04-20T00:00:00Z",
+          expiresAt = "2999-12-31",
+          sourceFindingKey = "finding",
+          sampleRowCount = 1L,
+          matchCount = 1L,
+          nonEmptyMatchRatio = 1.0
+        )
+      ))
+      val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
+
+      val scanned = GroupScanCoordinator.scanGroups(
+        spark,
+        inputRoot.toString,
+        plan.groups,
+        Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")),
+        sampleRatio = 1.0,
+        timestamp = "2026-04-20T00:00:00Z",
+        allowlistMatcher = matcher,
+        allowlistInputRoot = Some(inputRoot.toString)
+      )
+
+      val results = scanned.flatMap(_._2)
+      assert(results.nonEmpty)
+      assert(results.exists(_.file_identifier == "reviews"))
     } finally {
       deleteRecursively(inputRoot)
     }
@@ -123,7 +207,7 @@ class AllowlistScanSpec extends AnyFunSuite {
       Files.write(reviewsDir.resolve("b.csv"), "name,email\nbob,bob@example.com\n".getBytes(StandardCharsets.UTF_8))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,
@@ -160,7 +244,7 @@ class AllowlistScanSpec extends AnyFunSuite {
       Files.write(csvFile, "name,email\nalice,alice@example.com\n".getBytes(StandardCharsets.UTF_8))
       val plan = DirectoryScanner.scanDirectoryStructure(spark, inputRoot.toString, inputRoot.toString, "2026-04-20T00:00:00Z")
 
-      val scanned = GroupScanner.scanGroups(
+      val scanned = GroupScanCoordinator.scanGroups(
         spark,
         inputRoot.toString,
         plan.groups,

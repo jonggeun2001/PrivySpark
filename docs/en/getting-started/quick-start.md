@@ -111,7 +111,7 @@ bin/privyspark-submit \
   --suppression-file scan.suppressions
 ```
 
-`--suppression-file` is also UTF-8 text. Each line uses `column:pii_type`, and blank lines plus `#` comments are ignored. If the ruleset YAML already defines `suppressions:`, the CLI entries are union-merged with them.
+`--suppression-file` is also UTF-8 text. Each line uses `column:pii_type`, and blank lines plus `#` comments are ignored. If the ruleset YAML already defines `suppressions:`, the CLI entries are union-merged with them. Ruleset YAML can group multiple columns with `columns: [col1, col2]` for the same `pii_type`.
 
 ## Distributing a Custom Ruleset
 

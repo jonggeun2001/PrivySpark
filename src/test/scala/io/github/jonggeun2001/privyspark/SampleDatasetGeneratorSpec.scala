@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark
 
 import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanResult}
-import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanner}
+import io.github.jonggeun2001.privyspark.scan.{DirectoryScanner, GroupScanCoordinator}
 import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
@@ -110,7 +110,7 @@ class SampleDatasetGeneratorSpec extends AnyFunSuite with BeforeAndAfterAll {
     val errors = ArrayBuffer.empty[ScanError] ++ plan.errors
 
     plan.groups.foreach { group =>
-      val (groupResults, groupErrors) = GroupScanner.scanGroup(
+      val (groupResults, groupErrors) = GroupScanCoordinator.scanGroup(
         spark,
         datasetPath,
         group,

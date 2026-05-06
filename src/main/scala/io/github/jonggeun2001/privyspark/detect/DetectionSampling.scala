@@ -62,10 +62,7 @@ private[privyspark] object DetectionSampling {
     metrics: Seq[DetectionAggregator.Metric],
     maxExpressionsPerAgg: Int
   ): Map[(String, String), String] = {
-    if (DetectionAggregator.forceFileSampleBatchFailure) {
-      DetectionAggregator.forceFileSampleBatchFailure = false
-      throw new RuntimeException("forced-file-sample-batch-failure")
-    }
+    DetectionAggregator.faultInjector.beforeFileSampleCollection()
 
     DetectionMetrics.groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg)
       .foldLeft(Map.empty[(String, String), String]) { (acc, batch) =>

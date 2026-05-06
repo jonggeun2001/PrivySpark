@@ -41,10 +41,11 @@
 - `--dry-run`: 실제 파일 기록 없이 반영 예정 엔트리 수만 계산
 
 ## `review collect` CLI 인자
-- `--scan-results <ABS_PATH_OR_URI>`: 현재 스캔의 `scan_results` 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
 - `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
 
-`review collect`는 `<review-state-root>/inbox/*.json`을 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 다음 스캔은 같은 `--review-state-root`를 지정해 누적 오탐 allowlist를 반영합니다.
+`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. `--scan-results`는 더 이상 필요하지 않습니다. 다음 스캔은 같은 `--review-state-root`를 지정해 recurring 오탐 allowlist를 반영합니다.
+
+오프라인 리뷰 identity와 allowlist 매칭에서는 HDFS URI path의 중복 slash를 정규화합니다. 예를 들어 `hdfs:///user/name`과 `hdfs:////user/name`은 같은 스캔 경로로 취급됩니다.
 
 ## Ignore 패턴
 - `/`가 없는 패턴은 basename 기준으로 매칭합니다. 예: `_SUCCESS`, `*.crc`
@@ -57,7 +58,7 @@
 
 ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로그, 백업 파일처럼 스캔 가치가 낮은 입력 때문에 불필요한 I/O, 오류 리포트, 결과 노이즈가 늘어나는 것을 막기 위해서입니다.
 
-allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 자체를 제외하고, allowlist는 탐지 이후 `(dataset_path, file_identifier, column_name, pii_type)` 단위 false positive만 suppress합니다.
+allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 자체를 제외하고, allowlist는 탐지 이후 Hive 매핑이 있으면 `(scan_path, hive_table_fqn, column_name, pii_type)`, Hive 매핑이 없으면 `(scan_path, file_identifier_pattern, column_name, pii_type)` 단위 recurring false positive만 suppress합니다. 신규 recurring 응답의 `column_name`, `pii_type`은 exact 값만 허용하며 `*` wildcard는 거부합니다.
 
 ## Suppression
 - suppression은 특정 `(column, pii_type)` 결과만 제외합니다. 컬럼명은 대소문자를 무시하고 exact match 합니다.
@@ -134,4 +135,4 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 - Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행합니다.
 - 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html`입니다.
 - `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
-- `privyspark-<tag>-review-response-viewer.html`은 회수한 `response-YYYYMMDD-HHMMSS.json`을 운영자가 로컬에서 파일 선택, 드래그앤드롭, 원문 붙여넣기로 열어 envelope 메타데이터, 검증 메시지, finding별 판정을 확인하는 self-contained 파일입니다.
+- `privyspark-<tag>-review-response-viewer.html`은 회수한 `response-<scan-path>-YYYYMMDD-HHMMSS.json`을 운영자가 로컬에서 파일 선택, 드래그앤드롭, 원문 붙여넣기로 열어 envelope 메타데이터, 검증 메시지, finding별 판정을 확인하는 self-contained 파일입니다.

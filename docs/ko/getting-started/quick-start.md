@@ -111,7 +111,7 @@ bin/privyspark-submit \
   --suppression-file scan.suppressions
 ```
 
-`--suppression-file`도 UTF-8 텍스트 파일이며, 각 줄은 `column:pii_type` 형식입니다. 빈 줄과 `#` 주석을 무시합니다. ruleset YAML에 `suppressions:`가 있으면 CLI suppression과 union으로 합쳐집니다.
+`--suppression-file`도 UTF-8 텍스트 파일이며, 각 줄은 `column:pii_type` 형식입니다. 빈 줄과 `#` 주석을 무시합니다. ruleset YAML에 `suppressions:`가 있으면 CLI suppression과 union으로 합쳐집니다. ruleset YAML에서는 같은 `pii_type`에 여러 컬럼을 묶기 위해 `columns: [col1, col2]`를 사용할 수 있습니다.
 
 ## 커스텀 ruleset 배포
 

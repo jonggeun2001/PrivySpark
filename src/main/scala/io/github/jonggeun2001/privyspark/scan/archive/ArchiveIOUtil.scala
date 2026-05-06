@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.scan.archive
 
 import io.github.jonggeun2001.privyspark.format.ByteProbe.{MagicProbeByteLimit, TextProbeByteLimit, inferMagicByteFormat, inferTextFormat}
 import io.github.jonggeun2001.privyspark.model.ScanError
-import io.github.jonggeun2001.privyspark.scan.ArchiveStaging.normalizeArchiveEntryName
+import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging.normalizeArchiveEntryName
 import org.apache.commons.compress.PasswordRequiredException
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream

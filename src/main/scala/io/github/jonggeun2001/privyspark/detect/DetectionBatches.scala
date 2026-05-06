@@ -30,9 +30,7 @@ private[privyspark] object DetectionBatches {
     metrics: Seq[DetectionAggregator.Metric],
     maxExpressionsPerAgg: Int
   ): Seq[MatchCount] = {
-    if (DetectionAggregator.forceDatasetBatchFailure) {
-      throw new RuntimeException("forced-dataset-batch-failure")
-    }
+    DetectionAggregator.faultInjector.beforeDatasetBatchAggregation()
 
     DetectionMetrics.groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).flatMap { batch =>
       val expressions = DetectionExpressions.buildExpressions(batch)
@@ -63,9 +61,7 @@ private[privyspark] object DetectionBatches {
     metrics: Seq[DetectionAggregator.Metric],
     maxExpressionsPerAgg: Int
   ): Seq[DetectionAggregator.FileMatchCount] = {
-    if (DetectionAggregator.forceFileBatchFailure) {
-      throw new RuntimeException("forced-file-batch-failure")
-    }
+    DetectionAggregator.faultInjector.beforeFileBatchAggregation()
 
     DetectionMetrics.groupMetricsByExpressionBudget(metrics, maxExpressionsPerAgg).flatMap { batch =>
       val expressions = DetectionExpressions.buildExpressions(batch)

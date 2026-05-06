@@ -81,7 +81,6 @@ bin/privyspark-submit \
 ```bash
 bin/privyspark-submit \
   review collect \
-  --scan-results /abs/output/parquet/scan_results \
   --review-state-root /abs/review-state
 ```
 
