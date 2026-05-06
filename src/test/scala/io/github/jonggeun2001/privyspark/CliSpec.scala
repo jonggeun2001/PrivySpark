@@ -197,6 +197,8 @@ class CliSpec extends AnyFunSuite {
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--hive-metastore-jdbc-driver-class", "   "))
     val reviewHtmlDirWithFileName =
       Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--review-html-dir", "/data/review.html"))
+    val reviewHtmlDirWithWorkbookFileName =
+      Cli.parseWithErrors(Array("--path", "/data/input", "--output", "/data/output", "--review-html-dir", "/data/review.xlsm"))
     val invalidReviewSampleMode =
       Cli.parse(Array("--path", "/data/input", "--output", "/data/output", "--review-sample-mode", "verbose"))
 
@@ -221,6 +223,8 @@ class CliSpec extends AnyFunSuite {
     assert(blankHiveJdbcDriverClass.errors.exists(_.contains("hive-metastore-jdbc-driver-class must not be blank")))
     assert(reviewHtmlDirWithFileName.command.isEmpty)
     assert(reviewHtmlDirWithFileName.errors.exists(_.contains("review-html-dir must be a directory path")))
+    assert(reviewHtmlDirWithWorkbookFileName.command.isEmpty)
+    assert(reviewHtmlDirWithWorkbookFileName.errors.exists(_.contains("review-html-dir must be a directory path")))
     assert(invalidReviewSampleMode.isEmpty)
   }
 

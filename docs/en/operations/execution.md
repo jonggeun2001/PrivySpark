@@ -23,8 +23,8 @@
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
-- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html` by default
-- `--review-html-dir <ABS_PATH_OR_URI>`: offline review HTML output directory. Defaults to `<output>/review`, with the filename fixed to `review.html`
+- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html` and `<output>/review/review.xlsm` by default
+- `--review-html-dir <ABS_PATH_OR_URI>`: offline review HTML/XLSM output directory. Defaults to `<output>/review`, with filenames fixed to `review.html` and `review.xlsm`
 - `--review-sample-mode <raw|masked|none>`: sample display mode for `review.html`, default `masked`
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
 - `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
@@ -132,5 +132,5 @@ This design keeps long-running progress observable without mixing partial output
 - GitHub Release is triggered by pushing a `v*` tag or bare semver tag.
 - The release workflow runs `./gradlew clean shadowJar packageSampleDatasets`.
 - Release assets are `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, and `privyspark-<tag>-review-response-viewer.html`.
-- `privyspark-<tag>-review-response-example.html` is a self-contained example for checking the offline owner review response JSON download flow. Production files are generated at `<scan-output>/review/review.html` after running `scan --review-state-root`.
+- `privyspark-<tag>-review-response-example.html` is a self-contained example for checking the offline owner review response JSON download flow. Production files are generated at `<scan-output>/review/review.html` and `<scan-output>/review/review.xlsm` after running `scan --review-state-root`; the workbook exports the JSON through its `review.json 생성` macro button and should not be uploaded to `inbox` directly.
 - `privyspark-<tag>-review-response-viewer.html` is a self-contained operator page for inspecting a collected `response-<scan-path>-YYYYMMDD-HHMMSS.json` locally by choosing, dragging and dropping, or pasting the file contents, including envelope metadata, validation messages, and per-finding decisions.

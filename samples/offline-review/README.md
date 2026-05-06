@@ -18,7 +18,7 @@
 - Direct true-positive due-date inputs use the browser date picker and only allow dates from today through 30 days from today.
 - Click the download button to create a `response-<scan-path>-YYYYMMDD-HHMMSS.json` file.
 - The downloaded JSON contains one response object per finding, so it can be consumed by the existing collector schema. False-positive responses carry an internal `expires_at` value of `9999-12-31` for permanent recurring review state.
-- The sample data is synthetic and masked; production `review.html` files are generated under `<scan-output>/review/review.html`.
+- The sample data is synthetic and masked; production `review.html` and `review.xlsm` files are generated under `<scan-output>/review/`.
 
 `review-response-viewer.html` is a local operator page for inspecting a returned `response-<scan-path>-YYYYMMDD-HHMMSS.json`.
 

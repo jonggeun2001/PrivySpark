@@ -23,8 +23,8 @@
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
 - `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
-- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. `<review-state-root>/current/allowlist.jsonl`을 적용하고 기본 `<output>/review/review.html`을 생성
-- `--review-html-dir <ABS_PATH_OR_URI>`: 오프라인 리뷰 HTML 출력 디렉토리. 미지정 시 `<output>/review`, 파일명은 `review.html` 고정
+- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. `<review-state-root>/current/allowlist.jsonl`을 적용하고 기본 `<output>/review/review.html`과 `<output>/review/review.xlsm`을 생성
+- `--review-html-dir <ABS_PATH_OR_URI>`: 오프라인 리뷰 HTML/XLSM 출력 디렉토리. 미지정 시 `<output>/review`, 파일명은 `review.html`/`review.xlsm` 고정
 - `--review-sample-mode <raw|masked|none>`: `review.html` 검출 샘플 표시 방식, 기본 `masked`
 - `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
 - `--suppression-file <PATH>`: 줄 단위 suppression 파일 경로, `#` 주석과 빈 줄 무시
@@ -43,7 +43,7 @@
 ## `review collect` CLI 인자
 - `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
 
-`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. `--scan-results`는 더 이상 필요하지 않습니다. 다음 스캔은 같은 `--review-state-root`를 지정해 recurring 오탐 allowlist를 반영하고, 계속 검출되는 정탐은 `review.html`의 `기존 조치 상태` 컬럼에 이전 조치 계획을 표시합니다.
+`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. `review.xlsm`은 파일 자체를 넣지 않고, 통합 문서의 `review.json 생성` 버튼으로 만든 JSON을 넣습니다. `--scan-results`는 더 이상 필요하지 않습니다. 다음 스캔은 같은 `--review-state-root`를 지정해 recurring 오탐 allowlist를 반영하고, 계속 검출되는 정탐은 `review.html`/`review.xlsm`의 `기존 조치 상태` 컬럼에 이전 조치 계획을 표시합니다.
 
 오프라인 리뷰 identity와 allowlist 매칭에서는 HDFS URI path의 중복 slash를 정규화합니다. 예를 들어 `hdfs:///user/name`과 `hdfs:////user/name`은 같은 스캔 경로로 취급됩니다.
 
@@ -134,5 +134,5 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 - GitHub Release는 `v*` 또는 bare semver 태그 푸시로 트리거됩니다.
 - Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행합니다.
 - 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html`입니다.
-- `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
+- `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`과 `<scan-output>/review/review.xlsm`에 생성됩니다.
 - `privyspark-<tag>-review-response-viewer.html`은 회수한 `response-<scan-path>-YYYYMMDD-HHMMSS.json`을 운영자가 로컬에서 파일 선택, 드래그앤드롭, 원문 붙여넣기로 열어 envelope 메타데이터, 검증 메시지, finding별 판정을 확인하는 self-contained 파일입니다.

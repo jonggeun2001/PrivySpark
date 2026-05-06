@@ -18,7 +18,7 @@ privyspark review apply \
 
 ## 권장 흐름
 
-서버 없이 담당자에게 `review.html`을 전달하고 다음 스캔에서 반복 오탐을 제외하려면 다음 흐름을 사용합니다.
+서버 없이 담당자에게 `review.html` 또는 `review.xlsm`을 전달하고 다음 스캔에서 반복 오탐을 제외하려면 다음 흐름을 사용합니다.
 
 ```bash
 privyspark scan \
@@ -30,4 +30,4 @@ privyspark review collect \
   --review-state-root /abs/review-state
 ```
 
-회수한 response JSON은 `/abs/review-state/inbox/*.json`에 업로드합니다.
+회수한 response JSON은 `/abs/review-state/inbox/*.json`에 업로드합니다. `review.xlsm`을 사용한 경우 Excel 파일 자체가 아니라 통합 문서의 `review.json 생성` 버튼으로 만든 JSON 파일을 업로드합니다.
