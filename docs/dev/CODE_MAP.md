@@ -15,7 +15,7 @@
 - `report/`: scan result/error를 parquet/csv/excel 산출물로 저장.
 - `review/`: offline review HTML/XLSM, response collect/apply, allowlist/action plan state.
 - `review/fingerprint/`: review apply fingerprint resolution for flat files, workbook sheets, archive entries, CRC32 streams.
-- `review/collect/`: offline review response envelope read/validate/build/write helpers.
+- `review/collect/`: offline review response envelope read/validate/build/write helpers and collect lock handling.
 - `scan/`: scan pipeline orchestration, directory scan, source expansion, grouping, group route/fallback policy, file sampling, batch/file scan orchestration.
 - `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
 - `scan/discovery/`: physical file discovery, pre-scan expansion, schema split/finalization helpers.
@@ -23,7 +23,7 @@
 
 ## 핵심 파일 포인터
 
-- `PrivySparkApp.scala`: `main` L13, `runMain` L17, default scan dispatch L76, Excel compatibility warning L89.
+- `PrivySparkApp.scala`: `main` L13, `runMain` L17, scan auto collect dispatch L49, default scan dispatch L79, Excel compatibility warning L92.
 - `cli/CliArgumentValidator.scala`: command path validation L6, absolute path error logging L51.
 - `config/SuppressionParser.scala`: parsed suppression ADT L15, CLI/file suppression parsing L17/L25, unknown pii warning L35.
 - `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L41, report merge/review hook L204.
@@ -43,7 +43,8 @@
 - `review/fingerprint/WorkbookFingerprintResolver.scala`: workbook identifier parsing L11, sheet fingerprint resolution L33.
 - `review/fingerprint/ArchiveFingerprintResolver.scala`: archive identifier parsing L21, archive format dispatch L30.
 - `review/fingerprint/Crc32Stream.scala`: CRC32 stream calculation L16, temporary local archive helper L54.
-- `review/ReviewCollectCommand.scala`: collect ADT L12-L65, `run` orchestration L68.
+- `review/ReviewCollectCommand.scala`: collect ADT L12-L65, lock/strict validation/write orchestration L68.
+- `review/collect/ReviewCollectLock.scala`: collect lock path L31, atomic lock acquire L34, release L48.
 - `review/collect/ResponseEnvelopeReader.scala`: inbox JSON read L13, response envelope parse L30.
 - `review/collect/ResponseValidator.scala`: envelope validation L9, response item validation L23.
 - `review/collect/ReviewStateBuilder.scala`: current state build L23, recurring/action-plan retention helpers L85.

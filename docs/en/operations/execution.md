@@ -23,7 +23,7 @@
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
-- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html` and `<output>/review/review.xlsm` by default
+- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Before the scan starts, collects `<review-state-root>/inbox/*.json`, updates `<review-state-root>/current`, then applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html` and `<output>/review/review.xlsm` by default
 - `--review-html-dir <ABS_PATH_OR_URI>`: offline review HTML/XLSM output directory. Defaults to `<output>/review`, with filenames fixed to `review.html` and `review.xlsm`
 - `--review-sample-mode <raw|masked|none>`: sample display mode for `review.html`, default `masked`
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
@@ -43,7 +43,7 @@
 ## `review collect` CLI Arguments
 - `--review-state-root <ABS_PATH_OR_URI>`: state root where response JSON files are read and cumulative review state is written
 
-`review collect` reads only `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`. `--scan-results` is no longer required. Later scans with the same `--review-state-root` apply the recurring false-positive allowlist and show prior true-positive action plans for still-detected findings in the existing action status (`기존 조치 상태`) review HTML column.
+`review collect` reads only `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`. `--scan-results` is no longer required. A later scan with the same `--review-state-root` runs this collect step automatically before scanning. If any response is invalid, current state is not updated and the command fails. If `<review-state-root>/.collect.lock` already exists, the command fails to prevent concurrent state updates; the lock is removed after collect finishes.
 
 ## Ignore Patterns
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`
