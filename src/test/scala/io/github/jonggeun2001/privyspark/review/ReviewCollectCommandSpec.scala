@@ -80,6 +80,36 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(ledger.contains("finding-phone"))
   }
 
+  test("collect accepts response JSON with a leading UTF-8 BOM") {
+    val stateRoot = Files.createTempDirectory("privyspark-review-state-bom-")
+    Files.createDirectories(stateRoot.resolve("inbox"))
+
+    Files.write(
+      stateRoot.resolve("inbox/owner-response.json"),
+      ("\uFEFF" + responseEnvelope(
+        scanPath = "/data/project",
+        responses = Seq(falsePositiveResponse(
+          findingKey = "finding-email-bom",
+          columnName = "email",
+          piiType = "email",
+          reason = "owner confirmed recurring false positive"
+        ))
+      )).getBytes(StandardCharsets.UTF_8)
+    )
+
+    ReviewCollectCommand.run(
+      spark,
+      ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString)
+    )
+
+    val allowlist = read(stateRoot.resolve("current/allowlist.jsonl"))
+    val ledger = read(stateRoot.resolve("current/response_ledger.jsonl"))
+
+    assert(allowlist.contains("finding-email-bom"))
+    assert(allowlist.contains("owner confirmed recurring false positive"))
+    assert(ledger.contains("finding-email-bom"))
+  }
+
   test("collect rejects exact allowlist scope") {
     val stateRoot = Files.createTempDirectory("privyspark-review-state-exact-reject-")
     Files.createDirectories(stateRoot.resolve("inbox"))

@@ -117,7 +117,8 @@ private[privyspark] object ReviewHtmlWriter {
       ReviewActionPlanStatus.load(conf, reviewStateRoot)
     )
     val html = ReviewHtmlRenderer.render(scanPath, scanResultsFingerprint, findings, sampleMode, actionPlanStates)
-    val htmlPath = resolveHtmlPath(outputRoot, reviewHtmlDir)
+    val reviewDir = resolveReviewDirectory(outputRoot, reviewHtmlDir)
+    val htmlPath = new Path(reviewDir, "review.html")
     val fs = htmlPath.getFileSystem(conf)
     Option(htmlPath.getParent).foreach(fs.mkdirs)
     val writer = new BufferedWriter(new OutputStreamWriter(fs.create(htmlPath, true), StandardCharsets.UTF_8))
@@ -126,12 +127,21 @@ private[privyspark] object ReviewHtmlWriter {
     } finally {
       writer.close()
     }
+    ReviewWorkbookWriter.write(
+      conf,
+      new Path(reviewDir, "review.xlsm"),
+      scanPath,
+      scanResultsFingerprint,
+      findings,
+      sampleMode,
+      actionPlanStates
+    )
   }
 
-  private def resolveHtmlPath(outputRoot: String, reviewHtmlDir: Option[String]): Path =
+  private def resolveReviewDirectory(outputRoot: String, reviewHtmlDir: Option[String]): Path =
     reviewHtmlDir
       .map(_.trim)
       .filter(_.nonEmpty)
-      .map(directory => new Path(new Path(directory), "review.html"))
-      .getOrElse(new Path(new Path(outputRoot), "review/review.html"))
+      .map(directory => new Path(directory))
+      .getOrElse(new Path(new Path(outputRoot), "review"))
 }

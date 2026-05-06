@@ -3,6 +3,13 @@ package io.github.jonggeun2001.privyspark.review
 import io.github.jonggeun2001.privyspark.report.JsonCodec.jsonString
 
 private[privyspark] object ReviewSampleMasker {
+  def evidenceSampleText(finding: ReviewFinding, sampleMode: String): String =
+    finding.evidence.take(5).map { evidence =>
+      val matched = renderSample(evidence.sampleMatchedFragment, evidence.sampleMatchedFragment, sampleMode)
+      val raw = renderSample(evidence.sampleRawValue, evidence.sampleMatchedFragment, sampleMode)
+      s"$matched\n$raw"
+    }.mkString("\n---\n")
+
   def findingToJson(
     finding: ReviewFinding,
     sampleMode: String,
