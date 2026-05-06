@@ -335,15 +335,17 @@
         sample.sample_raw_value
       ].join(' ')).join(' ');
     }
-    function formatPercent(value) {
-      if (value === null || value === undefined || value === '') {
-        return '';
+    function detectionPercentValue(finding) {
+      const matchCount = Number(finding.match_count);
+      const sampledRowCount = Number(finding.sampled_row_count);
+      if (!Number.isFinite(matchCount) || !Number.isFinite(sampledRowCount) || sampledRowCount <= 0) {
+        return null;
       }
-      const numeric = Number(value);
-      if (!Number.isFinite(numeric)) {
-        return '';
-      }
-      return (numeric * 100).toFixed(2);
+      return matchCount / sampledRowCount * 100;
+    }
+    function formatDetectionPercent(finding) {
+      const percent = detectionPercentValue(finding);
+      return percent === null ? '' : percent.toFixed(2);
     }
     function formSortText(index, fields) {
       const rowValues = getFormState(index);
@@ -374,7 +376,7 @@
         case 'match_count':
           return Number(finding.match_count) || 0;
         case 'non_empty_match_ratio':
-          return Number(finding.non_empty_match_ratio) || 0;
+          return detectionPercentValue(finding) ?? 0;
         case 'sample':
           return sampleSortText(finding);
         case 'decision':
@@ -685,7 +687,7 @@
         <td>${escapeHtml(displayPiiType(finding.pii_type))}</td>
         <td class="metric-cell">${escapeHtml(finding.sampled_row_count)}</td>
         <td class="metric-cell">${escapeHtml(finding.match_count)}</td>
-        <td class="metric-cell">${escapeHtml(formatPercent(finding.non_empty_match_ratio))}</td>
+        <td class="metric-cell">${escapeHtml(formatDetectionPercent(finding))}</td>
         <td class="sample">${renderSampleCell(finding)}</td>
         <td>
           <div class="decision-toggle" role="group" aria-label="판정" data-validation-field="decision" aria-invalid="false">
