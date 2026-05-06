@@ -311,6 +311,15 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     )
   }
 
+  test("shadow jar relocates commons-compress away from Spark runtime classpath") {
+    val buildScript = readText("build.gradle.kts")
+
+    assert(
+      buildScript.contains("""relocate("org.apache.commons.compress", "io.github.jonggeun2001.privyspark.shaded.org.apache.commons.compress")"""),
+      "Shadow JAR should isolate commons-compress so POI workbook writes do not link against Spark/Hadoop's older copy"
+    )
+  }
+
   test("submit script can pass external JDBC jars to spark-submit") {
     val submitScript = readText(Paths.get("bin", "privyspark-submit"))
 

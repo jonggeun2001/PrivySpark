@@ -82,6 +82,7 @@ tasks.jar {
 tasks.shadowJar {
     archiveClassifier.set("all")
     mergeServiceFiles()
+    relocate("org.apache.commons.compress", "io.github.jonggeun2001.privyspark.shaded.org.apache.commons.compress")
     manifest {
         attributes["Main-Class"] = "io.github.jonggeun2001.privyspark.PrivySparkApp"
     }
