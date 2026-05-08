@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark.review
 
 import io.github.jonggeun2001.privyspark.model.ScanResult
 import org.apache.hadoop.conf.Configuration
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
@@ -128,6 +129,25 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(Files.exists(workbookPath))
     assert(Files.size(workbookPath) > 0)
 
+    val workbook = new XSSFWorkbook(Files.newInputStream(workbookPath))
+    try {
+      val sheet = workbook.getSheet(ReviewWorkbookLayout.ReviewSheetName)
+      assert(sheet.getRow(0).getCell(0).getStringCellValue == "Review")
+      val guide = sheet.getRow(3).getCell(0).getStringCellValue
+      assert(guide.contains("회신용 첨부파일 생성"))
+      assert(!guide.contains("\n"))
+      assert(sheet.getRow(3).getHeightInPoints >= 36.0f)
+      assert((0 until sheet.getNumMergedRegions).exists { index =>
+        val region = sheet.getMergedRegion(index)
+        region.getFirstRow == 3 &&
+          region.getLastRow == 3 &&
+          region.getFirstColumn == 0 &&
+          region.getLastColumn == ReviewWorkbookLayout.Columns.size - 1
+      })
+    } finally {
+      workbook.close()
+    }
+
     val zip = new ZipFile(workbookPath.toFile)
     try {
       val entryStream = zip.getInputStream(zip.getEntry("[Content_Types].xml"))
@@ -145,7 +165,9 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
       val vml =
         try vmlSource.mkString
         finally vmlSource.close()
-      assert(vml.contains("review.json 생성"))
+      assert(vml.contains("회신용 첨부파일 생성"))
+      assert(!vml.contains("review.json 생성"))
+      assert(vml.contains("<x:Anchor>7,"))
       assert(vml.contains("<x:FmlaMacro>[0]!say_hello</x:FmlaMacro>"))
       val sheetSource = Source.fromInputStream(
         zip.getInputStream(zip.getEntry("xl/worksheets/sheet1.xml")),
@@ -203,10 +225,12 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("finding_key"))
     assert(html.contains("responses"))
     assert(html.contains("id=\"responderField\""))
-    assert(html.contains("""<input id="responder" required aria-invalid="false" aria-describedby="responderError">"""))
-    assert(html.contains("""<span id="responderError" class="field-error" hidden>응답자를 입력하세요.</span>"""))
+    assert(html.contains("""<input id="responder" required pattern="[a-z0-9]+" autocapitalize="none" spellcheck="false" aria-invalid="false" aria-describedby="responderError">"""))
+    assert(html.contains("""<span id="responderError" class="field-error" hidden>응답자는 소문자 영어와 숫자만 입력하세요.</span>"""))
     assert(html.contains("function clearResponderValidation()"))
     assert(html.contains("function validateResponder()"))
+    assert(html.contains("const ResponderPattern = /^[a-z0-9]+$/;"))
+    assert(html.contains("ResponderPattern.test(responderInput.value.trim())"))
     assert(html.contains("responderField.classList.add('invalid-field');"))
     assert(html.contains("responderInput.setAttribute('aria-invalid', 'true');"))
     assert(html.contains("responderError.hidden = false;"))
@@ -449,7 +473,9 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(Files.exists(customWorkbookPath))
     assert(!Files.exists(defaultHtmlPath))
     assert(!Files.exists(defaultWorkbookPath))
-    assert(html.contains("PrivySpark Review"))
+    assert(html.contains("<title>Review</title>"))
+    assert(html.contains("<h1>Review</h1>"))
+    assert(!html.contains("PrivySpark Review"))
     assert(!html.contains("bob@example.com"))
   }
 

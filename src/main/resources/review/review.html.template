@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <title>PrivySpark Review</title>
+  <title>Review</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; color: #17202a; }
     table { border-collapse: collapse; table-layout: fixed; width: 100%; min-width: 2370px; }
@@ -65,11 +65,11 @@
   </style>
 </head>
 <body>
-  <h1>PrivySpark Review</h1>
+  <h1>Review</h1>
   <p>Scan path: <code id="scanPath"></code></p>
   <p class="field" id="responderField">
-    <label><span>응답자</span><input id="responder" required aria-invalid="false" aria-describedby="responderError"></label>
-    <span id="responderError" class="field-error" hidden>응답자를 입력하세요.</span>
+    <label><span>응답자</span><input id="responder" required pattern="[a-z0-9]+" autocapitalize="none" spellcheck="false" aria-invalid="false" aria-describedby="responderError"></label>
+    <span id="responderError" class="field-error" hidden>응답자는 소문자 영어와 숫자만 입력하세요.</span>
   </p>
   <div class="bulk-actions">
     <label>정탐 사유/계획 <textarea id="bulkTruePositivePlan" rows="2"></textarea></label>

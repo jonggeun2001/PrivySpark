@@ -11,7 +11,7 @@ class ResponseValidatorSpec extends AnyFunSuite {
     val valid = ResponseEnvelope(
       sourcePath = "/review/inbox/owner.json",
       scanPath = "/data/project",
-      responder = "owner@example.com",
+      responder = "owner1",
       respondedAt = "2026-04-30T10:00:00Z",
       responses = Seq(validFalsePositiveItem())
     )
@@ -19,6 +19,9 @@ class ResponseValidatorSpec extends AnyFunSuite {
     assert(ResponseValidator.validateEnvelope(valid).isEmpty)
     assert(ResponseValidator.validateEnvelope(valid.copy(scanPath = "   ")).contains("scan_path is required"))
     assert(ResponseValidator.validateEnvelope(valid.copy(responder = "   ")).contains("responder is required"))
+    assert(ResponseValidator.validateEnvelope(valid.copy(responder = "owner@example.com")).contains("responder must use lowercase letters and digits only"))
+    assert(ResponseValidator.validateEnvelope(valid.copy(responder = "Owner1")).contains("responder must use lowercase letters and digits only"))
+    assert(ResponseValidator.validateEnvelope(valid.copy(responder = " owner1 ")).contains("responder must use lowercase letters and digits only"))
     assert(ResponseValidator.validateEnvelope(valid.copy(respondedAt = "today")).contains("responded_at must be an ISO-8601 instant"))
     assert(ResponseValidator.validateEnvelope(valid.copy(responses = Seq.empty)).contains("responses must not be empty"))
   }
