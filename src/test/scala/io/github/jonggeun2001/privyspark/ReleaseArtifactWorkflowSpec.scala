@@ -11,6 +11,17 @@ import java.nio.file.{Files, Paths}
 class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
   private val workflowPath = Paths.get(".github", "workflows", "release-artifact.yml")
 
+  test("release workflow retries Gradle release asset build") {
+    val workflow = readText(workflowPath)
+
+    assert(workflow.contains("name: Build release assets"))
+    assert(workflow.contains("for attempt in 1 2 3; do"))
+    assert(workflow.contains("./gradlew clean shadowJar packageSampleDatasets"))
+    assert(workflow.contains("Release asset build failed on attempt ${attempt}; retrying"))
+    assert(workflow.contains("sleep $((attempt * 10))"))
+    assert(workflow.contains("Release asset build failed after 3 attempts."))
+  }
+
   test("release workflow uploads default-rules.yaml as a release asset") {
     val workflow = readText(workflowPath)
 
