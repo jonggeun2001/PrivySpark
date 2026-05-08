@@ -6,11 +6,17 @@ import java.time.{Instant, LocalDate}
 import scala.util.Try
 
 private[privyspark] object ResponseValidator {
+  private val ResponderPattern = "^[a-z0-9]+$".r
+
   def validateEnvelope(envelope: ResponseEnvelope): Option[String] = {
+    val rawResponder = envelope.responder
+    val responder = envelope.responder.trim
     if (ReviewPathNormalizer.normalizeScanPath(envelope.scanPath).trim.isEmpty) {
       Some("scan_path is required")
-    } else if (envelope.responder.trim.isEmpty) {
+    } else if (responder.isEmpty) {
       Some("responder is required")
+    } else if (rawResponder != responder || !ResponderPattern.pattern.matcher(responder).matches()) {
+      Some("responder must use lowercase letters and digits only")
     } else if (Try(Instant.parse(envelope.respondedAt)).isFailure) {
       Some("responded_at must be an ISO-8601 instant")
     } else if (envelope.responses.isEmpty) {

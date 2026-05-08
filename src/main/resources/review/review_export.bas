@@ -61,8 +61,16 @@ Sub ExportReviewJson()
 
     Dim responder As String
     responder = TrimText(ws.Cells(3, 2).Value)
+    ws.Cells(3, 2).Interior.Pattern = xlNone
     If responder = "" Then
+        ws.Cells(3, 2).Interior.Color = RGB(255, 230, 230)
         MsgBox "Responder is required.", vbExclamation
+        ws.Cells(3, 2).Select
+        Exit Sub
+    End If
+    If Not IsResponderName(responder) Then
+        ws.Cells(3, 2).Interior.Color = RGB(255, 230, 230)
+        MsgBox "Responder must use lowercase letters and digits only.", vbExclamation
         ws.Cells(3, 2).Select
         Exit Sub
     End If
@@ -268,6 +276,23 @@ End Function
 
 Private Function TrimText(value As Variant) As String
     TrimText = Trim$(CStr(value))
+End Function
+
+Private Function IsResponderName(value As String) As Boolean
+    Dim i As Long
+    Dim code As Integer
+    If value = "" Then
+        IsResponderName = False
+        Exit Function
+    End If
+    For i = 1 To Len(value)
+        code = Asc(Mid$(value, i, 1))
+        If Not ((code >= Asc("a") And code <= Asc("z")) Or (code >= Asc("0") And code <= Asc("9"))) Then
+            IsResponderName = False
+            Exit Function
+        End If
+    Next i
+    IsResponderName = True
 End Function
 
 Private Function ReadMetadata(key As String) As String

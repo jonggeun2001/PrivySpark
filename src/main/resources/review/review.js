@@ -54,6 +54,7 @@
     const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
     const ActionDueDateWindowDays = 30;
     const PermanentFalsePositiveExpiresAt = '9999-12-31';
+    const ResponderPattern = /^[a-z0-9]+$/;
     function dateOnlyFromLocal(date) {
       const pad = value => String(value).padStart(2, '0');
       return String(date.getFullYear()) + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
@@ -309,7 +310,7 @@
       responderError.hidden = true;
     }
     function validateResponder() {
-      if (!isBlank(responderInput.value)) {
+      if (ResponderPattern.test(responderInput.value.trim())) {
         clearResponderValidation();
         return true;
       }
@@ -646,7 +647,7 @@
     document.getElementById('applyBulkTruePositivePlan').addEventListener('click', applyBulkTruePositivePlan);
     document.getElementById('applyBulkFalsePositiveReason').addEventListener('click', applyBulkFalsePositiveReason);
     responderInput.addEventListener('input', () => {
-      if (!isBlank(responderInput.value)) {
+      if (ResponderPattern.test(responderInput.value.trim())) {
         clearResponderValidation();
       }
     });

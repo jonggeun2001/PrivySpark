@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <title>PrivySpark Offline Review Response Example</title>
+  <title>Offline Review Response Example</title>
   <link rel="icon" href="data:,">
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; color: #17202a; }
@@ -66,11 +66,11 @@
   </style>
 </head>
 <body>
-  <h1>PrivySpark Review Response Example</h1>
+  <h1>Review Response Example</h1>
   <p>Scan path: <code id="scanPath"></code></p>
   <p class="field" id="responderField">
-    <label><span>응답자</span><input id="responder" required aria-invalid="false" aria-describedby="responderError"></label>
-    <span id="responderError" class="field-error" hidden>응답자를 입력하세요.</span>
+    <label><span>응답자</span><input id="responder" required pattern="[a-z0-9]+" autocapitalize="none" spellcheck="false" aria-invalid="false" aria-describedby="responderError"></label>
+    <span id="responderError" class="field-error" hidden>응답자는 소문자 영어와 숫자만 입력하세요.</span>
   </p>
   <div class="bulk-actions">
     <label>정탐 사유/계획 <textarea id="bulkTruePositivePlan" rows="2"></textarea></label>
@@ -262,6 +262,7 @@
     const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
     const ActionDueDateWindowDays = 30;
     const PermanentFalsePositiveExpiresAt = '9999-12-31';
+    const ResponderPattern = /^[a-z0-9]+$/;
     function dateOnlyFromLocal(date) {
       const pad = value => String(value).padStart(2, '0');
       return String(date.getFullYear()) + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
@@ -517,7 +518,7 @@
       responderError.hidden = true;
     }
     function validateResponder() {
-      if (!isBlank(responderInput.value)) {
+      if (ResponderPattern.test(responderInput.value.trim())) {
         clearResponderValidation();
         return true;
       }
@@ -854,7 +855,7 @@
     document.getElementById('applyBulkTruePositivePlan').addEventListener('click', applyBulkTruePositivePlan);
     document.getElementById('applyBulkFalsePositiveReason').addEventListener('click', applyBulkFalsePositiveReason);
     responderInput.addEventListener('input', () => {
-      if (!isBlank(responderInput.value)) {
+      if (ResponderPattern.test(responderInput.value.trim())) {
         clearResponderValidation();
       }
     });

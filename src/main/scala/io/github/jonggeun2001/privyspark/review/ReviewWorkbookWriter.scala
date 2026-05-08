@@ -3,7 +3,7 @@ package io.github.jonggeun2001.privyspark.review
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.poi.ss.usermodel.{BorderStyle, Cell, CellStyle, FillPatternType, HorizontalAlignment, IndexedColors, Row, VerticalAlignment}
-import org.apache.poi.ss.util.CellRangeAddressList
+import org.apache.poi.ss.util.{CellRangeAddress, CellRangeAddressList}
 import org.apache.poi.xssf.usermodel.{XSSFCellStyle, XSSFColor, XSSFWorkbook, XSSFWorkbookType}
 
 import java.awt.Color
@@ -64,16 +64,22 @@ private[privyspark] object ReviewWorkbookWriter {
   private def writeIntroRows(sheet: org.apache.poi.ss.usermodel.Sheet, scanPath: String, styles: WorkbookStyles): Unit = {
     val titleRow = sheet.createRow(0)
     val title = titleRow.createCell(0)
-    title.setCellValue("PrivySpark Review")
+    title.setCellValue("Review")
     title.setCellStyle(styles.title)
 
     writeLabelValue(sheet.createRow(1), "Scan path", scanPath, styles)
     writeLabelValue(sheet.createRow(ReviewWorkbookLayout.ResponderRowIndex), "응답자", "", styles)
     sheet.getRow(ReviewWorkbookLayout.ResponderRowIndex).getCell(ReviewWorkbookLayout.ResponderColumnIndex).setCellStyle(styles.input)
 
-    val guide = sheet.createRow(3).createCell(0)
-    guide.setCellValue("판정은 오탐 또는 정탐 중 하나를 선택합니다. 오탐은 오탐 사유, 정탐은 정탐 조치 계획과 조치 예정일을 입력한 뒤 review.json 생성 버튼으로 만든 JSON 파일을 review-state-root/inbox에 넣고 review collect를 실행합니다.")
+    val guideRow = sheet.createRow(3)
+    guideRow.setHeightInPoints(42)
+    val guide = guideRow.createCell(0)
+    guide.setCellValue("판정은 오탐 또는 정탐 중 하나를 선택합니다. 오탐은 오탐 사유, 정탐은 정탐 조치 계획과 조치 예정일을 입력한 뒤 회신용 첨부파일 생성 버튼으로 만든 JSON 파일을 review-state-root/inbox에 넣고 review collect를 실행합니다.")
     guide.setCellStyle(styles.guide)
+    (1 until ReviewWorkbookLayout.Columns.size).foreach { index =>
+      guideRow.createCell(index).setCellStyle(styles.guide)
+    }
+    sheet.addMergedRegion(new CellRangeAddress(3, 3, 0, ReviewWorkbookLayout.Columns.size - 1))
   }
 
   private def writeHeader(sheet: org.apache.poi.ss.usermodel.Sheet, styles: WorkbookStyles): Unit = {
@@ -283,7 +289,7 @@ private[privyspark] object ReviewWorkbookWriter {
     }
 
     private def vmlDrawingXml: String =
-      """<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t201" coordsize="21600,21600" o:spt="201" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path shadowok="f" o:extrusionok="f" strokeok="f" fillok="f" o:connecttype="rect"/><o:lock v:ext="edit" shapetype="t"/></v:shapetype><v:shape id="_x0000_s1025" type="#_x0000_t201" style="position:absolute;margin-left:8pt;margin-top:38pt;width:110pt;height:24pt;z-index:1;mso-wrap-style:tight" o:button="t" fillcolor="buttonFace [67]" strokecolor="windowText [64]" o:insetmode="auto"><v:fill color2="buttonFace [67]" o:detectmouseclick="t"/><o:lock v:ext="edit" rotation="t"/><v:textbox style="mso-direction-alt:auto" o:singleclick="f"><div style="text-align:center"><font face="Calibri" size="220" color="#000000">review.json 생성</font></div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>0, 8, 2, 6, 1, 78, 3, 12</x:Anchor><x:PrintObject>False</x:PrintObject><x:AutoFill>False</x:AutoFill><x:FmlaMacro>[0]!say_hello</x:FmlaMacro><x:TextHAlign>Center</x:TextHAlign><x:TextVAlign>Center</x:TextVAlign></x:ClientData></v:shape></xml>"""
+      """<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t201" coordsize="21600,21600" o:spt="201" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path shadowok="f" o:extrusionok="f" strokeok="f" fillok="f" o:connecttype="rect"/><o:lock v:ext="edit" shapetype="t"/></v:shapetype><v:shape id="_x0000_s1025" type="#_x0000_t201" style="position:absolute;margin-left:606pt;margin-top:20pt;width:150pt;height:24pt;z-index:1;mso-wrap-style:tight" o:button="t" fillcolor="buttonFace [67]" strokecolor="windowText [64]" o:insetmode="auto"><v:fill color2="buttonFace [67]" o:detectmouseclick="t"/><o:lock v:ext="edit" rotation="t"/><v:textbox style="mso-direction-alt:auto" o:singleclick="f"><div style="text-align:center"><font face="Calibri" size="220" color="#000000">회신용 첨부파일 생성</font></div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>7, 8, 1, 6, 9, 100, 2, 14</x:Anchor><x:PrintObject>False</x:PrintObject><x:AutoFill>False</x:AutoFill><x:FmlaMacro>[0]!say_hello</x:FmlaMacro><x:TextHAlign>Center</x:TextHAlign><x:TextVAlign>Center</x:TextVAlign></x:ClientData></v:shape></xml>"""
 
     private def readZipEntries(bytes: Array[Byte]): mutable.LinkedHashMap[String, Array[Byte]] = {
       val entries = mutable.LinkedHashMap.empty[String, Array[Byte]]
