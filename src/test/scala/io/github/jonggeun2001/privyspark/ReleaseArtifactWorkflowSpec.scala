@@ -312,6 +312,8 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(!html.contains("privyspark-response.json"))
     assert(html.contains("오프라인 응답 JSON 확인"))
     assert(html.contains("responder 값은 소문자 영어와 숫자만 허용합니다."))
+    assert(html.contains("const rawResponder = typeof envelope.responder === 'string' ? envelope.responder : '';"))
+    assert(html.contains("rawResponder === responder"))
     assert(html.contains("responded_at 값은 ISO-8601 instant여야 합니다."))
     assert(html.contains("responses 배열은 비어 있을 수 없습니다."))
     assert(html.contains("const textValue ="))

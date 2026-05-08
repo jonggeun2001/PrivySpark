@@ -329,8 +329,9 @@
       if (!textValue(envelope.scan_path)) {
         errors.push('scan_path 값이 필요합니다.');
       }
-      const responder = textValue(envelope.responder);
-      if (!/^[a-z0-9]+$/.test(responder)) {
+      const rawResponder = typeof envelope.responder === 'string' ? envelope.responder : '';
+      const responder = textValue(rawResponder);
+      if (!(rawResponder === responder && /^[a-z0-9]+$/.test(responder))) {
         errors.push('responder 값은 소문자 영어와 숫자만 허용합니다.');
       }
       const respondedAt = textValue(envelope.responded_at);
