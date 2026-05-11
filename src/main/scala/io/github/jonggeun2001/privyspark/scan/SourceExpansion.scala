@@ -38,19 +38,26 @@ private[privyspark] object SourceExpansion {
     readOptions: ScanReadOptions = ScanReadOptions(),
     ignoreMatcher: IgnoreMatcher = IgnoreMatcher.empty,
     archiveExpansionDepth: Int = 0,
-    forceDisableDirectoryIdentifier: Boolean = false
+    forceDisableDirectoryIdentifier: Boolean = false,
+    precomputedSize: Option[Long] = None
   ): (Seq[ScanFileEntry], Seq[ScanError], Int) = {
-    try {
-      if (isZeroBytePhysicalFile(conf, physicalPath)) {
+    precomputedSize match {
+      case Some(0L) =>
         return (Seq.empty, Seq.empty, 0)
+      case Some(_) =>
+      case None =>
+        try {
+          if (isZeroBytePhysicalFile(conf, physicalPath)) {
+            return (Seq.empty, Seq.empty, 0)
+          }
+        } catch {
+          case NonFatal(e) =>
+            return (
+              Seq.empty,
+              Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
+              0
+            )
       }
-    } catch {
-      case NonFatal(e) =>
-        return (
-          Seq.empty,
-          Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
-          0
-        )
     }
 
     val detectedFormat =

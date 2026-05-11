@@ -10,6 +10,7 @@
 - Only binary-looking unsupported inputs are recorded as `Unsupported file format`.
 - Zero-byte physical files are skipped during pre-scan.
 - Physical files matching `--ignore` or `--ignore-file` patterns are excluded before pre-scan.
+- Directory discovery reuses listed file length and modification time during pre-scan, so small-file-heavy inputs do not issue another file-status RPC for every discovered file before format expansion. Long pre-scans also emit progress logs on a time throttle in addition to the file-count interval.
 
 The text/CSV fallback exists because extension-based filtering alone would reject too many real-world log and dump files. At the same time, forcing every unknown binary into text mode would create noise, so PrivySpark separates those cases with magic-byte checks, text encoding probing, and CSV dialect probing.
 

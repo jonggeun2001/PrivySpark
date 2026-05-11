@@ -33,7 +33,11 @@ class DirectoryDiscoverySpec extends AnyFunSuite with PrivySparkSpecFixtures {
         parallelism = 2
       )
 
-      assert(files.map(path => new Path(path).getName) == Seq("a.csv", "b.csv"))
+      assert(files.map(file => new Path(file.path).getName) == Seq("a.csv", "b.csv"))
+      assert(files.map(_.size) == Seq(
+        "name,email\nalice,alice@example.com\n".getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong,
+        "name,email\nbob,bob@example.com\n".getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong
+      ))
       assert(ignored.map { case (path, _) => new Path(path).getName }.sorted == Seq("_SUCCESS", "backup"))
       assert(ignored.forall(_._2.nonEmpty))
     } finally {
