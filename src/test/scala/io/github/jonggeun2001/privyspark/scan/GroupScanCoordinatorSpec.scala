@@ -74,27 +74,39 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("scanGroup exact-splits sampled groups before scanning") {
-    val inputDir = Files.createTempDirectory("privyspark-coordinator-sampled-exact-")
+  test("scanGroup runs a batch scan for sampled Parquet groups") {
+    val inputDir = Files.createTempDirectory("privyspark-coordinator-sampled-batch-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
 
     try {
-      val headerFile = groupedDir.resolve("part-a.csv")
-      val headerlessFile = groupedDir.resolve("part-b.csv")
-      writeText(headerFile,
-        "name,email\n" +
-          "alice,alice@example.com\n")
-      writeText(headerlessFile,
-        "bob,bob@example.com\n" +
-          "carol,carol@example.com\n")
+      import spark.implicits._
+
+      Seq("alice@example.com")
+        .toDF("email")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq("bob@example.com")
+        .toDF("email")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      val left = groupedDir.resolve("part-a.parquet")
+      val right = groupedDir.resolve("part-b.parquet")
+      Files.move(findDataFile(leftWriteDir, ".parquet").get, left)
+      Files.move(findDataFile(rightWriteDir, ".parquet").get, right)
 
       val group = ScanGroup(
         directoryPath = groupedDir.toString,
-        format = "csv",
-        schemaSignature = "name|email",
-        filePaths = Seq(headerFile.toString, headerlessFile.toString),
+        format = "parquet",
+        schemaSignature = "email",
+        filePaths = Seq(left.toString, right.toString),
         schemaSampled = true,
-        csvHasHeader = true,
         directoryIdentifierEligible = true
       )
 
@@ -110,10 +122,63 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(errors.isEmpty)
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
         Set(
-          ("users/part-a.csv", "email", 1L),
-          ("users/part-b.csv", "_c1", 2L)
+          ("users/part-a.parquet", "email", 1L),
+          ("users/part-b.parquet", "email", 1L)
         ))
       assert(!results.exists(_.file_identifier == "users"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroup exact-splits sampled Parquet groups when later files add columns") {
+    val inputDir = Files.createTempDirectory("privyspark-coordinator-sampled-parquet-drift-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+
+    try {
+      import spark.implicits._
+
+      Seq("alice")
+        .toDF("name")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq("010-1234-5678")
+        .toDF("phone")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      val left = groupedDir.resolve("part-a.parquet")
+      val right = groupedDir.resolve("part-b.parquet")
+      Files.move(findDataFile(leftWriteDir, ".parquet").get, left)
+      Files.move(findDataFile(rightWriteDir, ".parquet").get, right)
+
+      val group = ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "parquet",
+        schemaSignature = "name",
+        filePaths = Seq(left.toString, right.toString),
+        schemaSampled = true
+      )
+      val phoneRule = PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+
+      val (results, errors) = GroupScanCoordinator.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        Seq(phoneRule),
+        sampleRatio = 1.0,
+        timestamp = Timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("users/part-b.parquet", "phone", 1L)))
     } finally {
       deleteRecursively(inputDir)
     }
