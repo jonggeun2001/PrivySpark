@@ -19,6 +19,8 @@ private[privyspark] final case class SplitAndFinalizeResult(
 )
 
 private[privyspark] object SchemaGroupSplitter {
+  private[discovery] final case class SchemaSplitScheduling(groupParallelism: Int, fileParallelism: Int)
+
   def splitAndFinalize(
     spark: SparkSession,
     datasetPath: String,
@@ -36,8 +38,9 @@ private[privyspark] object SchemaGroupSplitter {
     val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
     val errors = ArrayBuffer.empty[ScanError]
     val directoriesWithErrors = scala.collection.mutable.Set.empty[String] ++ directoriesWithPreScanErrors
-    val schemaSplitParallelism = resolveParallelism(groupedByDirectoryAndFormat.size, parallelism)
-    val fileSchemaSplitParallelism = math.max(1, parallelism)
+    val schemaSplitScheduling = resolveSchemaSplitScheduling(groupedByDirectoryAndFormat.size, parallelism)
+    val schemaSplitParallelism = schemaSplitScheduling.groupParallelism
+    val fileSchemaSplitParallelism = schemaSplitScheduling.fileParallelism
 
     DriverLogger.debug(
       "scan_directory_schema_split_parallelism",
@@ -112,6 +115,14 @@ private[privyspark] object SchemaGroupSplitter {
       errors = errors.toSeq,
       directoriesWithPreScanErrors = directoriesWithErrors.toSet
     )
+  }
+
+  private[discovery] def resolveSchemaSplitScheduling(groupCount: Int, configuredParallelism: Int): SchemaSplitScheduling = {
+    val fileParallelism = math.max(1, configuredParallelism)
+    val groupParallelism =
+      if (fileParallelism > 1) 1
+      else resolveParallelism(groupCount, fileParallelism)
+    SchemaSplitScheduling(groupParallelism, fileParallelism)
   }
 
   private[discovery] def executeSchemaSplitTasks[A](

@@ -32,7 +32,7 @@
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
 - `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L13, `discover` L17.
 - `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L29, `runPreScan` L50.
-- `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L22, file schema task executor L127, `splitGroupBySchemaFast` L139, `splitGroupBySchema` L289.
+- `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L24, schema split scheduling L120, file schema task executor L140, `splitGroupBySchemaFast` L152, `splitGroupBySchema` L302.
 - `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, batch fallback invocation L292, compatibility delegates L302/L340.
 - `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L89, file progress record helper L96, group buffer flush L309.
 - `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.

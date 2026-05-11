@@ -11,6 +11,13 @@ import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(classOf[JUnitRunner])
 class SchemaGroupSplitterSpec extends AnyFunSuite {
+  test("schema split scheduling keeps group and file parallelism from multiplying") {
+    val scheduling = SchemaGroupSplitter.resolveSchemaSplitScheduling(groupCount = 32, configuredParallelism = 32)
+
+    assert(scheduling.groupParallelism == 1)
+    assert(scheduling.fileParallelism == 32)
+  }
+
   test("schema split tasks are capped by the pre-scan RpcGate") {
     val groups = (1 to 8).map { index =>
       ScanGroup(
