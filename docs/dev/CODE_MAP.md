@@ -13,7 +13,7 @@
 - `model/`: scan result/error, ruleset, scan plan, pre-scan/group/report ADT.
 - `progress/`: run marker, progress JSONL, in-flight marker, stale run cleanup.
 - `report/`: scan result/error를 parquet/csv/excel 산출물로 저장.
-- `review/`: offline review HTML/XLSM, response collect/apply, allowlist/action plan state.
+- `review/`: offline review HTML, response collect/apply, allowlist/action plan state.
 - `review/fingerprint/`: review apply fingerprint resolution for flat files, workbook sheets, archive entries, CRC32 streams.
 - `review/collect/`: offline review response envelope read/validate/build/write helpers and collect lock handling.
 - `scan/`: scan pipeline orchestration, directory scan, source expansion, grouping, group route/fallback policy, file sampling, batch/file scan orchestration.
@@ -54,7 +54,6 @@
 - `review/ReviewSampleMasker.scala`: finding JSON rendering L6, sample masking L17.
 - `review/ReviewActionPlanStatus.scala`: action plan state load/match L20, UI status label L75.
 - `src/main/resources/review/review.html.template`: offline review HTML/CSS shell and `${REVIEW_DATA_JSON}` placeholder.
-- `src/main/resources/review/review_export.bas`, `src/main/resources/review/vbaProject.bin`: Excel review workbook JSON export macro source and packaged VBA project.
 - `src/main/resources/review/review.js`: offline review browser state, sorting, validation, and response download logic.
 - `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, metric planning L117.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.

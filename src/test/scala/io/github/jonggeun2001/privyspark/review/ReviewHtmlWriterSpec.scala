@@ -2,7 +2,6 @@ package io.github.jonggeun2001.privyspark.review
 
 import io.github.jonggeun2001.privyspark.model.ScanResult
 import org.apache.hadoop.conf.Configuration
-import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
@@ -10,8 +9,6 @@ import org.scalatestplus.junit.JUnitRunner
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.Collections
-import java.util.zip.ZipFile
-import scala.io.Source
 
 @RunWith(classOf[JUnitRunner])
 class ReviewHtmlWriterSpec extends AnyFunSuite {
@@ -82,8 +79,8 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("action_plan_state"))
   }
 
-  test("write also creates macro-enabled review workbook next to review HTML") {
-    val outputRoot = Files.createTempDirectory("privyspark-review-xlsm-")
+  test("write exposes TSV review workflow and does not create review workbook") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-tsv-")
     val result = ScanResult(
       dataset_path = "/data/project",
       scan_timestamp = "2026-04-27T10:00:00Z",
@@ -124,62 +121,31 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     val reviewDir = outputRoot.resolve("review")
     val htmlPath = reviewDir.resolve("review.html")
     val workbookPath = reviewDir.resolve("review.xlsm")
+    val html = new String(Files.readAllBytes(htmlPath), StandardCharsets.UTF_8)
 
     assert(Files.exists(htmlPath))
-    assert(Files.exists(workbookPath))
-    assert(Files.size(workbookPath) > 0)
-
-    val workbook = new XSSFWorkbook(Files.newInputStream(workbookPath))
-    try {
-      val sheet = workbook.getSheet(ReviewWorkbookLayout.ReviewSheetName)
-      assert(sheet.getRow(0).getCell(0).getStringCellValue == "Review")
-      val guide = sheet.getRow(3).getCell(0).getStringCellValue
-      assert(guide.contains("회신용 첨부파일 생성"))
-      assert(!guide.contains("\n"))
-      assert(sheet.getRow(3).getHeightInPoints >= 36.0f)
-      assert((0 until sheet.getNumMergedRegions).exists { index =>
-        val region = sheet.getMergedRegion(index)
-        region.getFirstRow == 3 &&
-          region.getLastRow == 3 &&
-          region.getFirstColumn == 0 &&
-          region.getLastColumn == ReviewWorkbookLayout.Columns.size - 1
-      })
-    } finally {
-      workbook.close()
-    }
-
-    val zip = new ZipFile(workbookPath.toFile)
-    try {
-      val entryStream = zip.getInputStream(zip.getEntry("[Content_Types].xml"))
-      val source = Source.fromInputStream(entryStream, StandardCharsets.UTF_8.name())
-      val contentTypes =
-        try source.mkString
-        finally source.close()
-      assert(contentTypes.contains("application/vnd.ms-excel.sheet.macroEnabled.main+xml"))
-      assert(zip.getEntry("xl/vbaProject.bin") != null)
-      assert(zip.getEntry("xl/drawings/vmlDrawing1.vml") != null)
-      val vmlSource = Source.fromInputStream(
-        zip.getInputStream(zip.getEntry("xl/drawings/vmlDrawing1.vml")),
-        StandardCharsets.UTF_8.name()
-      )
-      val vml =
-        try vmlSource.mkString
-        finally vmlSource.close()
-      assert(vml.contains("회신용 첨부파일 생성"))
-      assert(!vml.contains("review.json 생성"))
-      assert(vml.contains("<x:Anchor>7,"))
-      assert(vml.contains("<x:FmlaMacro>[0]!say_hello</x:FmlaMacro>"))
-      val sheetSource = Source.fromInputStream(
-        zip.getInputStream(zip.getEntry("xl/worksheets/sheet1.xml")),
-        StandardCharsets.UTF_8.name()
-      )
-      val sheetXml =
-        try sheetSource.mkString
-        finally sheetSource.close()
-      assert(sheetXml.contains("<legacyDrawing "))
-    } finally {
-      zip.close()
-    }
+    assert(!Files.exists(workbookPath))
+    assert(html.contains("<button type=\"button\" id=\"downloadReviewTsv\">엑셀 편집용 TSV 다운로드</button>"))
+    assert(html.contains("""<input id="importReviewTsv" type="file" accept=".tsv,text/tab-separated-values,text/plain">"""))
+    assert(html.contains("""<span id="tsvImportStatus" class="status-message" role="status" aria-live="polite"></span>"""))
+    assert(html.contains("사내 보안 솔루션이 TSV 파일을 암호화한 경우 반드시 암호화 해제한 TSV 파일을 불러옵니다."))
+    assert(html.contains("TSV 임포트는 <code>finding_key</code> 기준으로 판정/사유/계획/예정일만 반영합니다."))
+    assert(html.contains("const ReviewTsvHeaders = ["))
+    assert(html.contains("'finding_key'"))
+    assert(html.contains("'검출샘플(검출값/데이터)'"))
+    assert(html.contains("'검출비율(%)'"))
+    assert(html.contains("function neutralizeTsvFormulaValue(value)"))
+    assert(html.contains("""/^[=+\-@]/.test(text)"""))
+    assert(html.contains("function escapeTsvCell(value)"))
+    assert(html.contains("const text = neutralizeTsvFormulaValue(value);"))
+    assert(html.contains("function reviewTsvRows()"))
+    assert(html.contains("function downloadReviewTsv()"))
+    assert(html.contains("function parseDelimitedText(text, delimiter)"))
+    assert(html.contains("function normalizeImportedDecision(value)"))
+    assert(html.contains("function importReviewTsvText(text)"))
+    assert(html.contains("function handleReviewTsvFile(event)"))
+    assert(html.contains("document.getElementById('downloadReviewTsv').addEventListener('click', downloadReviewTsv);"))
+    assert(html.contains("document.getElementById('importReviewTsv').addEventListener('change', handleReviewTsvFile);"))
   }
 
   test("write creates review files under the scan output review directory and includes masked samples") {
@@ -216,7 +182,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     val html = new String(Files.readAllBytes(htmlPath), StandardCharsets.UTF_8)
 
     assert(Files.exists(htmlPath))
-    assert(Files.exists(workbookPath))
+    assert(!Files.exists(workbookPath))
     assert(!Files.exists(reviewDir.resolve("responses")))
     assert(!Files.exists(reviewDir.resolve("state")))
     assert(html.contains("mart"))
@@ -239,6 +205,13 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("if (!responderIsValid) {"))
     assert(html.contains("responderInput.addEventListener('input'"))
     assert(html.contains("<button type=\"button\" id=\"downloadResponse\">응답 파일 생성</button>"))
+    assert(html.contains("<button type=\"button\" id=\"downloadReviewTsv\">엑셀 편집용 TSV 다운로드</button>"))
+    assert(html.contains("""<input id="importReviewTsv" type="file" accept=".tsv,text/tab-separated-values,text/plain">"""))
+    assert(html.contains("사내 보안 솔루션이 TSV 파일을 암호화한 경우 반드시 암호화 해제한 TSV 파일을 불러옵니다."))
+    assert(html.contains("function importReviewTsvText(text)"))
+    assert(html.contains("function normalizeImportedDecision(value)"))
+    assert(html.contains("function neutralizeTsvFormulaValue(value)"))
+    assert(html.contains("""/^[=+\-@]/.test(text)"""))
     assert(html.contains("function formatResponseTimestamp"))
     assert(html.contains("function formatResponseScanPath"))
     assert(html.contains("""replace(/[\\/:*?"<>|]+/g, '-')"""))
@@ -470,7 +443,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     val html = new String(Files.readAllBytes(customHtmlPath), StandardCharsets.UTF_8)
 
     assert(Files.exists(customHtmlPath))
-    assert(Files.exists(customWorkbookPath))
+    assert(!Files.exists(customWorkbookPath))
     assert(!Files.exists(defaultHtmlPath))
     assert(!Files.exists(defaultWorkbookPath))
     assert(html.contains("<title>Review</title>"))

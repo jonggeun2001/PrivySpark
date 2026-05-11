@@ -47,7 +47,7 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
   }
 
   test("review renderer resources are available on the runtime classpath") {
-    Seq("review/review.html.template", "review/review.js", "review/review_export.bas", "review/vbaProject.bin").foreach { resourceName =>
+    Seq("review/review.html.template", "review/review.js").foreach { resourceName =>
       assert(
         Option(getClass.getClassLoader.getResource(resourceName)).nonEmpty,
         s"$resourceName should be packaged with application resources"
@@ -55,26 +55,26 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     }
   }
 
-  test("review workbook export macro creates collector-compatible response JSON") {
-    val macroSource = readResource("review/review_export.bas")
+  test("review HTML supports Excel-editable TSV export and decrypted TSV import") {
+    val template = readResource("review/review.html.template")
+    val script = readResource("review/review.js")
 
-    assert(macroSource.contains("Sub say_hello()"))
-    assert(macroSource.contains("""InitialFileName:="review.json""""))
-    assert(macroSource.contains("""file_identifier_pattern"""))
-    assert(macroSource.contains("allowlist_scope"))
-    assert(macroSource.contains("recurring"))
-    assert(macroSource.contains("CellDateIso"))
-    assert(macroSource.contains("""DateAdd("d", 30, Date)"""))
-    assert(macroSource.contains("TimeZoneOffsetIso"))
-    assert(macroSource.contains("GetTimeZoneInformation"))
-    assert(!macroSource.contains("""TimeZoneOffsetIso = "Z""""))
-    assert(macroSource.contains("textStream.Position = 3"))
-    assert(macroSource.contains("textStream.CopyTo binaryStream"))
-    assert(macroSource.contains("If responder = \"\" Then"))
-    assert(macroSource.contains("MsgBox \"Responder is required.\", vbExclamation"))
-    assert(macroSource.contains("IsResponderName"))
-    assert(macroSource.contains("MsgBox \"Responder must use lowercase letters and digits only.\", vbExclamation"))
-    assert(macroSource.contains("ws.Cells(3, 2).Select"))
+    assert(template.contains("<button type=\"button\" id=\"downloadReviewTsv\">엑셀 편집용 TSV 다운로드</button>"))
+    assert(template.contains("""<input id="importReviewTsv" type="file" accept=".tsv,text/tab-separated-values,text/plain">"""))
+    assert(template.contains("사내 보안 솔루션이 TSV 파일을 암호화한 경우 반드시 암호화 해제한 TSV 파일을 불러옵니다."))
+    assert(script.contains("const ReviewTsvHeaders = ["))
+    assert(script.contains("'검출샘플(검출값/데이터)'"))
+    assert(script.contains("'검출비율(%)'"))
+    assert(script.contains("function neutralizeTsvFormulaValue(value)"))
+    assert(script.contains("""/^[=+\-@]/.test(text)"""))
+    assert(script.contains("function escapeTsvCell(value)"))
+    assert(script.contains("const text = neutralizeTsvFormulaValue(value);"))
+    assert(script.contains("function reviewTsvRows()"))
+    assert(script.contains("function downloadReviewTsv()"))
+    assert(script.contains("function parseDelimitedText(text, delimiter)"))
+    assert(script.contains("function normalizeImportedDecision(value)"))
+    assert(script.contains("function importReviewTsvText(text)"))
+    assert(script.contains("function handleReviewTsvFile(event)"))
   }
 
   test("offline review response HTML example is self-contained and downloads response JSON") {
@@ -90,6 +90,8 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(html.contains("\"has_multiple_file_evidence\""))
     assert(html.contains("검토 안내"))
     assert(html.contains("오탐은 다음 스캔에서 제외하고, 정탐은 제외하지 않고 조치 계획만 남깁니다."))
+    assert(html.contains("사내 보안 솔루션이 TSV 파일을 암호화한 경우 반드시 암호화 해제한 TSV 파일을 불러옵니다."))
+    assert(html.contains("TSV 임포트는 <code>finding_key</code> 기준으로 판정/사유/계획/예정일만 반영합니다."))
     assert(html.contains("오탐 사유 예: <code>거래일시 포맷이 운전면허번호 규칙과 충돌</code>"))
     assert(!html.contains("오탐 만료일은 필수이며 만료일이 지난 항목은 다음 스캔에서 다시 검토 대상이 됩니다."))
     assert(html.contains("정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>."))
@@ -100,6 +102,9 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(!html.contains("개인정보 유형 패턴 <code>운전면허번호</code>"))
     assert(!html.contains("여러 파일 증거가 있는 finding을 <code>pattern</code> 오탐으로 처리할 때는 경로 패턴이 필수입니다."))
     assert(html.contains("<button type=\"button\" id=\"downloadResponse\">응답 파일 생성</button>"))
+    assert(html.contains("<button type=\"button\" id=\"downloadReviewTsv\">엑셀 편집용 TSV 다운로드</button>"))
+    assert(html.contains("""<input id="importReviewTsv" type="file" accept=".tsv,text/tab-separated-values,text/plain">"""))
+    assert(html.contains("""<span id="tsvImportStatus" class="status-message" role="status" aria-live="polite"></span>"""))
     assert(html.contains("function formatResponseTimestamp"))
     assert(html.contains("function formatResponseScanPath"))
     assert(html.contains("""replace(/[\\/:*?"<>|]+/g, '-')"""))
@@ -258,6 +263,20 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
     assert(html.contains("function applyBulkFalsePositiveReason()"))
     assert(!html.contains("function applyBulkDeletePlan()"))
     assert(html.contains("function sanitizeResponse(response)"))
+    assert(html.contains("const ReviewTsvHeaders = ["))
+    assert(html.contains("'finding_key'"))
+    assert(html.contains("'검출샘플(검출값/데이터)'"))
+    assert(html.contains("'검출비율(%)'"))
+    assert(html.contains("function neutralizeTsvFormulaValue(value)"))
+    assert(html.contains("""/^[=+\-@]/.test(text)"""))
+    assert(html.contains("function escapeTsvCell(value)"))
+    assert(html.contains("const text = neutralizeTsvFormulaValue(value);"))
+    assert(html.contains("function reviewTsvRows()"))
+    assert(html.contains("function downloadReviewTsv()"))
+    assert(html.contains("function parseDelimitedText(text, delimiter)"))
+    assert(html.contains("function normalizeImportedDecision(value)"))
+    assert(html.contains("function importReviewTsvText(text)"))
+    assert(html.contains("function handleReviewTsvFile(event)"))
     assert(html.contains("data-decision-section=\"false_positive\""))
     assert(html.contains("data-decision-section=\"true_positive\""))
     assert(html.contains("data-decision-button=\"false_positive\""))
@@ -356,7 +375,7 @@ class ReleaseArtifactWorkflowSpec extends AnyFunSuite {
 
     assert(
       buildScript.contains("""relocate("org.apache.commons.compress", "io.github.jonggeun2001.privyspark.shaded.org.apache.commons.compress")"""),
-      "Shadow JAR should isolate commons-compress so POI workbook writes do not link against Spark/Hadoop's older copy"
+      "Shadow JAR should isolate commons-compress so POI Excel report writes do not link against Spark/Hadoop's older copy"
     )
   }
 
