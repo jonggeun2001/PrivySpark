@@ -115,6 +115,8 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 
 `info` 레벨은 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 lifecycle을 보여주고, `debug` 레벨은 파일 발견, pre-scan 실행, 그룹화, progress 준비/쓰기/merge 같은 상세 이벤트를 추가로 남깁니다.
 
+group scan 중 driver TCP 연결 폭증을 확인해야 할 때는 `debug` 레벨의 `group_scan_tcp_snapshot` 이벤트를 봅니다. Linux/YARN driver에서는 현재 JVM이 보유한 `/proc` TCP socket fd를 읽어 `tcp_fd_count`, `tcp_states`, `tcp_remote_ports_top`을 기록합니다. macOS처럼 `/proc`가 없는 환경에서는 `tcp_snapshot_available=false`와 사유만 남깁니다. `phase=batch_action_start|batch_action_complete`, `action=sampled_rows_by_file|aggregate_matches|sample_matches|count_non_empty`, `phase=review_snapshot_stage_*`, `phase=file_spark_action_*`를 시간순으로 비교하면 어떤 Spark action 또는 review snapshot 단계에서 연결 수가 증가하는지 분리할 수 있습니다.
+
 ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped reason=ignored` 같은 이벤트와 함께 `ignored_files` 집계가 `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, `scan_complete`에 포함됩니다.
 
 ## `_progress` 경로 운영

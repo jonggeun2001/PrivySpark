@@ -2814,6 +2814,18 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_batch_start.*""")))
       assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] read_source_start.*""")))
       assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_batch_source_ready.*""")))
+      assert(logs.linesIterator.exists(line =>
+        line.contains("group_scan_tcp_snapshot") &&
+          line.contains("phase=batch_action_start") &&
+          line.contains("action=sampled_rows_by_file") &&
+          line.contains("dataframe_cached=false")
+      ))
+      assert(logs.linesIterator.exists(line =>
+        line.contains("group_scan_tcp_snapshot") &&
+          line.contains("phase=batch_action_complete") &&
+          line.contains("action=aggregate_matches") &&
+          line.contains("duration_ms=")
+      ))
       assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_batch_complete.*""")))
     } finally {
       deleteRecursively(inputDir)

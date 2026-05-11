@@ -7,7 +7,7 @@ import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference.{detectCsvHasHeader, readSource}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
 import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, PiiRule, ScanError, ScanGroup, ScanReadOptions, ScanResult}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.resolveRelativeIdentifier
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
@@ -39,11 +39,37 @@ private[privyspark] object FileMetricsScanner {
     val physicalPath = physicalPathOverride.getOrElse(filePath)
     val fileIdentifier = logicalIdentifierOverride.getOrElse(resolveRelativeIdentifier(datasetPath, physicalPath))
     DriverLogger.debug("scan_file_start", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "sample_ratio" -> sampleRatio)
+    def logTcpSnapshot(phase: String, fields: (String, Any)*): Unit = {
+      DriverTcpConnectionLogger.debugSnapshot(
+        "group_scan_tcp_snapshot",
+        (Seq(
+          "phase" -> phase,
+          "file" -> physicalPath,
+          "file_identifier" -> fileIdentifier
+        ) ++ fields): _*
+      )
+    }
+    def elapsedMs(startNanos: Long): Long =
+      (System.nanoTime() - startNanos) / 1000000L
+    logTcpSnapshot(
+      "file_scan_start",
+      "sample_ratio" -> sampleRatio,
+      "capture_recorded_fingerprint_when_missing" -> captureRecordedFingerprintWhenMissing,
+      "physical_path_overridden" -> physicalPathOverride.nonEmpty
+    )
 
     try {
       withFileReadRetry(spark, Seq(physicalPath), "file_scan") {
+        val fileStatusStartNanos = System.nanoTime()
+        logTcpSnapshot("file_driver_hdfs_action_start", "action" -> "get_file_status")
         val fileStatus = new Path(physicalPath).getFileSystem(spark.sparkContext.hadoopConfiguration)
           .getFileStatus(new Path(physicalPath))
+        logTcpSnapshot(
+          "file_driver_hdfs_action_complete",
+          "action" -> "get_file_status",
+          "duration_ms" -> elapsedMs(fileStatusStartNanos),
+          "file_size" -> fileStatus.getLen
+        )
         val effectiveFileSize = fileSizeOverride.getOrElse(fileStatus.getLen)
         val effectiveFileMtimeEpochMs = fileMtimeEpochMsOverride.getOrElse(fileStatus.getModificationTime)
         val effectiveRecordedFingerprint = recordedFingerprint.orElse {
@@ -86,7 +112,20 @@ private[privyspark] object FileMetricsScanner {
         }
         val sampledDf = ScanResultBuilder.sampleRowsDeterministically(sourceDf, sampleRatio)
 
+        val sampledRowCountStartNanos = System.nanoTime()
+        logTcpSnapshot(
+          "file_spark_action_start",
+          "action" -> "sampled_row_count",
+          "dataframe_cached" -> false
+        )
         val sampledRowCount = sampledDf.count()
+        logTcpSnapshot(
+          "file_spark_action_complete",
+          "action" -> "sampled_row_count",
+          "sampled_rows" -> sampledRowCount,
+          "duration_ms" -> elapsedMs(sampledRowCountStartNanos),
+          "dataframe_cached" -> false
+        )
         DriverLogger.debug(
           "scan_file_sampled_rows",
           "file" -> physicalPath,
@@ -108,12 +147,51 @@ private[privyspark] object FileMetricsScanner {
             effectiveRecordedFingerprint
           ))
         } else {
+          val aggregateStartNanos = System.nanoTime()
+          logTcpSnapshot(
+            "file_spark_action_start",
+            "action" -> "aggregate_matches",
+            "dataframe_cached" -> false
+          )
           val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules, suppressions = suppressions)
+          logTcpSnapshot(
+            "file_spark_action_complete",
+            "action" -> "aggregate_matches",
+            "matches" -> matchCounts.size,
+            "duration_ms" -> elapsedMs(aggregateStartNanos),
+            "dataframe_cached" -> false
+          )
+          val nonEmptyStartNanos = System.nanoTime()
+          logTcpSnapshot(
+            "file_spark_action_start",
+            "action" -> "count_non_empty",
+            "dataframe_cached" -> false
+          )
           val nonEmptyValueCounts = DetectionAggregator.countNonEmpty(
             sampledDf,
             DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules, suppressions)
           )
+          logTcpSnapshot(
+            "file_spark_action_complete",
+            "action" -> "count_non_empty",
+            "non_empty_counts" -> nonEmptyValueCounts.size,
+            "duration_ms" -> elapsedMs(nonEmptyStartNanos),
+            "dataframe_cached" -> false
+          )
+          val sampleMatchesStartNanos = System.nanoTime()
+          logTcpSnapshot(
+            "file_spark_action_start",
+            "action" -> "sample_matches",
+            "dataframe_cached" -> false
+          )
           val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts, suppressions = suppressions)
+          logTcpSnapshot(
+            "file_spark_action_complete",
+            "action" -> "sample_matches",
+            "sample_values" -> sampleValues.size,
+            "duration_ms" -> elapsedMs(sampleMatchesStartNanos),
+            "dataframe_cached" -> false
+          )
           DriverLogger.debug(
             "scan_file_complete",
             "file" -> physicalPath,

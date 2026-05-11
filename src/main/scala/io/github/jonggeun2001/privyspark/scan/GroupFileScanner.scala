@@ -6,7 +6,7 @@ import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, Pii
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewScopeFingerprintCodec}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{executeInParallel, resolveFileParallelism, resolveParallelism}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveDirectoryIdentifier, resolveLogicalIdentifier, resolvePhysicalPath}
 import org.apache.spark.broadcast.Broadcast
@@ -63,6 +63,17 @@ private[privyspark] object GroupFileScanner {
       "use_directory_identifier" -> group.useDirectoryIdentifier,
       "parallelism" -> parallelism
     )
+    DriverTcpConnectionLogger.debugSnapshot(
+      "group_scan_tcp_snapshot",
+      "phase" -> "file_scan_parallelism",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "schema" -> group.schemaSignature,
+      "files" -> group.filePaths.size,
+      "selected_files" -> effectiveSelectedSourceKeys.size,
+      "use_directory_identifier" -> group.useDirectoryIdentifier,
+      "parallelism" -> parallelism
+    )
     val successfulFileMetrics = ArrayBuffer.empty[FileScanMetrics]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
     executeInParallel(parallelism, effectiveSelectedSourceKeys.map { sourceKey =>
@@ -71,6 +82,17 @@ private[privyspark] object GroupFileScanner {
         val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
         val fileHiveTableFqn = HiveTableFqnResolver.resolve(hiveLookup, physicalPath)
         DriverLogger.debug("group_scan_fallback_file_start", "file" -> physicalPath, "directory" -> group.directoryPath)
+        DriverTcpConnectionLogger.debugSnapshot(
+          "group_scan_tcp_snapshot",
+          "phase" -> "file_scan_source_start",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "file" -> physicalPath,
+          "file_identifier" -> logicalIdentifier,
+          "use_directory_identifier" -> group.useDirectoryIdentifier,
+          "effective_sample_ratio" -> effectiveSampleRatio
+        )
         def scanFileMetrics(): Either[ScanError, FileScanMetrics] =
           if (group.useDirectoryIdentifier) {
             SourceKeyMetrics.scanSourceKeyUsingSnapshot(
@@ -234,10 +256,31 @@ private[privyspark] object GroupFileScanner {
               "sampled_rows" -> fileMetrics.sampledRowCount,
               "matches" -> fileMetrics.matchCounts.size
             )
+            DriverTcpConnectionLogger.debugSnapshot(
+              "group_scan_tcp_snapshot",
+              "phase" -> "file_scan_source_complete",
+              "directory" -> group.directoryPath,
+              "format" -> group.format,
+              "schema" -> group.schemaSignature,
+              "file" -> physicalPath,
+              "file_identifier" -> fileMetrics.fileIdentifier,
+              "sampled_rows" -> fileMetrics.sampledRowCount,
+              "matches" -> fileMetrics.matchCounts.size
+            )
           case Left(error) =>
             fallbackErrors += error
             DriverLogger.debug(
               "group_scan_fallback_file_error",
+              "file" -> physicalPath,
+              "file_identifier" -> error.file_identifier,
+              "reason" -> error.error_message
+            )
+            DriverTcpConnectionLogger.debugSnapshot(
+              "group_scan_tcp_snapshot",
+              "phase" -> "file_scan_source_error",
+              "directory" -> group.directoryPath,
+              "format" -> group.format,
+              "schema" -> group.schemaSignature,
               "file" -> physicalPath,
               "file_identifier" -> error.file_identifier,
               "reason" -> error.error_message

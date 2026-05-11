@@ -7,7 +7,7 @@ import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
 import io.github.jonggeun2001.privyspark.scan.GroupScanRoute.{BatchScan, FileScan, SampledExact}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
@@ -43,11 +43,27 @@ private[privyspark] object GroupScanCoordinator {
       resolveGroupParallelism(spark, groups.size)
     }
     DriverLogger.debug("group_scan_parallelism", "groups" -> groups.size, "parallelism" -> parallelism)
+    DriverTcpConnectionLogger.debugSnapshot(
+      "group_scan_tcp_snapshot",
+      "phase" -> "groups_start",
+      "groups" -> groups.size,
+      "parallelism" -> parallelism
+    )
 
     executeInParallel(parallelism, groups.map { group =>
       () => {
         DriverLogger.debug(
           "group_scan_dispatch",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "files" -> group.filePaths.size,
+          "use_directory_identifier" -> group.useDirectoryIdentifier,
+          "parallelism" -> parallelism
+        )
+        DriverTcpConnectionLogger.debugSnapshot(
+          "group_scan_tcp_snapshot",
+          "phase" -> "group_dispatch",
           "directory" -> group.directoryPath,
           "format" -> group.format,
           "schema" -> group.schemaSignature,
@@ -93,6 +109,16 @@ private[privyspark] object GroupScanCoordinator {
           "directory" -> group.directoryPath,
           "format" -> group.format,
           "schema" -> group.schemaSignature,
+          "result_rows" -> groupResults.size,
+          "error_rows" -> groupErrors.size
+        )
+        DriverTcpConnectionLogger.debugSnapshot(
+          "group_scan_tcp_snapshot",
+          "phase" -> "group_recorded",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "files" -> group.filePaths.size,
           "result_rows" -> groupResults.size,
           "error_rows" -> groupErrors.size
         )

@@ -7,7 +7,7 @@ import io.github.jonggeun2001.privyspark.format.CsvInference.{readSource, resolv
 import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers._
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
@@ -42,12 +42,33 @@ private[privyspark] object GroupBatchScanner {
       "file_sample_min_files" -> fileSampleMinFiles,
       "use_directory_identifier" -> group.useDirectoryIdentifier
     )
+    def logTcpSnapshot(phase: String, fields: (String, Any)*): Unit = {
+      DriverTcpConnectionLogger.debugSnapshot(
+        "group_scan_tcp_snapshot",
+        (Seq(
+          "phase" -> phase,
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "files" -> group.filePaths.size
+        ) ++ fields): _*
+      )
+    }
+    def elapsedMs(startNanos: Long): Long =
+      (System.nanoTime() - startNanos) / 1000000L
+
     val effectiveSelectedSourceKeys =
       selectedSourceKeys.getOrElse(FileMetricsScanner.resolveSelectedFileKeys(group, sampleRatio, fileSampleRatio, fileSampleMinFiles))
     val fileSamplingApplied = effectiveSelectedSourceKeys.size < group.filePaths.size
     val hasDuplicateSelectedSourceKeys = effectiveSelectedSourceKeys.distinct.size != effectiveSelectedSourceKeys.size
     val physicalPaths = effectiveSelectedSourceKeys.map(sourceKey => resolvePhysicalPath(group, sourceKey))
     val effectiveSampleRatio = if (fileSamplingApplied) 1.0 else sampleRatio
+    logTcpSnapshot(
+      "batch_selected_sources",
+      "selected_files" -> effectiveSelectedSourceKeys.size,
+      "file_sampling_applied" -> fileSamplingApplied,
+      "effective_sample_ratio" -> effectiveSampleRatio
+    )
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
       val effectiveRules = ScanResultBuilder.effectiveRulesForFormat(group.format, rules)
       val baseDf = readSource(spark, group.format, physicalPaths, group.csvHasHeader)
@@ -63,6 +84,13 @@ private[privyspark] object GroupBatchScanner {
 
       val sampledDf = if (fileSamplingApplied) sourceDf else ScanResultBuilder.sampleRowsDeterministically(sourceDf, sampleRatio)
       val columnName = fileIdentifierColumn.get
+      val sampledRowsStartNanos = System.nanoTime()
+      logTcpSnapshot(
+        "batch_action_start",
+        "action" -> "sampled_rows_by_file",
+        "selected_files" -> effectiveSelectedSourceKeys.size,
+        "dataframe_cached" -> false
+      )
       val sampledRowsByFile = sampledDf
         .groupBy(col(columnName))
         .count()
@@ -77,6 +105,14 @@ private[privyspark] object GroupBatchScanner {
           }
         }
         .toMap
+      logTcpSnapshot(
+        "batch_action_complete",
+        "action" -> "sampled_rows_by_file",
+        "selected_files" -> effectiveSelectedSourceKeys.size,
+        "files_with_rows" -> sampledRowsByFile.size,
+        "duration_ms" -> elapsedMs(sampledRowsStartNanos),
+        "dataframe_cached" -> false
+      )
       DriverLogger.debug(
         "group_scan_batch_sampled_file_rows",
         "directory" -> group.directoryPath,
@@ -93,7 +129,29 @@ private[privyspark] object GroupBatchScanner {
         )
         Seq.empty
       } else {
+        val aggregateStartNanos = System.nanoTime()
+        logTcpSnapshot(
+          "batch_action_start",
+          "action" -> "aggregate_matches",
+          "selected_files" -> effectiveSelectedSourceKeys.size,
+          "dataframe_cached" -> false
+        )
         val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules, suppressions = suppressions)
+        logTcpSnapshot(
+          "batch_action_complete",
+          "action" -> "aggregate_matches",
+          "selected_files" -> effectiveSelectedSourceKeys.size,
+          "matches" -> matchCountsByFile.size,
+          "duration_ms" -> elapsedMs(aggregateStartNanos),
+          "dataframe_cached" -> false
+        )
+        val sampleMatchesStartNanos = System.nanoTime()
+        logTcpSnapshot(
+          "batch_action_start",
+          "action" -> "sample_matches",
+          "selected_files" -> effectiveSelectedSourceKeys.size,
+          "dataframe_cached" -> false
+        )
         val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(
           sampledDf,
           columnName,
@@ -101,7 +159,30 @@ private[privyspark] object GroupBatchScanner {
           matchCountsByFile,
           suppressions = suppressions
         )
+        logTcpSnapshot(
+          "batch_action_complete",
+          "action" -> "sample_matches",
+          "selected_files" -> effectiveSelectedSourceKeys.size,
+          "sample_values" -> sampleValuesByFile.size,
+          "duration_ms" -> elapsedMs(sampleMatchesStartNanos),
+          "dataframe_cached" -> false
+        )
+        val nonEmptyStartNanos = System.nanoTime()
+        logTcpSnapshot(
+          "batch_action_start",
+          "action" -> "count_non_empty",
+          "selected_files" -> effectiveSelectedSourceKeys.size,
+          "dataframe_cached" -> false
+        )
         val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
+        logTcpSnapshot(
+          "batch_action_complete",
+          "action" -> "count_non_empty",
+          "selected_files" -> effectiveSelectedSourceKeys.size,
+          "non_empty_counts" -> nonEmptyCountsByFile.size,
+          "duration_ms" -> elapsedMs(nonEmptyStartNanos),
+          "dataframe_cached" -> false
+        )
         val matchedSourceKeys = matchCountsByFile
           .map { matchCount =>
             resolveSourceKeyForPhysicalPath(group, matchCount.fileIdentifier).getOrElse {
@@ -136,6 +217,12 @@ private[privyspark] object GroupBatchScanner {
             ).headOption
           }
         }
+        val snapshotRescanStartNanos = System.nanoTime()
+        logTcpSnapshot(
+          "batch_snapshot_rescan_start",
+          "selected_files" -> effectiveSelectedSourceKeys.size,
+          "matched_files" -> matchedSourceKeys.size
+        )
         val snapshotResults = AllowlistApplier.rescanBatchMatchedFilesWithSnapshots(
           spark,
           datasetPath,
@@ -150,6 +237,12 @@ private[privyspark] object GroupBatchScanner {
           selectedFileCount = effectiveSelectedSourceKeys.size,
           progressRun = progressRun,
           hiveLookup = hiveLookup
+        )
+        logTcpSnapshot(
+          "batch_snapshot_rescan_complete",
+          "selected_files" -> effectiveSelectedSourceKeys.size,
+          "matched_files" -> matchedSourceKeys.size,
+          "duration_ms" -> elapsedMs(snapshotRescanStartNanos)
         )
         if (!hasDuplicateSelectedSourceKeys && ScanResultBuilder.comparableResultPayloads(provisionalResults) != ScanResultBuilder.comparableResultPayloads(snapshotResults)) {
           throw new IllegalStateException(s"Review snapshot changed during batch rescan: ${group.directoryPath}")
