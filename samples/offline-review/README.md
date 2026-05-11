@@ -14,12 +14,13 @@
 - False-positive responses use recurring review state only; exact scope and pattern selector controls are not shown.
 - False-positive reason and true-positive action-plan fields are split into individual columns and shown based on the selected decision. False-positive expiry is not shown in the review UI.
 - Use the bulk true-positive button to fill `action_plan` and `action_due_date` for findings already marked `true_positive`, or the bulk false-positive button to fill `false_positive_reason` for findings already marked `false_positive`.
+- Use the TSV download button for Excel editing. If corporate security software encrypts saved TSV files, import the decrypted TSV back into the page.
 - The download button validates every finding before creating JSON. Missing decisions, false-positive reasons, action plans, due dates, or due dates outside the next 30 days are highlighted in red and the first invalid cell is focused.
-- The responder field is required before JSON download; leaving it blank focuses the responder input and does not create a file.
+- The responder field accepts lowercase English letters and digits only before JSON download; invalid input focuses the responder field and does not create a file.
 - Direct true-positive due-date inputs use the browser date picker and only allow dates from today through 30 days from today.
 - Click the download button to create a `response-<scan-path>-YYYYMMDD-HHMMSS.json` file.
 - The downloaded JSON contains one response object per finding, so it can be consumed by the existing collector schema. False-positive responses carry an internal `expires_at` value of `9999-12-31` for permanent recurring review state.
-- The sample data is synthetic and masked; production `review.html` and `review.xlsm` files are generated under `<scan-output>/review/`.
+- The sample data is synthetic and masked; production `review.html` is generated under `<scan-output>/review/`.
 
 `review-response-viewer.html` is a local operator page for inspecting a returned `response-<scan-path>-YYYYMMDD-HHMMSS.json`.
 

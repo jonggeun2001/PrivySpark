@@ -127,15 +127,6 @@ private[privyspark] object ReviewHtmlWriter {
     } finally {
       writer.close()
     }
-    ReviewWorkbookWriter.write(
-      conf,
-      new Path(reviewDir, "review.xlsm"),
-      scanPath,
-      scanResultsFingerprint,
-      findings,
-      sampleMode,
-      actionPlanStates
-    )
   }
 
   private def resolveReviewDirectory(outputRoot: String, reviewHtmlDir: Option[String]): Path =

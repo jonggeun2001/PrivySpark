@@ -54,6 +54,30 @@
     const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
     const ActionDueDateWindowDays = 30;
     const PermanentFalsePositiveExpiresAt = '9999-12-31';
+    const ResponderPattern = /^[a-z0-9]+$/;
+    const ReviewTsvHeaders = [
+      'finding_key',
+      '경로',
+      'Hive 테이블',
+      '컬럼명',
+      '개인정보 유형',
+      '샘플 행 수',
+      '검출 건수',
+      '검출비율(%)',
+      '검출샘플(검출값/데이터)',
+      '판정',
+      '오탐 사유',
+      '정탐 조치 계획',
+      '조치 예정일'
+    ];
+    const ReviewTsvEditableHeaders = {
+      decision: '판정',
+      false_positive_reason: '오탐 사유',
+      action_plan: '정탐 조치 계획',
+      action_due_date: '조치 예정일'
+    };
+    const SupportedDecisions = new Set(['false_positive', 'true_positive']);
+    const findingIndexByKey = new Map(REVIEW_DATA.findings.map((finding, index) => [finding.finding_key, index]));
     function dateOnlyFromLocal(date) {
       const pad = value => String(value).padStart(2, '0');
       return String(date.getFullYear()) + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
@@ -309,7 +333,7 @@
       responderError.hidden = true;
     }
     function validateResponder() {
-      if (!isBlank(responderInput.value)) {
+      if (ResponderPattern.test(responderInput.value.trim())) {
         clearResponderValidation();
         return true;
       }
@@ -324,6 +348,8 @@
       responses.forEach((response, index) => {
         if (!response.decision) {
           errors.push({ index, field: 'decision', message: '판정을 선택하세요.' });
+        } else if (!SupportedDecisions.has(response.decision)) {
+          errors.push({ index, field: 'decision', message: '지원하지 않는 판정입니다.' });
         } else if (response.decision === 'false_positive') {
           if (isBlank(response.false_positive_reason)) {
             errors.push({ index, field: 'false_positive_reason', message: '오탐 사유를 입력하세요.' });
@@ -483,6 +509,205 @@
         escapeHtml(sample.sample_raw_value)
       ).join('\n---\n');
       return samples;
+    }
+    function sampleText(finding) {
+      return finding.evidence_samples.map(sample =>
+        String(sample.sample_matched_fragment ?? '') + '\n' +
+        String(sample.sample_raw_value ?? '')
+      ).join('\n---\n');
+    }
+    function neutralizeTsvFormulaValue(value) {
+      const text = String(value ?? '');
+      return /^[=+\-@]/.test(text) ? "'" + text : text;
+    }
+    function escapeTsvCell(value) {
+      const text = neutralizeTsvFormulaValue(value);
+      if (/[\t\r\n"]/.test(text)) {
+        return '"' + text.replace(/"/g, '""') + '"';
+      }
+      return text;
+    }
+    function decisionDisplayValue(value) {
+      if (value === 'false_positive') {
+        return '오탐';
+      }
+      if (value === 'true_positive') {
+        return '정탐';
+      }
+      return '';
+    }
+    function reviewTsvRows() {
+      const rows = [ReviewTsvHeaders];
+      REVIEW_DATA.findings.forEach((finding, index) => {
+        const values = getFormState(index);
+        rows.push([
+          finding.finding_key,
+          finding.file_identifier,
+          finding.hive_table_fqn,
+          finding.column_name,
+          displayPiiType(finding.pii_type),
+          finding.sampled_row_count,
+          finding.match_count,
+          formatDetectionPercent(finding),
+          sampleText(finding),
+          decisionDisplayValue(values.decision),
+          values.false_positive_reason,
+          values.action_plan,
+          values.action_due_date
+        ]);
+      });
+      return rows;
+    }
+    function downloadReviewTsv() {
+      const tsv = reviewTsvRows()
+        .map(row => row.map(escapeTsvCell).join('\t'))
+        .join('\n');
+      const blob = new Blob(['\uFEFF' + tsv], { type: 'text/tab-separated-values;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `review-${formatResponseScanPath(REVIEW_DATA.scan_path)}-${formatResponseTimestamp(new Date())}.tsv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+    function parseDelimitedText(text, delimiter) {
+      const rows = [];
+      let row = [];
+      let cell = '';
+      let inQuotes = false;
+      for (let index = 0; index < text.length; index += 1) {
+        const ch = text[index];
+        if (inQuotes) {
+          if (ch === '"') {
+            if (text[index + 1] === '"') {
+              cell += '"';
+              index += 1;
+            } else {
+              inQuotes = false;
+            }
+          } else {
+            cell += ch;
+          }
+        } else if (ch === '"') {
+          inQuotes = true;
+        } else if (ch === delimiter) {
+          row.push(cell);
+          cell = '';
+        } else if (ch === '\n') {
+          row.push(cell);
+          rows.push(row);
+          row = [];
+          cell = '';
+        } else if (ch === '\r') {
+          if (text[index + 1] === '\n') {
+            index += 1;
+          }
+          row.push(cell);
+          rows.push(row);
+          row = [];
+          cell = '';
+        } else {
+          cell += ch;
+        }
+      }
+      if (cell !== '' || row.length > 0) {
+        row.push(cell);
+        rows.push(row);
+      }
+      if (rows.length > 0 && rows[0].length > 0) {
+        rows[0][0] = rows[0][0].replace(/^\uFEFF/, '');
+      }
+      return rows;
+    }
+    function normalizeImportedDecision(value) {
+      const text = String(value ?? '').trim();
+      const normalized = text.toLowerCase().replace(/\s+/g, '_');
+      if (!normalized) {
+        return '';
+      }
+      if (normalized === '오탐' || normalized === 'false_positive' || normalized === 'fp') {
+        return 'false_positive';
+      }
+      if (normalized === '정탐' || normalized === 'true_positive' || normalized === 'tp') {
+        return 'true_positive';
+      }
+      return null;
+    }
+    function setTsvImportStatus(message) {
+      const status = document.getElementById('tsvImportStatus');
+      if (status) {
+        status.textContent = message;
+      }
+    }
+    function importReviewTsvText(text) {
+      const rows = parseDelimitedText(text, '\t').filter(row => row.some(value => !isBlank(value)));
+      if (rows.length < 2) {
+        setTsvImportStatus('반영할 TSV 행이 없습니다.');
+        return;
+      }
+      const headers = rows[0].map(header => String(header ?? '').trim());
+      const headerIndex = new Map(headers.map((header, index) => [header, index]));
+      if (!headerIndex.has('finding_key')) {
+        setTsvImportStatus('finding_key 컬럼이 없어 TSV를 반영하지 못했습니다.');
+        return;
+      }
+      let applied = 0;
+      let skipped = 0;
+      let invalid = 0;
+      rows.slice(1).forEach(row => {
+        const key = String(row[headerIndex.get('finding_key')] ?? '').trim();
+        if (!findingIndexByKey.has(key)) {
+          skipped += 1;
+          return;
+        }
+        const decisionColumn = headerIndex.get(ReviewTsvEditableHeaders.decision);
+        const importedDecision = decisionColumn === undefined ? undefined : normalizeImportedDecision(row[decisionColumn]);
+        if (importedDecision === null) {
+          invalid += 1;
+          return;
+        }
+        const index = findingIndexByKey.get(key);
+        if (importedDecision !== undefined) {
+          updateFormState(index, 'decision', importedDecision);
+        }
+        ['false_positive_reason', 'action_plan', 'action_due_date'].forEach(field => {
+          const column = headerIndex.get(ReviewTsvEditableHeaders[field]);
+          if (column !== undefined) {
+            updateFormState(index, field, String(row[column] ?? ''));
+          }
+        });
+        ['decision', 'false_positive_reason', 'action_plan', 'action_due_date'].forEach(field => {
+          clearValidationField(index, field);
+        });
+        applied += 1;
+      });
+      if (applied > 0) {
+        renderFindings();
+      }
+      const parts = [`${applied}건 반영`];
+      if (skipped > 0) {
+        parts.push(`${skipped}건 finding_key 불일치`);
+      }
+      if (invalid > 0) {
+        parts.push(`${invalid}건 판정값 오류`);
+      }
+      setTsvImportStatus(parts.join(', '));
+    }
+    function handleReviewTsvFile(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) {
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        importReviewTsvText(String(reader.result ?? ''));
+        event.target.value = '';
+      };
+      reader.onerror = () => {
+        setTsvImportStatus('TSV 파일을 읽지 못했습니다.');
+        event.target.value = '';
+      };
+      reader.readAsText(file, 'utf-8');
     }
     function renderExistingActionCell(finding) {
       const state = finding.action_plan_state;
@@ -645,8 +870,10 @@
     tbody.addEventListener('change', handleFormEvent);
     document.getElementById('applyBulkTruePositivePlan').addEventListener('click', applyBulkTruePositivePlan);
     document.getElementById('applyBulkFalsePositiveReason').addEventListener('click', applyBulkFalsePositiveReason);
+    document.getElementById('downloadReviewTsv').addEventListener('click', downloadReviewTsv);
+    document.getElementById('importReviewTsv').addEventListener('change', handleReviewTsvFile);
     responderInput.addEventListener('input', () => {
-      if (!isBlank(responderInput.value)) {
+      if (ResponderPattern.test(responderInput.value.trim())) {
         clearResponderValidation();
       }
     });

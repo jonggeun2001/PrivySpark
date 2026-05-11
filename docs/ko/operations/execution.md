@@ -23,8 +23,8 @@
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
 - `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
-- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. 스캔 시작 전 `<review-state-root>/inbox/*.json`을 자동 수집해 `<review-state-root>/current`를 갱신한 뒤, `<review-state-root>/current/allowlist.jsonl`을 적용하고 기본 `<output>/review/review.html`과 `<output>/review/review.xlsm`을 생성
-- `--review-html-dir <ABS_PATH_OR_URI>`: 오프라인 리뷰 HTML/XLSM 출력 디렉토리. 미지정 시 `<output>/review`, 파일명은 `review.html`/`review.xlsm` 고정
+- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. 스캔 시작 전 `<review-state-root>/inbox/*.json`을 자동 수집해 `<review-state-root>/current`를 갱신한 뒤, `<review-state-root>/current/allowlist.jsonl`을 적용하고 기본 `<output>/review/review.html`을 생성
+- `--review-html-dir <ABS_PATH_OR_URI>`: 오프라인 리뷰 HTML 출력 디렉토리. 미지정 시 `<output>/review`, 파일명은 `review.html` 고정
 - `--review-sample-mode <raw|masked|none>`: `review.html` 검출 샘플 표시 방식, 기본 `masked`
 - `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
 - `--suppression-file <PATH>`: 줄 단위 suppression 파일 경로, `#` 주석과 빈 줄 무시
@@ -43,7 +43,7 @@
 ## `review collect` CLI 인자
 - `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
 
-`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. `review.xlsm`은 파일 자체를 넣지 않고, 통합 문서의 `review.json 생성` 버튼으로 만든 JSON을 넣습니다. `--scan-results`는 더 이상 필요하지 않습니다. 같은 `--review-state-root`를 지정한 다음 스캔은 본 스캔 전에 이 collect를 자동 실행합니다. invalid response가 하나라도 있으면 current를 갱신하지 않고 명령을 실패 처리하며, `<review-state-root>/.collect.lock`이 이미 있으면 동시 갱신을 막기 위해 실패합니다. collect가 끝나면 lock 파일은 삭제됩니다.
+`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 담당자는 `review.html`에서 직접 JSON을 생성하거나, Excel 편집이 필요하면 TSV를 내려받아 편집한 뒤 암호화 해제한 TSV를 다시 불러온 다음 JSON을 생성합니다. `--scan-results`는 더 이상 필요하지 않습니다. 같은 `--review-state-root`를 지정한 다음 스캔은 본 스캔 전에 이 collect를 자동 실행합니다. invalid response가 하나라도 있으면 current를 갱신하지 않고 명령을 실패 처리하며, `<review-state-root>/.collect.lock`이 이미 있으면 동시 갱신을 막기 위해 실패합니다. collect가 끝나면 lock 파일은 삭제됩니다.
 
 오프라인 리뷰 identity와 allowlist 매칭에서는 HDFS URI path의 중복 slash를 정규화합니다. 예를 들어 `hdfs:///user/name`과 `hdfs:////user/name`은 같은 스캔 경로로 취급됩니다.
 
@@ -93,7 +93,7 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - CLI 값을 생략하면 `spark.privyspark.excel.byteArrayMaxOverride` Spark conf를 사용하고, 이 conf도 없으면 기본값 `300000000`을 적용합니다.
 - executor-side `xlsx` 스트리머는 한 workbook sheet를 하나의 Spark task에서 읽습니다. 단일 시트 자체를 row 단위로 split해서 여러 executor가 나눠 읽게 만들지는 않으며, cache/persist도 추가하지 않아 여러 action에서는 workbook zip을 다시 읽습니다.
 - workbook ZIP 엔트리 순회는 Spark/Hadoop 런타임에 번들된 구버전 `commons-compress`와 호환되는 API를 사용합니다. 따라서 `xlsx` scan의 `NoSuchMethodError` 회피를 위해 cluster 공통 classpath를 별도로 덮어쓸 필요가 없습니다.
-- Shadow fat JAR는 `commons-compress`를 앱 내부 패키지로 relocate합니다. 이 설정은 Spark/Hadoop 런타임의 구버전 `commons-compress`가 먼저 잡히는 환경에서도 `review.xlsm` 생성 등 POI 기반 workbook write 경로가 자체 포함된 호환 버전을 사용하게 합니다.
+- Shadow fat JAR는 `commons-compress`를 앱 내부 패키지로 relocate합니다. 이 설정은 Spark/Hadoop 런타임의 구버전 `commons-compress`가 먼저 잡히는 환경에서도 POI 기반 Excel report write 경로가 자체 포함된 호환 버전을 사용하게 합니다.
 
 ## 샘플링
 - `--sample-ratio`는 비결정적 row sampling입니다.
@@ -135,5 +135,5 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 - GitHub Release는 `v*` 또는 bare semver 태그 푸시로 트리거됩니다.
 - Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행합니다.
 - 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html`입니다.
-- `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`과 `<scan-output>/review/review.xlsm`에 생성됩니다.
+- `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드와 TSV 편집/임포트 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
 - `privyspark-<tag>-review-response-viewer.html`은 회수한 `response-<scan-path>-YYYYMMDD-HHMMSS.json`을 운영자가 로컬에서 파일 선택, 드래그앤드롭, 원문 붙여넣기로 열어 envelope 메타데이터, 검증 메시지, finding별 판정을 확인하는 self-contained 파일입니다.

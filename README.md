@@ -19,7 +19,7 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - row sampling(`--sample-ratio`)과 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있고, file sampling은 같은 그룹/파일 집합에서 안정적인 해시 기반 subset을 선택합니다. `--file-sample-min-files`로 파일 샘플링을 적용할 최소 그룹 크기(기본 `10`)를 조정할 수 있습니다.
 - `--ignore`, `--ignore-file`로 gitignore 스타일 glob 패턴을 지정해 파일/아카이브 엔트리를 pre-scan 전에 제외할 수 있습니다.
 - ruleset `suppressions:` 또는 `--suppress`, `--suppression-file`로 특정 `(column, pii_type)` 조합만 결과에서 제외할 수 있습니다.
-- `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 기본 `<output>/review/review.html`과 `<output>/review/review.xlsm`을 생성할 수 있습니다. `--review-html-dir`을 지정하면 해당 디렉토리 아래 `review.html`/`review.xlsm`로 출력 위치를 바꿀 수 있습니다. 회수한 response JSON은 다음 `scan --review-state-root` 시작 시 자동 수집되어 누적 allowlist/action plan에 반영됩니다.
+- `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 기본 `<output>/review/review.html`을 생성할 수 있습니다. `--review-html-dir`을 지정하면 해당 디렉토리 아래 `review.html`로 출력 위치를 바꿀 수 있습니다. 회수한 response JSON은 다음 `scan --review-state-root` 시작 시 자동 수집되어 누적 allowlist/action plan에 반영됩니다.
 - 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress와 현재 실행 중인 작업의 `in-flight` marker를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다. Spark application이 `FAILED`로 끝나는 미복구 group/file 실패에서는 당시 marker를 보존합니다.
 - `scan_results`에는 집계 지표와 함께 `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
 - Hive Metastore JDBC 옵션을 지정하면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다.
@@ -76,7 +76,7 @@ bin/privyspark-submit \
 
 자세한 실행 절차와 옵션은 [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/ko/operations/execution.md](docs/ko/operations/execution.md)에 정리돼 있습니다.
 
-서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 컬럼 헤더 정렬이 가능한 `review.html`과 Excel 담당자용 `review.xlsm`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 스캔을 실행하는 방식입니다. 다음 `scan --review-state-root`는 스캔 본 작업 전에 자동으로 `inbox/*.json`을 수집하고, invalid response가 하나라도 있거나 collect lock이 이미 있으면 스캔을 시작하지 않고 실패합니다. HTML/XLSM을 scan output 밖에 배치해야 하면 scan 실행에 `--review-html-dir /abs/reviews`를 추가합니다. 같은 finding이 정탐으로 계속 검출되면 다음 리뷰 파일의 `기존 조치 상태` 컬럼에 이전 조치 계획과 예정일이 표시됩니다. `review.xlsm`은 매크로를 허용한 뒤 `review.json 생성` 버튼으로 JSON 파일을 내려받아 `inbox`에 넣습니다.
+서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 컬럼 헤더 정렬이 가능한 `review.html`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 스캔을 실행하는 방식입니다. 다음 `scan --review-state-root`는 스캔 본 작업 전에 자동으로 `inbox/*.json`을 수집하고, invalid response가 하나라도 있거나 collect lock이 이미 있으면 스캔을 시작하지 않고 실패합니다. HTML을 scan output 밖에 배치해야 하면 scan 실행에 `--review-html-dir /abs/reviews`를 추가합니다. 같은 finding이 정탐으로 계속 검출되면 다음 리뷰 파일의 `기존 조치 상태` 컬럼에 이전 조치 계획과 예정일이 표시됩니다. Excel에서 대량 편집해야 하면 `review.html`의 `엑셀 편집용 TSV 다운로드`로 TSV를 내려받아 편집한 뒤, 사내 보안 솔루션이 TSV를 암호화한 경우 반드시 암호화 해제한 TSV를 `복호화한 TSV 불러오기`로 다시 가져옵니다.
 
 자세한 구조는 [docs/ko/reference/offline-review-collector.md](docs/ko/reference/offline-review-collector.md)에 있습니다.
 
@@ -100,7 +100,7 @@ bash scripts/verify-worktree.sh
 - `--output-format`은 반복 지정 가능하고, 기본값은 `parquet`입니다. 지원값은 `parquet`, `csv`, `excel`입니다.
 - `--suppress`는 반복 지정 가능하며 `column:pii_type` 형식입니다. `--suppression-file`은 같은 형식을 줄 단위로 읽고, ruleset `suppressions:`와 union으로 합쳐집니다.
 - Hive table 매핑은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 기본 JDBC driver class는 `org.mariadb.jdbc.Driver`이고, MySQL 등 다른 driver를 쓰면 `--hive-metastore-jdbc-driver-class <CLASS>` 또는 Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`로 지정합니다. CLI 값이 Spark conf보다 우선합니다. JDBC driver JAR는 fat JAR에 포함하지 않으므로 cluster classpath에 두거나 `PRIVYSPARK_JARS=/path/to/driver.jar`로 함께 제출합니다. driver가 없거나 JDBC 접속/query가 실패하면 warning 후 `hive_table_fqn`은 빈 문자열로 남습니다.
-- Shadow fat JAR는 `commons-compress`를 앱 내부 패키지로 relocate합니다. 따라서 Spark/Hadoop 런타임의 구버전 `commons-compress`가 먼저 잡혀도 `review.xlsm` 생성 같은 POI 기반 workbook write 경로가 런타임 `NoSuchMethodError`에 영향을 받지 않습니다.
+- Shadow fat JAR는 `commons-compress`를 앱 내부 패키지로 relocate합니다. 따라서 Spark/Hadoop 런타임의 구버전 `commons-compress`가 먼저 잡혀도 POI 기반 Excel report write 경로가 런타임 `NoSuchMethodError`에 영향을 받지 않습니다.
 - 기본 ruleset은 [config/rules/default.yaml](config/rules/default.yaml)에 있습니다.
 
 ### 결과를 확인하는 위치
@@ -162,7 +162,7 @@ bash scripts/verify-worktree.sh
 - `src/main/scala/io/github/jonggeun2001/privyspark/hive/`: Hive Metastore JDBC table location lookup
 - `src/main/scala/io/github/jonggeun2001/privyspark/detect/`: 규칙 집계와 strict validator
 - `src/main/scala/io/github/jonggeun2001/privyspark/report/`: 출력 포맷, JSON codec, 리포트 쓰기
-- `src/main/scala/io/github/jonggeun2001/privyspark/review/`: review apply, offline review HTML/XLSM, collector, allowlist 처리
+- `src/main/scala/io/github/jonggeun2001/privyspark/review/`: review apply, offline review HTML, collector, allowlist 처리
 - `src/main/scala/io/github/jonggeun2001/privyspark/fsio/`: staging 경로 관리와 재시도 I/O
 - `src/main/scala/io/github/jonggeun2001/privyspark/util/`: driver 로그, 병렬도, 식별자 유틸리티
 - `src/main/scala/io/github/jonggeun2001/privyspark/config/RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증

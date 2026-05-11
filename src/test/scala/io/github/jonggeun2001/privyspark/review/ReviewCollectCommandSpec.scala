@@ -439,7 +439,7 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   private def responseEnvelope(scanPath: String, responses: Seq[String]): String =
-    s"""{"schema_version":1,"scan_path":"$scanPath","responder":"owner@example.com","responded_at":"2026-04-30T10:00:00Z","responses":[${responses.mkString(",")}]}"""
+    s"""{"schema_version":1,"scan_path":"$scanPath","responder":"owner1","responded_at":"2026-04-30T10:00:00Z","responses":[${responses.mkString(",")}]}"""
 
   private def falsePositiveResponse(
     findingKey: String,
