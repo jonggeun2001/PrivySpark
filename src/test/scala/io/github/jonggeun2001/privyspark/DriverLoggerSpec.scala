@@ -3,6 +3,8 @@ package io.github.jonggeun2001.privyspark
 import io.github.jonggeun2001.privyspark.util.{DriverLogLevel, DriverLogger}
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
+import java.time.OffsetDateTime
+import java.util.TimeZone
 
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
@@ -10,6 +12,8 @@ import org.scalatestplus.junit.JUnitRunner
 
 @RunWith(classOf[JUnitRunner])
 class DriverLoggerSpec extends AnyFunSuite {
+  private val LogLinePattern = """^\[PrivySpark\]\[[A-Z]+\]\[([^\]]+)\] .*$""".r
+
   test("resolves driver log levels from property values with compatibility aliases") {
     assert(withDriverLogLevel("debug") { DriverLogger.currentLogLevel } == DriverLogLevel.Debug)
     assert(withDriverLogLevel("true") { DriverLogger.currentLogLevel } == DriverLogLevel.Debug)
@@ -36,8 +40,8 @@ class DriverLoggerSpec extends AnyFunSuite {
     }
 
     assert(!warnLogs.contains("scan_start"))
-    assert(warnLogs.linesIterator.exists(_.matches("""\[PrivySpark\]\[WARN\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_fallback.*directory=/data/input/users.*""")))
-    assert(warnLogs.linesIterator.exists(_.matches("""\[PrivySpark\]\[ERROR\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_group_failed.*reason=broken_file.*""")))
+    assert(warnLogs.linesIterator.exists(_.matches("""\[PrivySpark\]\[WARN\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] group_scan_fallback.*directory=/data/input/users.*""")))
+    assert(warnLogs.linesIterator.exists(_.matches("""\[PrivySpark\]\[ERROR\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_group_failed.*reason=broken_file.*""")))
 
     val infoLogs = captureStderr {
       withDriverLogLevel("info") {
@@ -45,7 +49,7 @@ class DriverLoggerSpec extends AnyFunSuite {
       }
     }
 
-    assert(infoLogs.linesIterator.exists(_.matches("""\[PrivySpark\]\[INFO\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_start.*input_path=/data/input.*""")))
+    assert(infoLogs.linesIterator.exists(_.matches("""\[PrivySpark\]\[INFO\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_start.*input_path=/data/input.*""")))
   }
 
   test("emits forced error logs even when driver log level is off") {
@@ -55,7 +59,20 @@ class DriverLoggerSpec extends AnyFunSuite {
       }
     }
 
-    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[ERROR\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_failed.*reason=boom.*""")))
+    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[ERROR\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_failed.*reason=boom.*""")))
+  }
+
+  test("renders driver log timestamps in the JVM local time zone") {
+    val logs = withDefaultTimeZone("Asia/Seoul") {
+      captureStderr {
+        DriverLogger.emitAlways(DriverLogLevel.Info, "local_time_check")
+      }
+    }
+
+    val timestamp = extractTimestamp(logs)
+    val parsed = OffsetDateTime.parse(timestamp)
+    assert(parsed.getOffset.getId == "+09:00")
+    assert(!timestamp.endsWith("Z"))
   }
 
   test("quotes structured field values when they contain unsafe characters") {
@@ -82,6 +99,22 @@ class DriverLoggerSpec extends AnyFunSuite {
       }
       DriverLogger.resetCache()
     }
+  }
+
+  private def withDefaultTimeZone[A](zoneId: String)(block: => A): A = {
+    val previous = TimeZone.getDefault
+    TimeZone.setDefault(TimeZone.getTimeZone(zoneId))
+    try {
+      block
+    } finally {
+      TimeZone.setDefault(previous)
+    }
+  }
+
+  private def extractTimestamp(logs: String): String = {
+    logs.linesIterator.collectFirst {
+      case LogLinePattern(timestamp) => timestamp
+    }.getOrElse(fail(s"expected one structured driver log line, got: $logs"))
   }
 
   private def captureStderr[A](block: => A): String = {
