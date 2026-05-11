@@ -6,15 +6,21 @@ import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, Pii
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewScopeFingerprintCodec}
-import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger, RpcGate}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{executeInParallel, resolveFileParallelism, resolveParallelism}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveDirectoryIdentifier, resolveLogicalIdentifier, resolvePhysicalPath}
+import org.apache.spark.SparkConf
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 
 import scala.collection.mutable.ArrayBuffer
 
 private[privyspark] object GroupFileScanner {
+  val FileInFlightMarkerEnabledConfKey = "spark.privyspark.progress.fileMarker.enabled"
+
+  def fileInFlightMarkersEnabled(conf: SparkConf): Boolean =
+    conf.getBoolean(FileInFlightMarkerEnabledConfKey, false)
+
   def scanGroupByFile(
     spark: SparkSession,
     datasetPath: String,
@@ -76,6 +82,8 @@ private[privyspark] object GroupFileScanner {
     )
     val successfulFileMetrics = ArrayBuffer.empty[FileScanMetrics]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
+    val rpcGate = RpcGate.driverGate(spark)
+    val fileMarkersEnabled = fileInFlightMarkersEnabled(spark.sparkContext.getConf)
     executeInParallel(parallelism, effectiveSelectedSourceKeys.map { sourceKey =>
       () => {
         val physicalPath = resolvePhysicalPath(group, sourceKey)
@@ -176,7 +184,7 @@ private[privyspark] object GroupFileScanner {
             }
           }
         val fileMetrics = progressRun match {
-          case Some(run) =>
+          case Some(run) if fileMarkersEnabled =>
             InFlightMarker.run(
               spark.sparkContext.hadoopConfiguration,
               run.inFlightPath,
@@ -188,6 +196,8 @@ private[privyspark] object GroupFileScanner {
               scanFileMetrics()
             }
           case None =>
+            scanFileMetrics()
+          case Some(_) =>
             scanFileMetrics()
         }
         sourceKey -> fileMetrics
@@ -243,7 +253,7 @@ private[privyspark] object GroupFileScanner {
             }
           )
       }
-    }).foreach {
+    }, gate = rpcGate).foreach {
       case (sourceKey, fileResult) =>
         val physicalPath = resolvePhysicalPath(group, sourceKey)
         fileResult match {

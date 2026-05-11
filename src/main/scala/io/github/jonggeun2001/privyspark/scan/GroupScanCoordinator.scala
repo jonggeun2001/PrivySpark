@@ -7,7 +7,7 @@ import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
 import io.github.jonggeun2001.privyspark.scan.GroupScanRoute.{BatchScan, FileScan, SampledExact}
-import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger, RpcGate}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
@@ -43,6 +43,17 @@ private[privyspark] object GroupScanCoordinator {
       resolveGroupParallelism(spark, groups.size)
     }
     DriverLogger.debug("group_scan_parallelism", "groups" -> groups.size, "parallelism" -> parallelism)
+    val rpcGate = RpcGate.driverGate(spark)
+    val groupDispatchGate = rpcGate.filter(_.permits > parallelism)
+    if (rpcGate.nonEmpty && groupDispatchGate.isEmpty) {
+      DriverLogger.warn(
+        "group_scan_rpc_gate_outer_skipped",
+        "groups" -> groups.size,
+        "parallelism" -> parallelism,
+        "driver_rpc_concurrency" -> rpcGate.map(_.permits).getOrElse(0),
+        "reason" -> "outer_parallelism_not_below_gate"
+      )
+    }
     DriverTcpConnectionLogger.debugSnapshot(
       "group_scan_tcp_snapshot",
       "phase" -> "groups_start",
@@ -128,7 +139,7 @@ private[privyspark] object GroupScanCoordinator {
           (group, Seq.empty, Seq.empty)
         }
       }
-    })
+    }, gate = groupDispatchGate)
   }
 
   def scanGroup(

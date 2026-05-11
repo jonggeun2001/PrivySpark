@@ -101,20 +101,31 @@ private[privyspark] object ParallelismConfig {
     configured.map(_.toString).getOrElse("spark_conf_or_default")
   }
 
-  def executeInParallel[A](parallelism: Int, tasks: Seq[() => A]): Seq[A] = {
+  def executeInParallel[A](
+    parallelism: Int,
+    tasks: Seq[() => A],
+    gate: Option[RpcGate] = None
+  ): Seq[A] = {
     if (tasks.isEmpty) {
       Seq.empty
     } else if (parallelism <= 1 || tasks.size <= 1) {
-      tasks.map(task => task())
+      tasks.map(task => runWithGate(gate, task))
     } else {
       val workerCount = math.max(1, math.min(parallelism, tasks.size))
       val pool = Executors.newFixedThreadPool(workerCount)
       implicit val ec: ExecutionContext = ExecutionContext.fromExecutorService(pool)
       try {
-        Await.result(Future.sequence(tasks.map(task => Future(task()))), Duration.Inf)
+        Await.result(Future.sequence(tasks.map(task => Future(runWithGate(gate, task)))), Duration.Inf)
       } finally {
         pool.shutdown()
       }
+    }
+  }
+
+  private def runWithGate[A](gate: Option[RpcGate], task: () => A): A = {
+    gate match {
+      case Some(rpcGate) => rpcGate.withPermit(task())
+      case None => task()
     }
   }
 }

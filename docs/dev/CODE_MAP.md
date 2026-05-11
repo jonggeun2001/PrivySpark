@@ -19,7 +19,7 @@
 - `scan/`: scan pipeline orchestration, directory scan, source expansion, grouping, group route/fallback policy, file sampling, batch/file scan orchestration.
 - `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
 - `scan/discovery/`: physical file discovery, pre-scan expansion, schema split/finalization helpers.
-- `util/`: driver logging, driver TCP socket 진단, parallelism 설정, path identifier 정규화.
+- `util/`: driver logging, driver TCP socket 진단, RPC concurrency gate, parallelism 설정, path identifier 정규화.
 
 ## 핵심 파일 포인터
 
@@ -56,7 +56,9 @@
 - `src/main/resources/review/review.html.template`: offline review HTML/CSS shell and `${REVIEW_DATA_JSON}` placeholder.
 - `src/main/resources/review/review.js`: offline review browser state, sorting, validation, and response download logic.
 - `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, metric planning L117.
+- `fsio/RetryIO.scala`: file read retry 정책, exponential backoff/jitter, retry 전 Spark catalog refresh 대상 제어.
 - `util/DriverTcpConnectionSnapshot.scala`: Linux `/proc` 기반 driver TCP socket snapshot capture와 `group_scan_tcp_snapshot` debug log helper.
+- `util/RpcGate.scala`: `spark.privyspark.driverRpcConcurrency` 기반 driver-side RPC성 작업 동시성 gate.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.
 - `model/Models.scala`: `PiiRule` L14, `ScanResult` L32, `ScanError` L55.

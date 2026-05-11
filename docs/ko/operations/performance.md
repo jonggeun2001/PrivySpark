@@ -26,8 +26,11 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 ## 작은 파일이 많은 입력
 - `--pre-scan-parallelism`은 디렉터리 discovery, 파일 probe, schema split 대기 시간을 줄이는 1차 옵션입니다.
 - `--group-parallelism`과 `--file-parallelism`은 driver 제출 동시성을 늘리지만, executor 분산을 직접 보장하지는 않습니다.
+- small-file group scan에서 HDFS NameNode RPC가 폭증하지 않도록 `spark.privyspark.driverRpcConcurrency`가 driver-side scan 작업 동시성을 기본 `48`로 제한합니다. 더 낮추면 안정성은 높아지고 latency는 늘 수 있으며, `0`은 안전망 비활성화입니다.
 - `--file-sample-ratio`는 읽는 파일 수 자체를 줄이므로, 작은 파일이 매우 많을 때 `--sample-ratio`보다 직접적인 효과가 날 수 있습니다.
 - 기본 `--file-sample-min-files 10` 때문에 작은 그룹은 sampling 대상이 아닙니다. 더 작은 그룹에도 file sampling을 적용하려면 임계값을 낮춰야 합니다.
+- file-scope in-flight marker는 기본 off라 파일마다 HDFS marker create/delete를 만들지 않습니다. group-scope marker와 progress shard는 계속 기록됩니다.
+- 파일 크기/수정 시각이 pre-scan에서 이미 전달된 group scan 경로는 추가 `getFileStatus` 없이 해당 metadata를 재사용합니다.
 
 안정적인 해시 순위 파일 샘플링을 둔 이유는 성능만이 아니라 review scope 안정성과 데이터 concentration risk를 함께 보존하기 위해서입니다. 같은 그룹/파일 집합에서는 같은 sampled scope를 유지하고, 특정 데이터가 한 파일에 몰린 경우를 운영적으로 배제하지 않도록 파일 크기 가중치는 쓰지 않습니다.
 
@@ -63,7 +66,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - `info`/`debug` driver 로그를 켜면 pre-scan, grouping, progress merge 구간을 단계별로 확인할 수 있습니다.
 
 ## 튜닝 우선순위
-1. 입력이 작은 파일 위주면 `--pre-scan-parallelism`, `--file-sample-ratio`, Spark 파일 파티션 설정부터 조정
+1. 입력이 작은 파일 위주면 `spark.privyspark.driverRpcConcurrency`, `--file-sample-ratio`, Spark 파일 파티션 설정부터 조정
 2. 그룹 수가 많으면 `--group-parallelism` 조정
 3. 파일 fallback이 많으면 `--file-parallelism` 조정
 4. wide schema면 `column_hints`와 ruleset 구성을 먼저 정리

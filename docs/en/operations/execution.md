@@ -76,12 +76,18 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 
 ## Parallelism
 - CLI values are passed directly into application logic.
-- When omitted, PrivySpark uses `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`, or the application defaults (`4`, `4`, `3`).
+- When omitted, PrivySpark uses `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`, or the application defaults (`32`, `16`, `8`).
 - Pre-scan parallelism covers directory discovery, input expansion, format probing, and group schema split.
 - During directory discovery, the pool is capped by the safety ceiling `64` and the number of directories in the current BFS level. After discovery, effective pre-scan parallelism is still bounded by discovered file count and the safety ceiling `64`.
 - Group and file parallelism control how many scan tasks the driver submits concurrently.
+- `spark.privyspark.driverRpcConcurrency` adds a second cap for driver-side HDFS/RPC-like scan work. The default is `48` for group/file/snapshot scan paths and `64` for pre-scan paths. Set it to `0` to disable this safety gate.
 
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
+
+## Retry and HDFS Refresh
+- File read retry now attempts up to three times and uses exponential backoff from a 200ms base with jitter, reducing simultaneous retry waves from many driver threads.
+- Before retrying, Spark catalog refresh targets the original file paths by default. Parent directory refresh is disabled by default because it can trigger expensive NameNode `listStatus` calls on large directories.
+- Set `spark.privyspark.retry.refreshParent=true` to opt back into parent directory refresh if an environment depends on the previous behavior.
 
 ## Excel Reader Configuration
 - During `xlsx` pre-scan, the driver lightly parses workbook metadata and header row XML to build visible sheet lists and schema signatures; sheet body row/cell contents are handled by the executor-side StAX streamer.
@@ -119,7 +125,7 @@ When ignore rules apply, events such as `scan_directory_file_ignored` and `archi
 
 ## `_progress` Handling
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
-- Running group, file, and allowlist snapshot tasks create temporary JSON markers under `<output>/_progress/<run_id>/in-flight`.
+- Running group and allowlist snapshot tasks create temporary JSON markers under `<output>/_progress/<run_id>/in-flight`. File-level markers are disabled by default to avoid create/delete pressure during small-file scans; set `spark.privyspark.progress.fileMarker.enabled=true` to restore file-level in-flight visibility.
 - Each in-flight marker includes `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`, and available scan metadata such as `format` and `schemaSignature`.
 - In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`. The original `identifier` remains in the JSON body.
 - In-flight markers are removed for completed work and recoverable failures. Unrecovered group/file failures that make the Spark application end as `FAILED` preserve their markers so operators can inspect the last active work.
