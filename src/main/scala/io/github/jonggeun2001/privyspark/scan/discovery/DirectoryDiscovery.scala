@@ -19,8 +19,8 @@ private[privyspark] object DirectoryDiscovery {
     inputPath: String,
     ignoreMatcher: IgnoreMatcher,
     parallelism: Int
-  ): (Seq[String], Seq[(String, String)]) = {
-    val discoveredFiles = ArrayBuffer.empty[String]
+  ): (Seq[DiscoveredFile], Seq[(String, String)]) = {
+    val discoveredFiles = ArrayBuffer.empty[DiscoveredFile]
     val ignoredPaths = ArrayBuffer.empty[(String, String)]
 
     var currentLevelDirectories = Seq(rootPath)
@@ -53,7 +53,11 @@ private[privyspark] object DirectoryDiscovery {
                   case Some(pattern) =>
                     ignoredPaths += ((childPath, pattern))
                   case None =>
-                    discoveredFiles += childPath
+                    discoveredFiles += DiscoveredFile(
+                      path = childPath,
+                      size = status.getLen,
+                      mtimeEpochMs = status.getModificationTime
+                    )
                 }
               }
             }
@@ -63,6 +67,6 @@ private[privyspark] object DirectoryDiscovery {
       currentLevelDirectories = nextLevelDirectories.toSeq
     }
 
-    (discoveredFiles.toSeq.sorted, ignoredPaths.toSeq)
+    (discoveredFiles.toSeq.sortBy(_.path), ignoredPaths.toSeq)
   }
 }

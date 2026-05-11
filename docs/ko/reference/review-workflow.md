@@ -27,4 +27,4 @@ privyspark scan \
   --review-state-root /abs/review-state
 ```
 
-회수한 response JSON은 `/abs/review-state/inbox/*.json`에 업로드합니다. 다음 `scan --review-state-root /abs/review-state`는 스캔 시작 전에 자동으로 수집을 실행합니다. invalid response가 있거나 다른 collect가 `/abs/review-state/.collect.lock`을 보유 중이면 스캔은 시작하지 않고 실패합니다. Excel 편집이 필요하면 `review.html`에서 TSV를 내려받아 편집하고, 사내 보안 솔루션이 TSV를 암호화한 경우 암호화 해제한 TSV를 다시 불러온 뒤 JSON 파일을 생성해 업로드합니다.
+회수한 response JSON은 `/abs/review-state/inbox/*.json`에 업로드합니다. 다음 `scan --review-state-root /abs/review-state`는 스캔 시작 전에 자동으로 수집을 실행합니다. invalid response가 있거나 다른 collect가 `/abs/review-state/.collect.lock`을 보유 중이면 스캔은 시작하지 않고 실패합니다. Excel 편집이 필요하면 `review.html`에서 CSV를 내려받아 편집하고, 사내 보안 솔루션이 CSV를 암호화한 경우 암호화 해제한 CSV를 다시 불러오거나 CSV 내용을 붙여넣은 뒤 JSON 파일을 생성해 업로드합니다. CSV 업로드와 붙여넣기는 따옴표로 감싼 쉼표와 줄바꿈을 셀 내용으로 유지합니다.

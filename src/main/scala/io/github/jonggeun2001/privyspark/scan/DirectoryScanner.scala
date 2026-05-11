@@ -3,7 +3,7 @@ package io.github.jonggeun2001.privyspark.scan
 import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging.ArchiveFormats
 import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
-import io.github.jonggeun2001.privyspark.scan.discovery.{DirectoryDiscovery, PreScanExecutor, SchemaGroupSplitter}
+import io.github.jonggeun2001.privyspark.scan.discovery.{DirectoryDiscovery, DiscoveredFile, PreScanExecutor, SchemaGroupSplitter}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
@@ -11,6 +11,7 @@ import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, ScanError, Sc
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
 
+import java.io.FileNotFoundException
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
@@ -39,10 +40,14 @@ private[privyspark] object DirectoryScanner {
     val fileDiscoveryStartedAt = System.nanoTime()
 
     try {
-      if (!fs.exists(path)) {
-        throw new IllegalArgumentException(s"Input path not found: $inputPath")
-      }
-      val inputPathIsFile = fs.getFileStatus(path).isFile
+      val inputStatus =
+        try {
+          fs.getFileStatus(path)
+        } catch {
+          case _: FileNotFoundException =>
+            throw new IllegalArgumentException(s"Input path not found: $inputPath")
+        }
+      val inputPathIsFile = inputStatus.isFile
       val resolvedDiscoveryParallelism = if (inputPathIsFile) {
         1
       } else {
@@ -52,9 +57,9 @@ private[privyspark] object DirectoryScanner {
       val (files, ignoredFiles) = if (inputPathIsFile) {
         ignoreMatcher.matched(path.toString, inputPath) match {
           case Some(pattern) =>
-            (Seq.empty[String], Seq(path.toString -> pattern))
+            (Seq.empty[DiscoveredFile], Seq(path.toString -> pattern))
           case None =>
-            (Seq(path.toString), Seq.empty[(String, String)])
+            (Seq(DiscoveredFile(path.toString, inputStatus.getLen, inputStatus.getModificationTime)), Seq.empty[(String, String)])
         }
       } else {
         DriverLogger.debug(

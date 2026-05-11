@@ -55,7 +55,7 @@
     const ActionDueDateWindowDays = 30;
     const PermanentFalsePositiveExpiresAt = '9999-12-31';
     const ResponderPattern = /^[a-z0-9]+$/;
-    const ReviewTsvHeaders = [
+    const ReviewCsvHeaders = [
       'finding_key',
       '경로',
       'Hive 테이블',
@@ -70,7 +70,7 @@
       '정탐 조치 계획',
       '조치 예정일'
     ];
-    const ReviewTsvEditableHeaders = {
+    const ReviewCsvEditableHeaders = {
       decision: '판정',
       false_positive_reason: '오탐 사유',
       action_plan: '정탐 조치 계획',
@@ -516,13 +516,13 @@
         String(sample.sample_raw_value ?? '')
       ).join('\n---\n');
     }
-    function neutralizeTsvFormulaValue(value) {
+    function neutralizeCsvFormulaValue(value) {
       const text = String(value ?? '');
       return /^[=+\-@]/.test(text) ? "'" + text : text;
     }
-    function escapeTsvCell(value) {
-      const text = neutralizeTsvFormulaValue(value);
-      if (/[\t\r\n"]/.test(text)) {
+    function escapeCsvCell(value) {
+      const text = neutralizeCsvFormulaValue(value);
+      if (/[,\t\r\n"]/.test(text)) {
         return '"' + text.replace(/"/g, '""') + '"';
       }
       return text;
@@ -536,8 +536,8 @@
       }
       return '';
     }
-    function reviewTsvRows() {
-      const rows = [ReviewTsvHeaders];
+    function reviewCsvRows() {
+      const rows = [ReviewCsvHeaders];
       REVIEW_DATA.findings.forEach((finding, index) => {
         const values = getFormState(index);
         rows.push([
@@ -558,15 +558,15 @@
       });
       return rows;
     }
-    function downloadReviewTsv() {
-      const tsv = reviewTsvRows()
-        .map(row => row.map(escapeTsvCell).join('\t'))
-        .join('\n');
-      const blob = new Blob(['\uFEFF' + tsv], { type: 'text/tab-separated-values;charset=utf-8' });
+    function downloadReviewCsv() {
+      const csv = reviewCsvRows()
+        .map(row => row.map(escapeCsvCell).join(','))
+        .join('\r\n');
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `review-${formatResponseScanPath(REVIEW_DATA.scan_path)}-${formatResponseTimestamp(new Date())}.tsv`;
+      link.download = `review-${formatResponseScanPath(REVIEW_DATA.scan_path)}-${formatResponseTimestamp(new Date())}.csv`;
       link.click();
       URL.revokeObjectURL(url);
     }
@@ -633,22 +633,22 @@
       }
       return null;
     }
-    function setTsvImportStatus(message) {
-      const status = document.getElementById('tsvImportStatus');
+    function setCsvImportStatus(message) {
+      const status = document.getElementById('csvImportStatus');
       if (status) {
         status.textContent = message;
       }
     }
-    function importReviewTsvText(text) {
-      const rows = parseDelimitedText(text, '\t').filter(row => row.some(value => !isBlank(value)));
+    function importReviewCsvText(text) {
+      const rows = parseDelimitedText(text, ',').filter(row => row.some(value => !isBlank(value)));
       if (rows.length < 2) {
-        setTsvImportStatus('반영할 TSV 행이 없습니다.');
+        setCsvImportStatus('반영할 CSV 행이 없습니다.');
         return;
       }
       const headers = rows[0].map(header => String(header ?? '').trim());
       const headerIndex = new Map(headers.map((header, index) => [header, index]));
       if (!headerIndex.has('finding_key')) {
-        setTsvImportStatus('finding_key 컬럼이 없어 TSV를 반영하지 못했습니다.');
+        setCsvImportStatus('finding_key 컬럼이 없어 CSV를 반영하지 못했습니다.');
         return;
       }
       let applied = 0;
@@ -660,7 +660,7 @@
           skipped += 1;
           return;
         }
-        const decisionColumn = headerIndex.get(ReviewTsvEditableHeaders.decision);
+        const decisionColumn = headerIndex.get(ReviewCsvEditableHeaders.decision);
         const importedDecision = decisionColumn === undefined ? undefined : normalizeImportedDecision(row[decisionColumn]);
         if (importedDecision === null) {
           invalid += 1;
@@ -671,7 +671,7 @@
           updateFormState(index, 'decision', importedDecision);
         }
         ['false_positive_reason', 'action_plan', 'action_due_date'].forEach(field => {
-          const column = headerIndex.get(ReviewTsvEditableHeaders[field]);
+          const column = headerIndex.get(ReviewCsvEditableHeaders[field]);
           if (column !== undefined) {
             updateFormState(index, field, String(row[column] ?? ''));
           }
@@ -691,23 +691,34 @@
       if (invalid > 0) {
         parts.push(`${invalid}건 판정값 오류`);
       }
-      setTsvImportStatus(parts.join(', '));
+      setCsvImportStatus(parts.join(', '));
     }
-    function handleReviewTsvFile(event) {
+    function handleReviewCsvFile(event) {
       const file = event.target.files && event.target.files[0];
       if (!file) {
         return;
       }
       const reader = new FileReader();
       reader.onload = () => {
-        importReviewTsvText(String(reader.result ?? ''));
+        importReviewCsvText(String(reader.result ?? ''));
         event.target.value = '';
       };
       reader.onerror = () => {
-        setTsvImportStatus('TSV 파일을 읽지 못했습니다.');
+        setCsvImportStatus('CSV 파일을 읽지 못했습니다.');
         event.target.value = '';
       };
       reader.readAsText(file, 'utf-8');
+    }
+    function importPastedReviewCsv() {
+      const textarea = document.getElementById('pasteReviewCsv');
+      if (!textarea) {
+        return;
+      }
+      if (isBlank(textarea.value)) {
+        setCsvImportStatus('붙여넣은 CSV 내용이 없습니다.');
+        return;
+      }
+      importReviewCsvText(textarea.value);
     }
     function renderExistingActionCell(finding) {
       const state = finding.action_plan_state;
@@ -719,7 +730,7 @@
         <span class="action-status-badge action-status-${escapeHtml(status)}">${escapeHtml(state.status_label || '조치 필요')}</span>
         <div class="existing-action-detail">계획: ${escapeHtml(state.action_plan || '-')}</div>
         <div class="existing-action-detail">예정일: ${escapeHtml(state.action_due_date || '-')}</div>
-        <div class="existing-action-detail">응답자: ${escapeHtml(state.responder || '-')}</div>`;
+        <div class="existing-action-detail">응답자사번: ${escapeHtml(state.responder || '-')}</div>`;
     }
     function renderFindingCells(finding, index) {
       return `
@@ -870,8 +881,9 @@
     tbody.addEventListener('change', handleFormEvent);
     document.getElementById('applyBulkTruePositivePlan').addEventListener('click', applyBulkTruePositivePlan);
     document.getElementById('applyBulkFalsePositiveReason').addEventListener('click', applyBulkFalsePositiveReason);
-    document.getElementById('downloadReviewTsv').addEventListener('click', downloadReviewTsv);
-    document.getElementById('importReviewTsv').addEventListener('change', handleReviewTsvFile);
+    document.getElementById('downloadReviewCsv').addEventListener('click', downloadReviewCsv);
+    document.getElementById('importReviewCsv').addEventListener('change', handleReviewCsvFile);
+    document.getElementById('importPastedReviewCsv').addEventListener('click', importPastedReviewCsv);
     responderInput.addEventListener('input', () => {
       if (ResponderPattern.test(responderInput.value.trim())) {
         clearResponderValidation();

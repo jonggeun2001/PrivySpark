@@ -43,7 +43,7 @@
 ## `review collect` CLI 인자
 - `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
 
-`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 담당자는 `review.html`에서 직접 JSON을 생성하거나, Excel 편집이 필요하면 TSV를 내려받아 편집한 뒤 암호화 해제한 TSV를 다시 불러온 다음 JSON을 생성합니다. `--scan-results`는 더 이상 필요하지 않습니다. 같은 `--review-state-root`를 지정한 다음 스캔은 본 스캔 전에 이 collect를 자동 실행합니다. invalid response가 하나라도 있으면 current를 갱신하지 않고 명령을 실패 처리하며, `<review-state-root>/.collect.lock`이 이미 있으면 동시 갱신을 막기 위해 실패합니다. collect가 끝나면 lock 파일은 삭제됩니다.
+`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 담당자는 `review.html`에서 직접 JSON을 생성하거나, Excel 편집이 필요하면 CSV를 내려받아 편집한 뒤 암호화 해제한 CSV를 다시 불러오거나 CSV 내용을 붙여넣은 다음 JSON을 생성합니다. CSV 업로드와 붙여넣기는 따옴표로 감싼 쉼표와 줄바꿈을 셀 내용으로 유지합니다. `--scan-results`는 더 이상 필요하지 않습니다. 같은 `--review-state-root`를 지정한 다음 스캔은 본 스캔 전에 이 collect를 자동 실행합니다. invalid response가 하나라도 있으면 current를 갱신하지 않고 명령을 실패 처리하며, `<review-state-root>/.collect.lock`이 이미 있으면 동시 갱신을 막기 위해 실패합니다. collect가 끝나면 lock 파일은 삭제됩니다.
 
 오프라인 리뷰 identity와 allowlist 매칭에서는 HDFS URI path의 중복 slash를 정규화합니다. 예를 들어 `hdfs:///user/name`과 `hdfs:////user/name`은 같은 스캔 경로로 취급됩니다.
 
@@ -135,5 +135,5 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 - GitHub Release는 `v*` 또는 bare semver 태그 푸시로 트리거됩니다.
 - Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행합니다.
 - 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html`입니다.
-- `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드와 TSV 편집/임포트 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
+- `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드와 CSV 편집/임포트/붙여넣기 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
 - `privyspark-<tag>-review-response-viewer.html`은 회수한 `response-<scan-path>-YYYYMMDD-HHMMSS.json`을 운영자가 로컬에서 파일 선택, 드래그앤드롭, 원문 붙여넣기로 열어 envelope 메타데이터, 검증 메시지, finding별 판정을 확인하는 self-contained 파일입니다.

@@ -212,6 +212,8 @@ private[privyspark] object ArchiveExpandLoop {
                         }
 
                         if (materializedSuccessfully) {
+                          val materializedSize =
+                            if (declaredSize > 0L) declaredSize else fs.getFileStatus(targetPath).getLen
                           val (childEntries, childErrors, childIgnoredEntries) =
                             SourceExpansion.expandPhysicalSource(
                               context.conf,
@@ -221,12 +223,13 @@ private[privyspark] object ArchiveExpandLoop {
                               childLogicalIdentifier,
                               context.logicalIdentifier,
                               context.stagingPaths,
-                              fileSize = if (declaredSize > 0L) declaredSize else fs.getFileStatus(targetPath).getLen,
+                              fileSize = materializedSize,
                               fileMtimeEpochMs = archiveModifiedTime,
                               readOptions = context.readOptions,
                               ignoreMatcher = context.ignoreMatcher,
                               archiveExpansionDepth = context.archiveExpansionDepth,
-                              forceDisableDirectoryIdentifier = true
+                              forceDisableDirectoryIdentifier = true,
+                              precomputedSize = Some(materializedSize)
                             )
                           extractedEntries ++= childEntries
                           archiveErrors ++= childErrors
