@@ -37,14 +37,16 @@ private[privyspark] object SchemaGroupSplitter {
     val errors = ArrayBuffer.empty[ScanError]
     val directoriesWithErrors = scala.collection.mutable.Set.empty[String] ++ directoriesWithPreScanErrors
     val schemaSplitParallelism = resolveParallelism(groupedByDirectoryAndFormat.size, parallelism)
+    val fileSchemaSplitParallelism = math.max(1, parallelism)
 
     DriverLogger.debug(
       "scan_directory_schema_split_parallelism",
       "groups" -> groupedByDirectoryAndFormat.size,
       "parallelism" -> schemaSplitParallelism,
+      "file_schema_parallelism" -> fileSchemaSplitParallelism,
       "driver_rpc_concurrency" -> rpcGate.map(_.permits).getOrElse("disabled")
     )
-    val schemaSplitOutcomes = executeSchemaSplitTasks(schemaSplitParallelism, groupedByDirectoryAndFormat, rpcGate) { group =>
+    val schemaSplitOutcomes = executeSchemaSplitTasks(schemaSplitParallelism, groupedByDirectoryAndFormat, rpcGate = None) { group =>
       val (splitGroups, splitErrors) = splitGroupBySchemaFast(
         spark,
         datasetPath,
@@ -52,7 +54,9 @@ private[privyspark] object SchemaGroupSplitter {
         group,
         csvHeadCache,
         schemaSigCache,
-        parseOkCache
+        parseOkCache,
+        fileSchemaSplitParallelism,
+        rpcGate
       )
       (group, splitGroups, splitErrors)
     }
@@ -122,6 +126,18 @@ private[privyspark] object SchemaGroupSplitter {
     )
   }
 
+  private[discovery] def executeFileSchemaTasks[A](
+    parallelism: Int,
+    sourceKeys: Seq[String],
+    rpcGate: Option[RpcGate]
+  )(task: String => A): Seq[A] = {
+    executeInParallel(
+      parallelism,
+      sourceKeys.map(sourceKey => () => task(sourceKey)),
+      gate = rpcGate
+    )
+  }
+
   def splitGroupBySchemaFast(
     spark: SparkSession,
     datasetPath: String,
@@ -129,10 +145,12 @@ private[privyspark] object SchemaGroupSplitter {
     group: ScanGroup,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
-    parseOkCache: ParseOkCache = new ParseOkCache()
+    parseOkCache: ParseOkCache = new ParseOkCache(),
+    schemaSplitParallelism: Int = 1,
+    rpcGate: Option[RpcGate] = None
   ): (Seq[ScanGroup], Seq[ScanError]) = {
     if (group.filePaths.size <= 1 || group.readOptionsByKey.nonEmpty) {
-      splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache)
+      splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache, schemaSplitParallelism, rpcGate)
     } else {
       DriverLogger.debug(
         "scan_group_schema_sample_start",
@@ -144,18 +162,28 @@ private[privyspark] object SchemaGroupSplitter {
       val sampledSourceKey = group.filePaths.head
       val sampledPhysicalPath = resolvePhysicalPath(group, sampledSourceKey)
       val sampledReadOptions = resolveReadOptions(group, sampledSourceKey)
-      val sampledSchemaResult = if (group.format == "csv") {
-        inferCsvSchemaSignature(spark, sampledPhysicalPath, csvHeadCache, schemaSigCache, sampledReadOptions)
-      } else {
-        inferSchemaSignature(spark, group.format, sampledPhysicalPath, sampledReadOptions, schemaSigCache)
-          .map(signature => (signature, true))
+      val sampledSchemaResult = withRpcGate(rpcGate) {
+        if (group.format == "csv") {
+          inferCsvSchemaSignature(spark, sampledPhysicalPath, csvHeadCache, schemaSigCache, sampledReadOptions)
+        } else {
+          inferSchemaSignature(spark, group.format, sampledPhysicalPath, sampledReadOptions, schemaSigCache)
+            .map(signature => (signature, true))
+        }
       }
 
       sampledSchemaResult match {
         case Right((schemaSignature, csvHasHeader)) =>
           val (validatedFilePaths, validationErrors) =
             if (group.format == "json") {
-              validateSampledJsonFiles(spark, datasetPath, timestamp, group, parseOkCache)
+              validateSampledJsonFiles(
+                spark,
+                datasetPath,
+                timestamp,
+                group,
+                parseOkCache,
+                schemaSplitParallelism,
+                rpcGate
+              )
             } else {
               (group.filePaths, Seq.empty)
             }
@@ -188,26 +216,31 @@ private[privyspark] object SchemaGroupSplitter {
             "files" -> group.filePaths.size,
             "reason" -> errorMessage
           )
-          splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache)
+          splitGroupBySchema(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache, schemaSplitParallelism, rpcGate)
       }
     }
   }
+
+  private final case class JsonValidationOutcome(sourceKey: String, error: Option[ScanError])
 
   private def validateSampledJsonFiles(
     spark: SparkSession,
     datasetPath: String,
     timestamp: String,
     group: ScanGroup,
-    parseOkCache: ParseOkCache = new ParseOkCache()
+    parseOkCache: ParseOkCache = new ParseOkCache(),
+    schemaSplitParallelism: Int = 1,
+    rpcGate: Option[RpcGate] = None
   ): (Seq[String], Seq[ScanError]) = {
     val validFilePaths = ArrayBuffer.empty[String]
     val errors = ArrayBuffer.empty[ScanError]
+    val parallelism = resolveParallelism(group.filePaths.size, schemaSplitParallelism)
 
-    group.filePaths.foreach { sourceKey =>
+    val outcomes = executeFileSchemaTasks(parallelism, group.filePaths, rpcGate) { sourceKey =>
       val physicalPath = resolvePhysicalPath(group, sourceKey)
       val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
       if (parseOkCache.isOk(physicalPath)) {
-        validFilePaths += sourceKey
+        JsonValidationOutcome(sourceKey, None)
       } else {
         try {
           withFileReadRetry(spark, Seq(physicalPath), "schema_detection") {
@@ -215,7 +248,7 @@ private[privyspark] object SchemaGroupSplitter {
             ()
           }
           parseOkCache.markOk(physicalPath)
-          validFilePaths += sourceKey
+          JsonValidationOutcome(sourceKey, None)
         } catch {
           case NonFatal(e) =>
             val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
@@ -226,18 +259,34 @@ private[privyspark] object SchemaGroupSplitter {
               "format" -> group.format,
               "reason" -> errorMessage
             )
-            errors += ScanError(
-              datasetPath,
-              timestamp,
-              logicalIdentifier,
-              s"Schema detection failed: $errorMessage"
+            JsonValidationOutcome(
+              sourceKey,
+              Some(ScanError(
+                datasetPath,
+                timestamp,
+                logicalIdentifier,
+                s"Schema detection failed: $errorMessage"
+              ))
             )
         }
       }
     }
 
+    outcomes.foreach {
+      case JsonValidationOutcome(sourceKey, None) =>
+        validFilePaths += sourceKey
+      case JsonValidationOutcome(_, Some(error)) =>
+        errors += error
+    }
+
     (validFilePaths.toSeq, errors.toSeq)
   }
+
+  private final case class FileSchemaOutcome(
+    sourceKey: String,
+    schema: Option[(String, Boolean)],
+    error: Option[ScanError]
+  )
 
   def splitGroupBySchema(
     spark: SparkSession,
@@ -245,18 +294,23 @@ private[privyspark] object SchemaGroupSplitter {
     timestamp: String,
     group: ScanGroup,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
-    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
+    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
+    schemaSplitParallelism: Int = 1,
+    rpcGate: Option[RpcGate] = None
   ): (Seq[ScanGroup], Seq[ScanError]) = {
+    val parallelism = resolveParallelism(group.filePaths.size, schemaSplitParallelism)
     DriverLogger.debug(
       "scan_group_schema_split_start",
       "directory" -> group.directoryPath,
       "format" -> group.format,
-      "files" -> group.filePaths.size
+      "files" -> group.filePaths.size,
+      "parallelism" -> parallelism,
+      "driver_rpc_concurrency" -> rpcGate.map(_.permits).getOrElse("disabled")
     )
     val filesBySchema = scala.collection.mutable.Map.empty[(String, Boolean), ArrayBuffer[String]]
     val errors = ArrayBuffer.empty[ScanError]
 
-    group.filePaths.foreach { sourceKey =>
+    val outcomes = executeFileSchemaTasks(parallelism, group.filePaths, rpcGate) { sourceKey =>
       val physicalPath = resolvePhysicalPath(group, sourceKey)
       val readOptions = resolveReadOptions(group, sourceKey)
       val schemaResult = if (group.format == "csv") {
@@ -268,8 +322,6 @@ private[privyspark] object SchemaGroupSplitter {
 
       schemaResult match {
         case Right((schemaSignature, csvHasHeader)) =>
-          val groupedFiles = filesBySchema.getOrElseUpdate((schemaSignature, csvHasHeader), ArrayBuffer.empty[String])
-          groupedFiles += sourceKey
           DriverLogger.debug(
             "group_schema_signature_detected",
             "directory" -> group.directoryPath,
@@ -278,6 +330,7 @@ private[privyspark] object SchemaGroupSplitter {
             "schema" -> schemaSignature,
             "csv_has_header" -> csvHasHeader
           )
+          FileSchemaOutcome(sourceKey, Some((schemaSignature, csvHasHeader)), None)
         case Left(errorMessage) =>
           if (isEmptyWorkbookSheetSchemaError(group.format, errorMessage)) {
             DriverLogger.debug(
@@ -287,6 +340,7 @@ private[privyspark] object SchemaGroupSplitter {
               "format" -> group.format,
               "file_identifier" -> resolveLogicalIdentifier(group, datasetPath, sourceKey)
             )
+            FileSchemaOutcome(sourceKey, None, None)
           } else {
             DriverLogger.debug(
               "group_schema_signature_failed",
@@ -295,14 +349,29 @@ private[privyspark] object SchemaGroupSplitter {
               "format" -> group.format,
               "reason" -> errorMessage
             )
-            errors += ScanError(
-              datasetPath,
-              timestamp,
-              resolveLogicalIdentifier(group, datasetPath, sourceKey),
-              s"Schema detection failed: $errorMessage"
+            FileSchemaOutcome(
+              sourceKey,
+              None,
+              Some(ScanError(
+                datasetPath,
+                timestamp,
+                resolveLogicalIdentifier(group, datasetPath, sourceKey),
+                s"Schema detection failed: $errorMessage"
+              ))
             )
           }
       }
+    }
+
+    outcomes.foreach {
+      case FileSchemaOutcome(sourceKey, Some((schemaSignature, csvHasHeader)), None) =>
+        val groupedFiles = filesBySchema.getOrElseUpdate((schemaSignature, csvHasHeader), ArrayBuffer.empty[String])
+        groupedFiles += sourceKey
+      case FileSchemaOutcome(_, None, Some(error)) =>
+        errors += error
+      case FileSchemaOutcome(_, None, None) =>
+      case FileSchemaOutcome(_, Some(_), Some(error)) =>
+        errors += error
     }
 
     val groups = filesBySchema.toSeq
@@ -329,4 +398,10 @@ private[privyspark] object SchemaGroupSplitter {
 
   private def isEmptyWorkbookSheetSchemaError(format: String, errorMessage: String): Boolean =
     format == XlsxFormat && errorMessage == "head of empty list"
+
+  private def withRpcGate[A](rpcGate: Option[RpcGate])(block: => A): A =
+    rpcGate match {
+      case Some(gate) => gate.withPermit(block)
+      case None => block
+    }
 }

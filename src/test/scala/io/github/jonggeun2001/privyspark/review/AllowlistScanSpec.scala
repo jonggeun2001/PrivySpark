@@ -110,7 +110,7 @@ class AllowlistScanSpec extends AnyFunSuite {
     }
   }
 
-  test("scanGroups suppresses recurring directory finding using the finding identifier with scoped evidence") {
+  test("scanGroups suppresses sampled batch file findings with a recurring wildcard") {
     val inputRoot = Files.createTempDirectory("privyspark-allowlist-directory-recurring-")
 
     try {
@@ -121,7 +121,7 @@ class AllowlistScanSpec extends AnyFunSuite {
         RecurringAllowlistEntry(
           scanPath = inputRoot.toString,
           hiveTableFqn = "",
-          fileIdentifierPattern = "reviews",
+          fileIdentifierPattern = "reviews/*.csv",
           columnName = "email",
           piiType = "email",
           reason = "known dummy data",
@@ -153,7 +153,7 @@ class AllowlistScanSpec extends AnyFunSuite {
     }
   }
 
-  test("scanGroups keeps directory finding when recurring allowlist covers only one scoped child") {
+  test("scanGroups keeps unsuppressed sampled batch file findings") {
     val inputRoot = Files.createTempDirectory("privyspark-allowlist-directory-partial-")
 
     try {
@@ -191,14 +191,13 @@ class AllowlistScanSpec extends AnyFunSuite {
       )
 
       val results = scanned.flatMap(_._2)
-      assert(results.nonEmpty)
-      assert(results.exists(_.file_identifier == "reviews"))
+      assert(results.map(_.file_identifier).toSet == Set("reviews/b.csv"))
     } finally {
       deleteRecursively(inputRoot)
     }
   }
 
-  test("scanGroups records per-file scope fingerprints for directory review rows") {
+  test("scanGroups records per-file fingerprints for sampled batch review rows") {
     val inputRoot = Files.createTempDirectory("privyspark-allowlist-scope-fingerprints-")
 
     try {
@@ -216,21 +215,18 @@ class AllowlistScanSpec extends AnyFunSuite {
         timestamp = "2026-04-20T00:00:00Z"
       )
 
-      val result = scanned.flatMap(_._2).find(_.file_identifier == "reviews").getOrElse(
-        fail("Expected a directory-scoped review row for reviews")
-      )
-      val scopeFingerprints = ReviewScopeFingerprintCodec.decode(result.review_scope_file_fingerprints).fold(
-        errorMessage => fail(errorMessage),
-        identity
-      )
-      val scopeIdentifiers = ReviewScopeIdentifierCodec.decode(result.review_scope_file_identifiers).fold(
-        errorMessage => fail(errorMessage),
-        identity
-      )
+      val results = scanned.flatMap(_._2).sortBy(_.file_identifier)
 
-      assert(scopeIdentifiers == Seq("reviews/a.csv", "reviews/b.csv"))
-      assert(scopeFingerprints.map(_.fileIdentifier) == Seq("reviews/a.csv", "reviews/b.csv"))
-      assert(scopeFingerprints.forall(_.fileChecksum.nonEmpty))
+      assert(results.map(_.file_identifier) == Seq("reviews/a.csv", "reviews/b.csv"))
+      results.foreach { result =>
+        val fingerprints = ReviewScopeFingerprintCodec.decode(result.review_scope_file_fingerprints).fold(
+          errorMessage => fail(errorMessage),
+          identity
+        )
+        assert(result.review_scope_file_identifiers.isEmpty)
+        assert(fingerprints.map(_.fileIdentifier) == Seq(result.file_identifier))
+        assert(fingerprints.forall(_.fileChecksum.nonEmpty))
+      }
     } finally {
       deleteRecursively(inputRoot)
     }

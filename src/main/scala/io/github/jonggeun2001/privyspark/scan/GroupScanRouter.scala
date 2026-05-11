@@ -13,12 +13,15 @@ private[privyspark] object GroupScanRoute {
 
 private[privyspark] object GroupScanRouter {
   def routeOf(group: ScanGroup): GroupScanRoute = {
-    if (group.schemaSampled && group.filePaths.size > 1) {
-      GroupScanRoute.SampledExact
-    } else if (!supportsBatchScan(group) || group.useDirectoryIdentifier) {
+    if (!supportsBatchScan(group) || group.useDirectoryIdentifier) {
       GroupScanRoute.FileScan
+    } else if (group.schemaSampled && group.filePaths.size > 1 && requiresExactPerFileSchema(group)) {
+      GroupScanRoute.SampledExact
     } else {
       GroupScanRoute.BatchScan
     }
   }
+
+  private def requiresExactPerFileSchema(group: ScanGroup): Boolean =
+    group.format == "json"
 }

@@ -284,7 +284,9 @@ private[privyspark] object DirectoryScanner {
       group,
       csvHeadCache,
       schemaSigCache,
-      parseOkCache
+      parseOkCache,
+      resolveFileParallelism(spark, group.filePaths.size),
+      RpcGate.driverGate(spark)
     )
   }
 
@@ -302,7 +304,9 @@ private[privyspark] object DirectoryScanner {
       timestamp,
       group,
       csvHeadCache,
-      schemaSigCache
+      schemaSigCache,
+      resolveFileParallelism(spark, group.filePaths.size),
+      RpcGate.driverGate(spark)
     )
   }
 }

@@ -42,6 +42,30 @@ class SchemaGroupSplitterSpec extends AnyFunSuite {
     assert(peakActiveTasks.get() <= 2)
   }
 
+  test("per-file schema split tasks are capped by the pre-scan RpcGate") {
+    val sourceKeys = (1 to 8).map(index => s"/input/d/file-$index.csv")
+    val activeTasks = new AtomicInteger(0)
+    val peakActiveTasks = new AtomicInteger(0)
+
+    val result = SchemaGroupSplitter.executeFileSchemaTasks(
+      parallelism = 8,
+      sourceKeys = sourceKeys,
+      rpcGate = Some(new RpcGate(2))
+    ) { sourceKey =>
+      val active = activeTasks.incrementAndGet()
+      updatePeak(peakActiveTasks, active)
+      try {
+        Thread.sleep(20L)
+        sourceKey
+      } finally {
+        activeTasks.decrementAndGet()
+      }
+    }
+
+    assert(result.sorted == sourceKeys.sorted)
+    assert(peakActiveTasks.get() <= 2)
+  }
+
   private def updatePeak(peak: AtomicInteger, candidate: Int): Unit = {
     var updated = false
     while (!updated) {

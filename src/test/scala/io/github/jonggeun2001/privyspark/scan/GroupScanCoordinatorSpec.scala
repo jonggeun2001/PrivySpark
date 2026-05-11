@@ -74,25 +74,25 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("scanGroup exact-splits sampled groups before scanning") {
-    val inputDir = Files.createTempDirectory("privyspark-coordinator-sampled-exact-")
+  test("scanGroup runs a batch scan for sampled CSV groups") {
+    val inputDir = Files.createTempDirectory("privyspark-coordinator-sampled-batch-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
 
     try {
-      val headerFile = groupedDir.resolve("part-a.csv")
-      val headerlessFile = groupedDir.resolve("part-b.csv")
-      writeText(headerFile,
+      val left = groupedDir.resolve("part-a.csv")
+      val right = groupedDir.resolve("part-b.csv")
+      writeText(left,
         "name,email\n" +
           "alice,alice@example.com\n")
-      writeText(headerlessFile,
-        "bob,bob@example.com\n" +
-          "carol,carol@example.com\n")
+      writeText(right,
+        "name,email\n" +
+          "bob,bob@example.com\n")
 
       val group = ScanGroup(
         directoryPath = groupedDir.toString,
         format = "csv",
         schemaSignature = "name|email",
-        filePaths = Seq(headerFile.toString, headerlessFile.toString),
+        filePaths = Seq(left.toString, right.toString),
         schemaSampled = true,
         csvHasHeader = true,
         directoryIdentifierEligible = true
@@ -111,7 +111,7 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
         Set(
           ("users/part-a.csv", "email", 1L),
-          ("users/part-b.csv", "_c1", 2L)
+          ("users/part-b.csv", "email", 1L)
         ))
       assert(!results.exists(_.file_identifier == "users"))
     } finally {
