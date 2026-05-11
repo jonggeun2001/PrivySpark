@@ -109,7 +109,7 @@ Stable hash-ranked file sampling keeps the same subset for the same group and fi
 - Supported values are `error`, `warn`, `info`, `debug`, and `off`.
 - The default is `warn`.
 - For backward compatibility, `true` maps to `debug` and `false` maps to `warn`.
-- Log format: `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...`
+- Log format: `[PrivySpark][LEVEL][ISO-8601 local driver timestamp with offset] event key=value...`
 
 `info` exposes high-level lifecycle events such as `scan_start`, `scan_plan_ready`, and `scan_complete`. `debug` adds detailed events for file discovery, pre-scan execution, grouping, and `_progress` lifecycle.
 
