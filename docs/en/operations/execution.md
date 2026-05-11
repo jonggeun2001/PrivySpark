@@ -80,7 +80,7 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 - Pre-scan parallelism covers directory discovery, input expansion, format probing, and group schema split.
 - During directory discovery, the pool is capped by the safety ceiling `64` and the number of directories in the current BFS level. After discovery, effective pre-scan parallelism is still bounded by discovered file count and the safety ceiling `64`.
 - Group and file parallelism control how many scan tasks the driver submits concurrently.
-- `spark.privyspark.driverRpcConcurrency` adds a second cap for driver-side HDFS/RPC-like scan work. The default is `48` for group/file/snapshot scan paths and `64` for pre-scan paths. Set it to `0` to disable this safety gate.
+- `spark.privyspark.driverRpcConcurrency` adds a second cap for driver-side HDFS/RPC-like scan work. The default is `48` for group/file/snapshot scan paths and `64` for pre-scan paths. Set it to `0` to disable this safety gate. Group dispatch parallelism is also reduced to this cap so batch group scans cannot bypass it.
 
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
 

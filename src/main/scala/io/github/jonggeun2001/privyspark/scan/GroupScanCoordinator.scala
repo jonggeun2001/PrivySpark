@@ -37,23 +37,20 @@ private[privyspark] object GroupScanCoordinator {
       return Seq.empty
     }
 
-    val parallelism = if (groupParallelism > 0) {
+    val requestedParallelism = if (groupParallelism > 0) {
       resolveParallelism(groups.size, groupParallelism)
     } else {
       resolveGroupParallelism(spark, groups.size)
     }
-    DriverLogger.debug("group_scan_parallelism", "groups" -> groups.size, "parallelism" -> parallelism)
     val rpcGate = RpcGate.driverGate(spark)
-    val groupDispatchGate = rpcGate.filter(_.permits > parallelism)
-    if (rpcGate.nonEmpty && groupDispatchGate.isEmpty) {
-      DriverLogger.warn(
-        "group_scan_rpc_gate_outer_skipped",
-        "groups" -> groups.size,
-        "parallelism" -> parallelism,
-        "driver_rpc_concurrency" -> rpcGate.map(_.permits).getOrElse(0),
-        "reason" -> "outer_parallelism_not_below_gate"
-      )
-    }
+    val parallelism = capGroupDispatchParallelism(requestedParallelism, rpcGate)
+    DriverLogger.debug(
+      "group_scan_parallelism",
+      "groups" -> groups.size,
+      "parallelism" -> parallelism,
+      "requested_parallelism" -> requestedParallelism,
+      "driver_rpc_concurrency" -> rpcGate.map(_.permits).getOrElse("disabled")
+    )
     DriverTcpConnectionLogger.debugSnapshot(
       "group_scan_tcp_snapshot",
       "phase" -> "groups_start",
@@ -139,7 +136,15 @@ private[privyspark] object GroupScanCoordinator {
           (group, Seq.empty, Seq.empty)
         }
       }
-    }, gate = groupDispatchGate)
+    })
+  }
+
+  private[privyspark] def capGroupDispatchParallelism(parallelism: Int, rpcGate: Option[RpcGate]): Int = {
+    require(parallelism > 0, "group scan parallelism must be > 0")
+    rpcGate match {
+      case Some(gate) => math.max(1, math.min(parallelism, gate.permits))
+      case None => parallelism
+    }
   }
 
   def scanGroup(

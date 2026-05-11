@@ -1,5 +1,6 @@
 package io.github.jonggeun2001.privyspark
 
+import io.github.jonggeun2001.privyspark.scan.GroupScanCoordinator
 import io.github.jonggeun2001.privyspark.util.{ParallelismConfig, RpcGate}
 
 import org.junit.runner.RunWith
@@ -52,6 +53,12 @@ class RpcGateSpec extends AnyFunSuite {
 
     assert(first.nonEmpty)
     assert(first.get eq second.get)
+  }
+
+  test("group dispatch parallelism is capped by the driver RpcGate") {
+    assert(GroupScanCoordinator.capGroupDispatchParallelism(16, Some(new RpcGate(4))) == 4)
+    assert(GroupScanCoordinator.capGroupDispatchParallelism(16, Some(new RpcGate(48))) == 16)
+    assert(GroupScanCoordinator.capGroupDispatchParallelism(16, None) == 16)
   }
 
   private def updatePeak(peak: AtomicInteger, candidate: Int): Unit = {

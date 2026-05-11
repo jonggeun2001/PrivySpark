@@ -82,7 +82,7 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - pre-scan 병렬도는 디렉터리 discovery, 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용됩니다.
 - 디렉터리 discovery 단계에서는 BFS 레벨의 디렉터리 수와 safety ceiling `64` 기준으로 풀 크기가 제한되고, discovery 이후 pre-scan 병렬도는 기존처럼 파일 수와 safety ceiling `64` 기준으로 축소됩니다.
 - 그룹 병렬도와 파일 병렬도는 driver가 동시에 제출하는 작업 수를 제어합니다.
-- `spark.privyspark.driverRpcConcurrency`는 driver가 동시에 실행하는 HDFS/RPC 성격의 scan 작업 수를 추가로 제한합니다. 기본값은 group/file/snapshot scan 경로 `48`, pre-scan 경로 `64`이며, `0`으로 설정하면 이 안전망을 끕니다.
+- `spark.privyspark.driverRpcConcurrency`는 driver가 동시에 실행하는 HDFS/RPC 성격의 scan 작업 수를 추가로 제한합니다. 기본값은 group/file/snapshot scan 경로 `48`, pre-scan 경로 `64`이며, `0`으로 설정하면 이 안전망을 끕니다. group dispatch 병렬도도 이 값 이하로 축소되어 batch group scan 경로가 상한을 우회하지 않습니다.
 
 여기서 중요한 점은 앱 레벨 병렬도가 곧 executor 수를 직접 보장하는 것은 아니라는 점입니다. 실제 executor 분산은 입력 파티션 수, Spark scheduler, dynamic allocation backlog에 함께 영향을 받습니다.
 
