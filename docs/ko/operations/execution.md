@@ -83,6 +83,7 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - 디렉터리 discovery 단계에서는 BFS 레벨의 디렉터리 수와 safety ceiling `64` 기준으로 풀 크기가 제한되고, discovery 이후 pre-scan 병렬도는 기존처럼 파일 수와 safety ceiling `64` 기준으로 축소됩니다.
 - 그룹 병렬도와 파일 병렬도는 driver가 동시에 제출하는 작업 수를 제어합니다.
 - `spark.privyspark.driverRpcConcurrency`는 driver가 동시에 실행하는 HDFS/RPC 성격의 scan 작업 수를 추가로 제한합니다. 기본값은 group/file/snapshot scan 경로 `48`, pre-scan 경로 `64`이며, `0`으로 설정하면 이 안전망을 끕니다. group dispatch 병렬도도 이 값 이하로 축소되어 batch group scan 경로가 상한을 우회하지 않습니다.
+- `spark.privyspark.progress.flushMode`는 file fallback scan의 progress JSONL 기록 단위를 제어합니다. 기본값 `group`은 파일별 결과/오류를 메모리에 모아 group 종료 시 results/errors/completions shard를 한 번씩 flush합니다. 이전처럼 파일 완료 즉시 progress shard를 기록해야 하면 `file`로 설정합니다.
 
 여기서 중요한 점은 앱 레벨 병렬도가 곧 executor 수를 직접 보장하는 것은 아니라는 점입니다. 실제 executor 분산은 입력 파티션 수, Spark scheduler, dynamic allocation backlog에 함께 영향을 받습니다.
 
@@ -127,12 +128,13 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 
 ## `_progress` 경로 운영
 - 진행 중 shard는 `<output>/_progress/<run_id>/results`, `errors`, `meta/completions` 아래 JSONL로 기록됩니다.
+- file fallback scan의 기본 progress flush 단위는 group입니다. 이 모드에서는 group이 끝나기 전까지 file별 완료 row가 `_progress`에 나타나지 않을 수 있으며, driver가 실패하면 해당 group은 다음 실행에서 group 단위로 재실행됩니다.
 - 실행 중인 group, allowlist snapshot 작업은 `<output>/_progress/<run_id>/in-flight` 아래 임시 JSON marker를 생성합니다. file 단위 marker는 small-file scan에서 HDFS create/delete 부하를 줄이기 위해 기본 off이며, 이전 수준의 file-level 관측이 필요하면 `spark.privyspark.progress.fileMarker.enabled=true`로 켤 수 있습니다.
 - 각 in-flight marker에는 `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`와 가능한 경우 `format`, `schemaSignature` 같은 스캔 메타데이터가 들어갑니다.
 - in-flight marker 파일명은 파일명에 안전한 UTF-8 문자/숫자와 `.`, `_`, `-`를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다. 원본 `identifier`는 JSON 본문에 유지됩니다.
 - 완료된 작업과 처리 가능한 실패의 in-flight marker는 삭제됩니다. Spark application을 `FAILED`로 끝내는 미복구 group/file 실패는 marker를 보존해 마지막 진행 중 작업을 확인할 수 있게 합니다.
 - setup 시작 전에는 `<output>/_progress-preparing.json` lock을 먼저 획득합니다.
-- 준비가 끝나면 `_progress/active-run.json` heartbeat marker로 전환합니다.
+- 준비가 끝나면 `_progress/active-run.json` heartbeat marker로 전환합니다. heartbeat는 progress shard write hot path와 분리된 주기 작업으로 갱신됩니다.
 - 다음 실행은 stale heartbeat, `FAILED` marker, stale preparing lock만 cleanup 대상으로 봅니다.
 - 최근 heartbeat의 `RUNNING` marker나 fresh preparing lock이 남아 있으면 충돌로 실패합니다.
 - unreadable `active-run.json`은 owner run이 `meta/run.json`을 근거로 self-heal합니다.

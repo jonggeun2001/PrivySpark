@@ -56,13 +56,14 @@
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
 - 최종 출력 계약은 기본 `parquet/scan_results`, `parquet/scan_errors`이고, CLI `--output-format`에 따라 `csv/...`, `excel/*.xlsx`가 추가됩니다.
-- clean completion도 `meta/completions` marker를 남깁니다.
+- clean completion도 `meta/completions` marker를 남깁니다. file fallback scan은 기본적으로 file별 progress를 메모리에 모아 group 종료 시 한 번 flush합니다.
 - `_progress/<run_id>/in-flight` 아래 in-flight marker는 현재 실행 중인 작업을 보여주는 best-effort 진단 정보입니다. 완료된 작업과 처리 가능한 실패는 삭제되고, application `FAILED`로 이어지는 미복구 group/file 실패는 보존됩니다.
 - in-flight marker 파일명은 파일명에 안전한 UTF-8 문자/숫자와 `.`, `_`, `-`를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다.
 - `_progress`는 다음 실행 시작 시 stale 여부를 판정해 정리합니다. shutdown hook은 사용하지 않습니다.
 
 ## 왜 이렇게 설계했는가
 - progress 경로를 최종 출력과 분리한 이유는 부분 결과 관측성과 최종 리포트 일관성을 동시에 확보하기 위해서입니다.
+- file fallback progress를 group 단위로 flush하는 이유는 small-file scan에서 파일마다 results/errors/completions shard와 heartbeat update를 만드는 HDFS hot path를 줄이기 위해서입니다.
 - in-flight marker는 완료 progress JSONL 계약은 유지하면서 현재 병목 작업과 실패 당시 마지막 group/file 작업을 외부에서 관찰할 수 있게 합니다.
 - 종료 훅 대신 다음 실행 cleanup을 택한 이유는 YARN 강제 종료나 `kill -9` 상황에서 훅 신뢰도가 낮기 때문입니다.
 - `_progress-preparing.json`을 active marker보다 먼저 두는 이유는 startup race에서 서로의 fresh root를 지우지 않게 하기 위해서입니다.

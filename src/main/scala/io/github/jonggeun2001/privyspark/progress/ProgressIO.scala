@@ -4,6 +4,7 @@ import io.github.jonggeun2001.privyspark.report.JsonCodec._
 import io.github.jonggeun2001.privyspark.model.{ActiveRunMarker, ProgressRun, ProgressRunMetadata, ScanError, ScanResult}
 import io.github.jonggeun2001.privyspark.report.ReportWriter
 import io.github.jonggeun2001.privyspark.util.DriverLogger
+import org.apache.spark.SparkConf
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, Encoders, Row, SparkSession}
@@ -15,6 +16,39 @@ import java.util.UUID
 import scala.util.control.NonFatal
 
 private[privyspark] object ProgressIO {
+  val ProgressFlushModeConfKey = "spark.privyspark.progress.flushMode"
+
+  sealed trait ProgressFlushMode {
+    def name: String
+  }
+
+  object ProgressFlushMode {
+    case object Group extends ProgressFlushMode {
+      override val name: String = "group"
+    }
+
+    case object File extends ProgressFlushMode {
+      override val name: String = "file"
+    }
+  }
+
+  def resolveFlushMode(conf: SparkConf): ProgressFlushMode =
+    resolveFlushMode(conf.getOption(ProgressFlushModeConfKey))
+
+  def resolveFlushMode(spark: SparkSession): ProgressFlushMode =
+    resolveFlushMode(spark.conf.getOption(ProgressFlushModeConfKey).orElse(spark.sparkContext.getConf.getOption(ProgressFlushModeConfKey)))
+
+  private def resolveFlushMode(configuredValue: Option[String]): ProgressFlushMode =
+    configuredValue
+      .map(_.trim.toLowerCase)
+      .filter(_.nonEmpty)
+      .map {
+        case ProgressFlushMode.Group.name => ProgressFlushMode.Group
+        case ProgressFlushMode.File.name => ProgressFlushMode.File
+        case other => throw new IllegalArgumentException(s"$ProgressFlushModeConfKey must be group or file, got: $other")
+      }
+      .getOrElse(ProgressFlushMode.Group)
+
   def persistProgressRecords(
     conf: org.apache.hadoop.conf.Configuration,
     progressRun: ProgressRun,
@@ -35,7 +69,6 @@ private[privyspark] object ProgressIO {
       scope,
       Seq(progressCompletionToJson(scope, identifier, results.size, errors.size))
     )
-    ProgressRunManager.updateActiveRunHeartbeat(conf, progressRun)
     DriverLogger.debug(
       "progress_write_complete",
       "run_id" -> progressRun.runId,
