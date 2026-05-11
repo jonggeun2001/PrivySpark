@@ -113,6 +113,8 @@ Stable hash-ranked file sampling keeps the same subset for the same group and fi
 
 `info` exposes high-level lifecycle events such as `scan_start`, `scan_plan_ready`, and `scan_complete`. `debug` adds detailed events for file discovery, pre-scan execution, grouping, and `_progress` lifecycle.
 
+To diagnose driver TCP connection growth during group scan, inspect `group_scan_tcp_snapshot` events at `debug` level. On Linux/YARN drivers, PrivySpark reads the current JVM's `/proc` TCP socket fds and records `tcp_fd_count`, `tcp_states`, and `tcp_remote_ports_top`. On environments without `/proc`, such as macOS, it records `tcp_snapshot_available=false` with a reason. Compare `phase=batch_action_start|batch_action_complete`, `action=sampled_rows_by_file|aggregate_matches|sample_matches|count_non_empty`, `phase=review_snapshot_stage_*`, and `phase=file_spark_action_*` chronologically to isolate which Spark action or review snapshot step increases connections.
+
 When ignore rules apply, events such as `scan_directory_file_ignored` and `archive_entry_skipped reason=ignored` are emitted, and `ignored_files` is included in `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, and `scan_complete`.
 
 ## `_progress` Handling
