@@ -111,7 +111,7 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - 지원값은 `error`, `warn`, `info`, `debug`, `off`입니다.
 - 기본값은 `warn`입니다.
 - 하위호환으로 `true`는 `debug`, `false`는 `warn`으로 해석합니다.
-- 로그 포맷은 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...`입니다.
+- 로그 포맷은 `[PrivySpark][LEVEL][offset을 포함한 driver local ISO-8601 timestamp] event key=value...`입니다.
 
 `info` 레벨은 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 lifecycle을 보여주고, `debug` 레벨은 파일 발견, pre-scan 실행, 그룹화, progress 준비/쓰기/merge 같은 상세 이벤트를 추가로 남깁니다.
 

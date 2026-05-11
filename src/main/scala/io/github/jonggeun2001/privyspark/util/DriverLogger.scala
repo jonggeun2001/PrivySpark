@@ -1,6 +1,7 @@
 package io.github.jonggeun2001.privyspark.util
 
-import java.time.Instant
+import java.time.{OffsetDateTime, ZoneId}
+import java.time.format.DateTimeFormatter
 
 private[privyspark] sealed abstract class DriverLogLevel(val priority: Int, val label: String)
 
@@ -92,7 +93,11 @@ private[privyspark] object DriverLogger {
       }.mkString(" ", " ", "")
     }
 
-    s"[PrivySpark][${level.label}][${Instant.now().toString}] $event$suffix"
+    s"[PrivySpark][${level.label}][${currentTimestamp}] $event$suffix"
+  }
+
+  private def currentTimestamp: String = {
+    OffsetDateTime.now(ZoneId.systemDefault()).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
   }
 
   private def renderValue(value: Any): String = {
