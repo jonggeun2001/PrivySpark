@@ -76,7 +76,7 @@ bin/privyspark-submit \
 
 자세한 실행 절차와 옵션은 [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/ko/operations/execution.md](docs/ko/operations/execution.md)에 정리돼 있습니다.
 
-서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 컬럼 헤더 정렬이 가능한 `review.html`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 스캔을 실행하는 방식입니다. 다음 `scan --review-state-root`는 스캔 본 작업 전에 자동으로 `inbox/*.json`을 수집하고, invalid response가 하나라도 있거나 collect lock이 이미 있으면 스캔을 시작하지 않고 실패합니다. HTML을 scan output 밖에 배치해야 하면 scan 실행에 `--review-html-dir /abs/reviews`를 추가합니다. 같은 finding이 정탐으로 계속 검출되면 다음 리뷰 파일의 `기존 조치 상태` 컬럼에 이전 조치 계획과 예정일이 표시됩니다. Excel에서 대량 편집해야 하면 `review.html`의 `엑셀 편집용 TSV 다운로드`로 TSV를 내려받아 편집한 뒤, 사내 보안 솔루션이 TSV를 암호화한 경우 반드시 암호화 해제한 TSV를 `복호화한 TSV 불러오기`로 다시 가져옵니다.
+서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 컬럼 헤더 정렬이 가능한 `review.html`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 스캔을 실행하는 방식입니다. 다음 `scan --review-state-root`는 스캔 본 작업 전에 자동으로 `inbox/*.json`을 수집하고, invalid response가 하나라도 있거나 collect lock이 이미 있으면 스캔을 시작하지 않고 실패합니다. HTML을 scan output 밖에 배치해야 하면 scan 실행에 `--review-html-dir /abs/reviews`를 추가합니다. 같은 finding이 정탐으로 계속 검출되면 다음 리뷰 파일의 `기존 조치 상태` 컬럼에 이전 조치 계획과 예정일이 표시됩니다. Excel에서 대량 편집해야 하면 `review.html`의 `엑셀 편집용 CSV 다운로드`로 CSV를 내려받아 편집한 뒤, 사내 보안 솔루션이 CSV를 암호화한 경우 반드시 암호화 해제한 CSV를 `복호화한 CSV 불러오기`로 다시 가져옵니다. 파일 업로드 대신 CSV 내용을 붙여넣어 반영할 수 있으며, 따옴표로 감싼 쉼표와 줄바꿈은 셀 내용으로 유지됩니다.
 
 자세한 구조는 [docs/ko/reference/offline-review-collector.md](docs/ko/reference/offline-review-collector.md)에 있습니다.
 
