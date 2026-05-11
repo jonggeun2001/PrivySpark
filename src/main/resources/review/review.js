@@ -516,8 +516,12 @@
         String(sample.sample_raw_value ?? '')
       ).join('\n---\n');
     }
-    function escapeTsvCell(value) {
+    function neutralizeTsvFormulaValue(value) {
       const text = String(value ?? '');
+      return /^[=+\-@]/.test(text) ? "'" + text : text;
+    }
+    function escapeTsvCell(value) {
+      const text = neutralizeTsvFormulaValue(value);
       if (/[\t\r\n"]/.test(text)) {
         return '"' + text.replace(/"/g, '""') + '"';
       }
