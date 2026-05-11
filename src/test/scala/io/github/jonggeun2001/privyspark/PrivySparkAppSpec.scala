@@ -550,6 +550,40 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
+  test("scanDirectoryStructure reuses discovered file metadata during pre-scan") {
+    val rootPath = "trackingfs:///metadata-reuse"
+
+    spark.sparkContext.hadoopConfiguration.set("fs.trackingfs.impl", classOf[TrackingListingFileSystem].getName)
+    TrackingListingFileSystem.clear()
+
+    try {
+      TrackingListingFileSystem.registerDirectory(rootPath)
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/a.csv",
+        "name,email\nalice,alice@example.com\n"
+      )
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/b.csv",
+        "name,email\nbob,bob@example.com\n"
+      )
+
+      val plan = DirectoryScanner.scanDirectoryStructure(
+        spark,
+        rootPath,
+        rootPath,
+        "2026-05-11T00:00:00Z",
+        preScanParallelism = 2
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 2)
+      assert(TrackingListingFileSystem.fileStatusCountFor(s"$rootPath/a.csv") == 0)
+      assert(TrackingListingFileSystem.fileStatusCountFor(s"$rootPath/b.csv") == 0)
+    } finally {
+      TrackingListingFileSystem.clear()
+    }
+  }
+
   test("resolveConfiguredPreScanParallelism caps large explicit values to the fixed safety ceiling") {
     val key = "spark.privyspark.preScanParallelism"
     assert(ParallelismConfig.resolveConfiguredPreScanParallelism(128, 128, key) == ParallelismConfig.maxSafePreScanParallelism)
@@ -5727,6 +5761,7 @@ object TrackingListingFileSystem {
   private val delayedDirectories = TrieMap.empty[String, Long]
   private val trackedDirectories = TrieMap.empty[String, Boolean]
   private val listedStatusPaths = new ConcurrentLinkedQueue[String]()
+  private val fileStatusCounts = TrieMap.empty[String, AtomicInteger]
   private val currentTrackedListings = new AtomicInteger(0)
   private val maxTrackedListings = new AtomicInteger(0)
   private val lock = new AnyRef
@@ -5776,11 +5811,15 @@ object TrackingListingFileSystem {
     delayedDirectories.clear()
     trackedDirectories.clear()
     listedStatusPaths.clear()
+    fileStatusCounts.clear()
     currentTrackedListings.set(0)
     maxTrackedListings.set(0)
   }
 
   def listedPaths(): Seq[String] = listedStatusPaths.toArray(new Array[String](0)).toSeq
+
+  def fileStatusCountFor(path: String): Int =
+    fileStatusCounts.get(key(path)).map(_.get()).getOrElse(0)
 
   def maxTrackedConcurrentListings(): Int = maxTrackedListings.get()
 
@@ -5822,6 +5861,11 @@ object TrackingListingFileSystem {
 
   private[privyspark] def recordListStatus(path: org.apache.hadoop.fs.Path): Unit = {
     listedStatusPaths.add(key(path))
+  }
+
+  private[privyspark] def recordGetFileStatus(path: org.apache.hadoop.fs.Path): Unit = {
+    val normalized = key(path)
+    fileStatusCounts.getOrElseUpdate(normalized, new AtomicInteger(0)).incrementAndGet()
   }
 
   private[privyspark] def beginTrackedListing(path: org.apache.hadoop.fs.Path): Boolean = {
@@ -5940,6 +5984,7 @@ class TrackingListingFileSystem extends org.apache.hadoop.fs.FileSystem {
   ): Boolean = false
 
   override def getFileStatus(path: org.apache.hadoop.fs.Path): org.apache.hadoop.fs.FileStatus = {
+    TrackingListingFileSystem.recordGetFileStatus(path)
     val qualifiedPath = path.makeQualified(fsUri, workingDirectory)
     if (TrackingListingFileSystem.isDirectory(path)) {
       new org.apache.hadoop.fs.FileStatus(0L, true, 1, 4096L, 0L, qualifiedPath)

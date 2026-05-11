@@ -10,6 +10,7 @@
 - 바이너리처럼 보이는 입력만 `Unsupported file format`으로 오류 리포트에 기록합니다.
 - 0바이트 physical file은 pre-scan에서 즉시 건너뜁니다.
 - `--ignore`, `--ignore-file` 패턴에 매칭된 physical file은 pre-scan 전에 제외합니다.
+- 디렉토리 discovery에서 얻은 파일 길이와 수정 시간을 pre-scan에서 재사용하므로, small file이 많은 입력에서도 format expansion 전에 발견된 파일마다 file-status RPC를 다시 호출하지 않습니다. 긴 pre-scan에서는 파일 수 기준 interval 외에도 시간 기준 throttle로 progress 로그를 남깁니다.
 
 이 text/CSV fallback을 둔 이유는 확장자만으로 텍스트 로그나 덤프를 배제하면 실제 운영 입력을 지나치게 많이 놓치기 때문입니다. 반대로 아무 바이너리나 텍스트로 강제 처리하면 노이즈가 커지므로, 매직바이트와 텍스트 인코딩 probe, CSV dialect probe를 함께 사용해 경계를 분리합니다.
 

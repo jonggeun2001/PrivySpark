@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.scan.discovery
 
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
-import io.github.jonggeun2001.privyspark.format.ByteProbe.{isZeroBytePhysicalFile, shouldProbeForFormat}
+import io.github.jonggeun2001.privyspark.format.ByteProbe.shouldProbeForFormat
 import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
 import io.github.jonggeun2001.privyspark.format.FormatDetector
@@ -15,11 +15,13 @@ import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{normalizeHiveLayo
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
 
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
 private[privyspark] object PreScanExecutor {
+  private val ProgressLogMinIntervalNanos = 5000000000L
+
   private def elapsedMillis(startNanos: Long): Long = {
     (System.nanoTime() - startNanos) / 1000000L
   }
@@ -47,7 +49,7 @@ private[privyspark] object PreScanExecutor {
 
   def runPreScan(
     spark: SparkSession,
-    files: Seq[String],
+    files: Seq[DiscoveredFile],
     datasetPath: String,
     inputPath: String,
     timestamp: String,
@@ -57,10 +59,10 @@ private[privyspark] object PreScanExecutor {
     csvHeadCache: CsvHeadCache
   ): Seq[PreScanFileOutcome] = {
     val conf = spark.sparkContext.hadoopConfiguration
-    val fs = new Path(inputPath).getFileSystem(conf)
     val preScanStartedAt = System.nanoTime()
     val preScanProgressInterval = DirectoryDiscovery.resolvePreScanProgressInterval(files.size)
     val completedPreScanFiles = new AtomicInteger(0)
+    val lastProgressNanos = new AtomicLong(preScanStartedAt)
 
     DriverLogger.debug(
       "scan_directory_pre_scan_execute_start",
@@ -70,9 +72,11 @@ private[privyspark] object PreScanExecutor {
       "progress_interval" -> preScanProgressInterval
     )
 
-    executeInParallel(parallelism, files.map { filePath =>
+    executeInParallel(parallelism, files.map { discovered =>
       () => {
-        val parentDirectory = Option(new Path(filePath).getParent).map(_.toString).getOrElse(filePath)
+        val filePath = discovered.path
+        val sourcePath = new Path(filePath)
+        val parentDirectory = Option(sourcePath.getParent).map(_.toString).getOrElse(filePath)
         val groupingDirectory = normalizeHiveLayoutGroupingPath(parentDirectory, inputPath)
         val logicalIdentifier = resolveRelativeIdentifier(datasetPath, filePath)
         val pathInferredFormat = FormatDetector.infer(filePath)
@@ -85,66 +89,47 @@ private[privyspark] object PreScanExecutor {
 
         val outcome =
           try {
-            val zeroByteStatus = try {
-              Right(isZeroBytePhysicalFile(conf, filePath))
-            } catch {
-              case NonFatal(e) => Left(e)
-            }
-
-            zeroByteStatus match {
-              case Left(e) =>
-                PreScanFileOutcome(
-                  filePath = filePath,
-                  groupingDirectoryPath = groupingDirectory,
-                  preScanErrorScope = preScanErrorScope,
-                  expandedEntries = Seq.empty,
-                  expandedErrors = Seq(ScanError(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))),
-                  ignoredEntries = 0,
-                  stagingPaths = localStagingPaths.toSeq,
-                  pathInferredFormat = pathInferredFormat,
-                  probeRequired = probeRequired
+            if (discovered.size == 0L) {
+              PreScanFileOutcome(
+                filePath = filePath,
+                groupingDirectoryPath = groupingDirectory,
+                preScanErrorScope = preScanErrorScope,
+                expandedEntries = Seq.empty,
+                expandedErrors = Seq.empty,
+                ignoredEntries = 0,
+                stagingPaths = localStagingPaths.toSeq,
+                pathInferredFormat = pathInferredFormat,
+                probeRequired = probeRequired,
+                skipped = true
+              )
+            } else {
+              val (expandedEntries, expandedErrors, ignoredEntries) =
+                expandPhysicalSource(
+                  conf,
+                  datasetPath,
+                  timestamp,
+                  filePath,
+                  logicalIdentifier,
+                  groupingDirectory,
+                  localStagingPaths,
+                  fileSize = discovered.size,
+                  fileMtimeEpochMs = discovered.mtimeEpochMs,
+                  readOptions = readOptions,
+                  ignoreMatcher = ignoreMatcher,
+                  precomputedSize = Some(discovered.size)
                 )
-              case Right(true) =>
-                PreScanFileOutcome(
-                  filePath = filePath,
-                  groupingDirectoryPath = groupingDirectory,
-                  preScanErrorScope = preScanErrorScope,
-                  expandedEntries = Seq.empty,
-                  expandedErrors = Seq.empty,
-                  ignoredEntries = 0,
-                  stagingPaths = localStagingPaths.toSeq,
-                  pathInferredFormat = pathInferredFormat,
-                  probeRequired = probeRequired,
-                  skipped = true
-                )
-              case Right(false) =>
-                val fileStatus = fs.getFileStatus(new Path(filePath))
-                val (expandedEntries, expandedErrors, ignoredEntries) =
-                  expandPhysicalSource(
-                    conf,
-                    datasetPath,
-                    timestamp,
-                    filePath,
-                    logicalIdentifier,
-                    groupingDirectory,
-                    localStagingPaths,
-                    fileSize = fileStatus.getLen,
-                    fileMtimeEpochMs = fileStatus.getModificationTime,
-                    readOptions = readOptions,
-                    ignoreMatcher = ignoreMatcher
-                  )
-                val refinedEntries = refineCsvLikeEntries(spark, expandedEntries, csvHeadCache)
-                PreScanFileOutcome(
-                  filePath = filePath,
-                  groupingDirectoryPath = groupingDirectory,
-                  preScanErrorScope = preScanErrorScope,
-                  expandedEntries = refinedEntries,
-                  expandedErrors = expandedErrors,
-                  ignoredEntries = ignoredEntries,
-                  stagingPaths = localStagingPaths.toSeq,
-                  pathInferredFormat = pathInferredFormat,
-                  probeRequired = probeRequired
-                )
+              val refinedEntries = refineCsvLikeEntries(spark, expandedEntries, csvHeadCache)
+              PreScanFileOutcome(
+                filePath = filePath,
+                groupingDirectoryPath = groupingDirectory,
+                preScanErrorScope = preScanErrorScope,
+                expandedEntries = refinedEntries,
+                expandedErrors = expandedErrors,
+                ignoredEntries = ignoredEntries,
+                stagingPaths = localStagingPaths.toSeq,
+                pathInferredFormat = pathInferredFormat,
+                probeRequired = probeRequired
+              )
             }
           } catch {
             case NonFatal(e) =>
@@ -163,7 +148,17 @@ private[privyspark] object PreScanExecutor {
           }
 
         val completedFiles = completedPreScanFiles.incrementAndGet()
-        if (completedFiles == files.size || completedFiles % preScanProgressInterval == 0) {
+        val nowNanos = System.nanoTime()
+        val shouldLogByCount = completedFiles == files.size || completedFiles % preScanProgressInterval == 0
+        val shouldLogByTime = !shouldLogByCount && {
+          val previousNanos = lastProgressNanos.get()
+          nowNanos - previousNanos >= ProgressLogMinIntervalNanos &&
+            lastProgressNanos.compareAndSet(previousNanos, nowNanos)
+        }
+        if (shouldLogByCount || shouldLogByTime) {
+          if (shouldLogByCount) {
+            lastProgressNanos.set(nowNanos)
+          }
           DriverLogger.debug(
             "scan_directory_pre_scan_progress",
             "input_path" -> inputPath,
