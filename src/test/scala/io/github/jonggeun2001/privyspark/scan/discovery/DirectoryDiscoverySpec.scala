@@ -2,13 +2,15 @@ package io.github.jonggeun2001.privyspark.scan.discovery
 
 import io.github.jonggeun2001.privyspark.PrivySparkSpecFixtures
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
+import io.github.jonggeun2001.privyspark.util.RpcGate
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.Path
+import org.apache.hadoop.fs.{FileStatus, Path}
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(classOf[JUnitRunner])
 class DirectoryDiscoverySpec extends AnyFunSuite with PrivySparkSpecFixtures {
@@ -49,5 +51,48 @@ class DirectoryDiscoverySpec extends AnyFunSuite with PrivySparkSpecFixtures {
     assert(DirectoryDiscovery.resolvePreScanProgressInterval(0) == 1)
     assert(DirectoryDiscovery.resolvePreScanProgressInterval(20) == 20)
     assert(DirectoryDiscovery.resolvePreScanProgressInterval(20000) == 10000)
+  }
+
+  test("discover gates parallel listStatus calls") {
+    val rootPath = new Path("/input")
+    val fs = rootPath.getFileSystem(new Configuration())
+    val childDirectories = (1 to 8).map(index => new Path(rootPath, s"d$index"))
+    val activeListCalls = new AtomicInteger(0)
+    val peakListCalls = new AtomicInteger(0)
+
+    val (files, ignored) = DirectoryDiscovery.discover(
+      fs,
+      rootPath,
+      rootPath.toString,
+      IgnoreMatcher.empty,
+      parallelism = 8,
+      rpcGate = Some(new RpcGate(2)),
+      listStatusOverride = Some { directory =>
+        if (directory.toString == rootPath.toString) {
+          childDirectories.map(path => new FileStatus(0L, true, 1, 0L, 0L, path)).toArray
+        } else {
+          val active = activeListCalls.incrementAndGet()
+          updatePeak(peakListCalls, active)
+          try {
+            Thread.sleep(20L)
+            Array.empty[FileStatus]
+          } finally {
+            activeListCalls.decrementAndGet()
+          }
+        }
+      }
+    )
+
+    assert(files.isEmpty)
+    assert(ignored.isEmpty)
+    assert(peakListCalls.get() <= 2)
+  }
+
+  private def updatePeak(peak: AtomicInteger, candidate: Int): Unit = {
+    var updated = false
+    while (!updated) {
+      val current = peak.get()
+      updated = candidate <= current || peak.compareAndSet(current, candidate)
+    }
   }
 }

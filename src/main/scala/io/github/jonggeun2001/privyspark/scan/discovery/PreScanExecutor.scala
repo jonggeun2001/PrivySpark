@@ -56,7 +56,8 @@ private[privyspark] object PreScanExecutor {
     parallelism: Int,
     readOptions: ScanReadOptions,
     ignoreMatcher: IgnoreMatcher,
-    csvHeadCache: CsvHeadCache
+    csvHeadCache: CsvHeadCache,
+    rpcGate: Option[RpcGate] = None
   ): Seq[PreScanFileOutcome] = {
     val conf = spark.sparkContext.hadoopConfiguration
     val preScanStartedAt = System.nanoTime()
@@ -72,7 +73,6 @@ private[privyspark] object PreScanExecutor {
       "progress_interval" -> preScanProgressInterval
     )
 
-    val rpcGate = RpcGate.preScanGate(spark)
     executeInParallel(parallelism, files.map { discovered =>
       () => {
         val filePath = discovered.path

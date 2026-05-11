@@ -1,8 +1,9 @@
 package io.github.jonggeun2001.privyspark.scan.discovery
 
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
+import io.github.jonggeun2001.privyspark.util.RpcGate
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.executeInParallel
-import org.apache.hadoop.fs.Path
+import org.apache.hadoop.fs.{FileStatus, Path}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -18,10 +19,15 @@ private[privyspark] object DirectoryDiscovery {
     rootPath: Path,
     inputPath: String,
     ignoreMatcher: IgnoreMatcher,
-    parallelism: Int
+    parallelism: Int,
+    rpcGate: Option[RpcGate] = None,
+    listStatusOverride: Option[Path => Array[FileStatus]] = None
   ): (Seq[DiscoveredFile], Seq[(String, String)]) = {
     val discoveredFiles = ArrayBuffer.empty[DiscoveredFile]
     val ignoredPaths = ArrayBuffer.empty[(String, String)]
+    val listStatus = listStatusOverride.getOrElse { directory: Path =>
+      Option(fs.listStatus(directory)).getOrElse(Array.empty)
+    }
 
     var currentLevelDirectories = Seq(rootPath)
     while (currentLevelDirectories.nonEmpty) {
@@ -34,8 +40,9 @@ private[privyspark] object DirectoryDiscovery {
           val listedDirectories = executeInParallel(
             parallelism,
             directoryBatch.map { directory =>
-              () => Option(fs.listStatus(directory)).getOrElse(Array.empty).sortBy(_.getPath.toString)
-            }
+              () => listStatus(directory).sortBy(_.getPath.toString)
+            },
+            gate = rpcGate
           )
 
           listedDirectories.foreach { children =>

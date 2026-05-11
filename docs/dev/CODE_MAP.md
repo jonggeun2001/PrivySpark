@@ -27,13 +27,13 @@
 - `cli/CliArgumentValidator.scala`: command path validation L6, absolute path error logging L51.
 - `config/SuppressionParser.scala`: parsed suppression ADT L15, CLI/file suppression parsing L17/L25, unknown pii warning L35.
 - `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L41, report merge/review hook L204.
-- `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L22, pre-scan collect/group build L132, schema split/finalization delegate L210.
+- `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L23, pre-scan collect/group build L141, schema split/finalization delegate L219.
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
-- `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L12, `discover` L16.
-- `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L27, `runPreScan` L48.
-- `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L22, `splitGroupBySchemaFast` L112, `splitGroupBySchema` L229.
-- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L179, batch fallback invocation L249, compatibility delegates L260/L298.
+- `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L13, `discover` L17.
+- `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L29, `runPreScan` L50.
+- `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L22, `splitGroupBySchemaFast` L125, `splitGroupBySchema` L242.
+- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, batch fallback invocation L292, compatibility delegates L302/L340.
 - `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.
 - `scan/GroupScanFallbackPolicy.scala`: batch failure fallback executor L7.
 - `scan/FileSampling.scala`: deterministic file sampling L6.

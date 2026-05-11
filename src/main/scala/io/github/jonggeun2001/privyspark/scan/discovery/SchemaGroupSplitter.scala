@@ -4,7 +4,7 @@ import io.github.jonggeun2001.privyspark.format.CsvInference._
 import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
 import io.github.jonggeun2001.privyspark.model.{ScanError, ScanGroup}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, ParseOkCache, SchemaSignatureCache}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, RpcGate}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{executeInParallel, resolveParallelism}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers._
 import org.apache.spark.sql.SparkSession
@@ -30,7 +30,8 @@ private[privyspark] object SchemaGroupSplitter {
     parallelism: Int,
     csvHeadCache: CsvHeadCache,
     schemaSigCache: SchemaSignatureCache,
-    parseOkCache: ParseOkCache
+    parseOkCache: ParseOkCache,
+    rpcGate: Option[RpcGate] = None
   ): SplitAndFinalizeResult = {
     val schemaAwareGroups = ArrayBuffer.empty[ScanGroup]
     val errors = ArrayBuffer.empty[ScanError]
@@ -40,21 +41,21 @@ private[privyspark] object SchemaGroupSplitter {
     DriverLogger.debug(
       "scan_directory_schema_split_parallelism",
       "groups" -> groupedByDirectoryAndFormat.size,
-      "parallelism" -> schemaSplitParallelism
+      "parallelism" -> schemaSplitParallelism,
+      "driver_rpc_concurrency" -> rpcGate.map(_.permits).getOrElse("disabled")
     )
-    val schemaSplitOutcomes = executeInParallel(schemaSplitParallelism, groupedByDirectoryAndFormat.map { group =>
-      () =>
-        val (splitGroups, splitErrors) = splitGroupBySchemaFast(
-          spark,
-          datasetPath,
-          timestamp,
-          group,
-          csvHeadCache,
-          schemaSigCache,
-          parseOkCache
-        )
-        (group, splitGroups, splitErrors)
-    })
+    val schemaSplitOutcomes = executeSchemaSplitTasks(schemaSplitParallelism, groupedByDirectoryAndFormat, rpcGate) { group =>
+      val (splitGroups, splitErrors) = splitGroupBySchemaFast(
+        spark,
+        datasetPath,
+        timestamp,
+        group,
+        csvHeadCache,
+        schemaSigCache,
+        parseOkCache
+      )
+      (group, splitGroups, splitErrors)
+    }
 
     schemaSplitOutcomes.foreach {
       case (group, splitGroups, splitErrors) =>
@@ -106,6 +107,18 @@ private[privyspark] object SchemaGroupSplitter {
       groups = finalizedGroups.toSeq,
       errors = errors.toSeq,
       directoriesWithPreScanErrors = directoriesWithErrors.toSet
+    )
+  }
+
+  private[discovery] def executeSchemaSplitTasks[A](
+    parallelism: Int,
+    groups: Seq[ScanGroup],
+    rpcGate: Option[RpcGate]
+  )(task: ScanGroup => A): Seq[A] = {
+    executeInParallel(
+      parallelism,
+      groups.map(group => () => task(group)),
+      gate = rpcGate
     )
   }
 
