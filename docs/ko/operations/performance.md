@@ -30,6 +30,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - `--file-sample-ratio`는 읽는 파일 수 자체를 줄이므로, 작은 파일이 매우 많을 때 `--sample-ratio`보다 직접적인 효과가 날 수 있습니다.
 - 기본 `--file-sample-min-files 10` 때문에 작은 그룹은 sampling 대상이 아닙니다. 더 작은 그룹에도 file sampling을 적용하려면 임계값을 낮춰야 합니다.
 - file-scope in-flight marker는 기본 off라 파일마다 HDFS marker create/delete를 만들지 않습니다. group-scope marker와 progress shard는 계속 기록됩니다.
+- file fallback progress는 기본 `spark.privyspark.progress.flushMode=group`으로 파일별 shard 쓰기를 group 종료 시 1회 flush로 압축합니다. 파일 완료 즉시 `_progress`를 tail해야 하는 운영 통합은 `file` 모드로 되돌릴 수 있습니다.
 - 파일 크기/수정 시각이 pre-scan에서 이미 전달된 group scan 경로는 추가 `getFileStatus` 없이 해당 metadata를 재사용합니다.
 
 안정적인 해시 순위 파일 샘플링을 둔 이유는 성능만이 아니라 review scope 안정성과 데이터 concentration risk를 함께 보존하기 위해서입니다. 같은 그룹/파일 집합에서는 같은 sampled scope를 유지하고, 특정 데이터가 한 파일에 몰린 경우를 운영적으로 배제하지 않도록 파일 크기 가중치는 쓰지 않습니다.
@@ -70,4 +71,4 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 2. 그룹 수가 많으면 `--group-parallelism` 조정
 3. 파일 fallback이 많으면 `--file-parallelism` 조정
 4. wide schema면 `column_hints`와 ruleset 구성을 먼저 정리
-5. 장시간 스캔은 `_progress`와 driver 로그를 함께 보면서 병목 구간을 분리
+5. 장시간 스캔은 `_progress`와 driver 로그를 함께 보면서 병목 구간을 분리. file fallback scan에서 파일 단위 live tail이 필요하면 `spark.privyspark.progress.flushMode=file`을 명시

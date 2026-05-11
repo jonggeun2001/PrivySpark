@@ -81,6 +81,7 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 - During directory discovery, the pool is capped by the safety ceiling `64` and the number of directories in the current BFS level. After discovery, effective pre-scan parallelism is still bounded by discovered file count and the safety ceiling `64`.
 - Group and file parallelism control how many scan tasks the driver submits concurrently.
 - `spark.privyspark.driverRpcConcurrency` adds a second cap for driver-side HDFS/RPC-like scan work. The default is `48` for group/file/snapshot scan paths and `64` for pre-scan paths. Set it to `0` to disable this safety gate. Group dispatch parallelism is also reduced to this cap so batch group scans cannot bypass it.
+- `spark.privyspark.progress.flushMode` controls the progress JSONL write unit for file fallback scans. The default `group` buffers per-file results and errors in memory and flushes results/errors/completions shards once when the group finishes. Set it to `file` to restore immediate per-file progress shard writes.
 
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
 
@@ -125,12 +126,13 @@ When ignore rules apply, events such as `scan_directory_file_ignored` and `archi
 
 ## `_progress` Handling
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
+- File fallback scans flush progress at group granularity by default. In this mode, per-file completed rows may not appear under `_progress` until the group finishes, and a driver failure causes that group to be rerun on the next attempt.
 - Running group and allowlist snapshot tasks create temporary JSON markers under `<output>/_progress/<run_id>/in-flight`. File-level markers are disabled by default to avoid create/delete pressure during small-file scans; set `spark.privyspark.progress.fileMarker.enabled=true` to restore file-level in-flight visibility.
 - Each in-flight marker includes `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`, and available scan metadata such as `format` and `schemaSignature`.
 - In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`. The original `identifier` remains in the JSON body.
 - In-flight markers are removed for completed work and recoverable failures. Unrecovered group/file failures that make the Spark application end as `FAILED` preserve their markers so operators can inspect the last active work.
 - Before setup, PrivySpark acquires `<output>/_progress-preparing.json`.
-- Once setup is ready, it switches to `_progress/active-run.json` with heartbeat updates.
+- Once setup is ready, it switches to `_progress/active-run.json` with heartbeat updates. Heartbeats are updated by a periodic task outside the progress shard write hot path.
 - On the next run, only stale heartbeats, `FAILED` markers, or stale preparing locks are cleaned up.
 - A recent `RUNNING` heartbeat or fresh preparing lock causes a conflict failure instead of cleanup.
 - If `active-run.json` becomes unreadable, the owner run can self-heal it from `meta/run.json`.

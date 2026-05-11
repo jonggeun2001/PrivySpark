@@ -13,7 +13,7 @@ import scala.util.control.NonFatal
 
 private[privyspark] object ProgressRunManager {
   private val ProgressDirectoryName = "_progress"
-  private val ActiveRunHeartbeatIntervalMillis = 30000L
+  private val ActiveRunHeartbeatIntervalMillis = 15000L
   private val ActiveRunStaleThresholdMillis = 3L * 60L * 1000L
   private val PreparingRunStaleThresholdMillis = 30000L
   private val ActiveRunMarkerLock = new AnyRef

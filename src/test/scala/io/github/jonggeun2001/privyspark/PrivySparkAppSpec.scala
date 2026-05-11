@@ -5,7 +5,7 @@ import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.format.{CsvHeaderHeuristic, CsvInference}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CsvDialect, DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult, Suppression}
-import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
+import io.github.jonggeun2001.privyspark.progress.{ProgressIO, ProgressRunManager}
 import io.github.jonggeun2001.privyspark.report.{ReportWriter, WriteReportsRequest}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanCoordinator, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig
@@ -5439,6 +5439,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(results.forall(result => result.sample_raw_value == "alice@example.com" && result.sample_matched_fragment == "alice@example.com"))
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 1L)
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/errors"), ".jsonl") == 1L)
+      assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/meta/completions"), ".jsonl") == 1L)
     } finally {
       deleteRecursively(inputDir)
       deleteRecursively(outputDir)
@@ -5450,6 +5451,8 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
 
     val inputDir = Files.createTempDirectory("privyspark-progress-live-input-")
     val outputDir = Files.createTempDirectory("privyspark-progress-live-output-")
+    val previousFlushMode = spark.conf.getOption(ProgressIO.ProgressFlushModeConfKey)
+    spark.conf.set(ProgressIO.ProgressFlushModeConfKey, "file")
 
     try {
       val slowFile = inputDir.resolve("slow.csv")
@@ -5502,6 +5505,10 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(results.nonEmpty)
       assert(errors.nonEmpty)
     } finally {
+      previousFlushMode match {
+        case Some(value) => spark.conf.set(ProgressIO.ProgressFlushModeConfKey, value)
+        case None => spark.conf.unset(ProgressIO.ProgressFlushModeConfKey)
+      }
       deleteRecursively(inputDir)
       deleteRecursively(outputDir)
     }

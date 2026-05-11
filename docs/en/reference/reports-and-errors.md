@@ -87,6 +87,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 
 ## In-Progress `_progress` Path
 - Intermediate shards may be written under `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, and `meta/completions/*.jsonl`.
+- File fallback scans flush progress shards when the group finishes by default. `_progress` remains the final merge source, but it is not a per-file live-tail contract; set `spark.privyspark.progress.flushMode=file` if shards must appear immediately after each file completes.
 - While a task is running, `<output>/_progress/<run_id>/in-flight/*.json` may contain one marker per active group, file, or allowlist snapshot rescan.
 - In-flight markers are operational diagnostics only. Completed work and recoverable failures remove their markers, while unrecovered group/file failures that end the Spark application as `FAILED` preserve the marker.
 - In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`. The original `identifier` remains in the marker JSON body.

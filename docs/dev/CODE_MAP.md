@@ -34,6 +34,7 @@
 - `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L29, `runPreScan` L50.
 - `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L22, `splitGroupBySchemaFast` L125, `splitGroupBySchema` L242.
 - `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, batch fallback invocation L292, compatibility delegates L302/L340.
+- `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L89, file progress record helper L96, group buffer flush L309.
 - `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.
 - `scan/GroupScanFallbackPolicy.scala`: batch failure fallback executor L7.
 - `scan/FileSampling.scala`: deterministic file sampling L6.
@@ -57,6 +58,9 @@
 - `src/main/resources/review/review.js`: offline review browser state, sorting, validation, and response download logic.
 - `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, metric planning L117.
 - `fsio/RetryIO.scala`: file read retry 정책, exponential backoff/jitter, retry 전 Spark catalog refresh 대상 제어.
+- `progress/ProgressIO.scala`: flush mode 설정 L19-L44, progress JSONL write L46/L108.
+- `progress/ProgressBuffer.scala`: group 단위 progress buffering L11, enqueue L23, flush L30.
+- `progress/ProgressRunManager.scala`: progress run prepare L21, merge L88-L101, active heartbeat L154-L181.
 - `util/DriverTcpConnectionSnapshot.scala`: Linux `/proc` 기반 driver TCP socket snapshot capture와 `group_scan_tcp_snapshot` debug log helper.
 - `util/RpcGate.scala`: `spark.privyspark.driverRpcConcurrency` 기반 driver-side RPC성 작업 동시성 gate.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
