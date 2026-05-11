@@ -8,16 +8,22 @@ import org.scalatestplus.junit.JUnitRunner
 
 @RunWith(classOf[JUnitRunner])
 class GroupScanRouterSpec extends AnyFunSuite {
-  test("routeOf sends sampled batch-capable non-json groups to batch scan") {
+  test("routeOf sends sampled multi-file csv groups to exact split") {
     val group = csvGroup(filePaths = Seq("/data/a.csv", "/data/b.csv"), schemaSampled = true)
 
-    assert(GroupScanRouter.routeOf(group) == BatchScan)
+    assert(GroupScanRouter.routeOf(group) == SampledExact)
   }
 
   test("routeOf sends sampled multi-file json groups to exact split") {
     val group = csvGroup(filePaths = Seq("/data/a.json", "/data/b.json"), format = "json", schemaSampled = true)
 
     assert(GroupScanRouter.routeOf(group) == SampledExact)
+  }
+
+  test("routeOf sends sampled batch-capable non-csv groups to batch scan") {
+    val group = csvGroup(filePaths = Seq("/data/a.parquet", "/data/b.parquet"), format = "parquet", schemaSampled = true)
+
+    assert(GroupScanRouter.routeOf(group) == BatchScan)
   }
 
   test("routeOf sends directory identifier groups to file scan") {

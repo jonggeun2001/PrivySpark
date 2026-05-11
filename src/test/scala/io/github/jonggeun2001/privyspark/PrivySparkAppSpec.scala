@@ -2311,7 +2311,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("scanGroup keeps eligible sampled CSV groups on file identifiers when batch scan succeeds") {
+  test("scanGroup exact split restores directory identifier for eligible sampled CSV groups") {
     val inputDir = Files.createTempDirectory("privyspark-sampled-csv-dir-id-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
     val timestamp = "2026-03-13T00:00:00Z"
@@ -2349,12 +2349,9 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       assert(errors.isEmpty)
-      assert(results.map(_.file_identifier).toSet == Set("users/part-a.csv", "users/part-b.csv"))
+      assert(results.map(_.file_identifier).toSet == Set("users"))
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
-        Set(
-          ("users/part-a.csv", "email", 1L),
-          ("users/part-b.csv", "email", 1L)
-        ))
+        Set(("users", "email", 2L)))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -4281,7 +4278,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("archive pre-scan errors keep sibling sampled flat files scannable") {
+  test("archive pre-scan errors do not disable directory aggregation for sibling flat files") {
     val inputDir = Files.createTempDirectory("privyspark-archive-error-scope-")
     val timestamp = "2026-04-09T00:00:00Z"
 
@@ -4301,10 +4298,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
 
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
-        Set(
-          ("part-a.csv", "email", 1L),
-          ("part-b.csv", "email", 1L)
-        ))
+        Set((".", "email", 2L)))
       assert(errors.exists(_.file_identifier == "bundle.zip!Widget.class"))
     } finally {
       deleteRecursively(inputDir)
@@ -4411,7 +4405,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("workbook pre-scan errors keep sibling sampled flat files scannable") {
+  test("workbook pre-scan errors do not disable directory aggregation for sibling flat files") {
     val inputDir = Files.createTempDirectory("privyspark-xlsx-error-scope-")
     val timestamp = "2026-04-09T00:00:00Z"
 
@@ -4428,10 +4422,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       val (results, errors) = scanWithRules(inputDir.toString, inputDir.toString, rules, timestamp)
 
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
-        Set(
-          ("part-a.csv", "email", 1L),
-          ("part-b.csv", "email", 1L)
-        ))
+        Set((".", "email", 2L)))
       assert(errors.exists(_.file_identifier == "broken.xlsx"))
       assert(errors.exists(_.error_message.contains("Workbook read failed")))
     } finally {

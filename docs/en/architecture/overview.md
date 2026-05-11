@@ -31,9 +31,9 @@
 6. build first-pass groups by `(directory, format)`
 7. sample a representative file for schema detection
 8. perform schema-aware split and determine whether directory identifiers are safe
-9. exact-split revalidate sampled JSON groups before scanning
+9. exact-split revalidate sampled CSV and JSON groups before scanning
 10. acquire `<output>/_progress-preparing.json`, prepare `<output>/_progress/<run_id>`, clean stale progress
-11. batch scan batch-capable groups, including sampled non-JSON groups, optionally with file sampling
+11. batch scan batch-capable groups, including sampled non-CSV/non-JSON groups, optionally with file sampling
 12. direct-file scan `xlsx` and other non-batch groups
 13. fall back to file-level scanning if a normal group batch scan fails
 14. create in-flight markers while group/file/allowlist work is active, then write progress JSONL shards when a group or file completes
@@ -52,7 +52,7 @@
 - `--file-sample-ratio` applies to both batch scans and file-fallback scans, but only when a group has more files than `--file-sample-min-files`; when it does apply, PrivySpark selects a stable hash-ranked file subset of size `ceil(fileCount * ratio)` with at least one file.
 - When file sampling actually applies, `--sample-ratio < 1.0` is ignored for that group and a warning is logged.
 - File-sampled group review rows record `review_scope_file_identifiers` and `review_scope_file_fingerprints` only for the selected files, not for the entire group directory.
-- Sampled non-JSON groups take the batch path first and keep file-level identifiers unless a fallback exact split reclassifies them.
+- Sampled non-CSV/non-JSON groups take the batch path first and keep file-level identifiers unless a fallback exact split reclassifies them.
 - Sampled groups are never promoted to directory-level identifiers before exact-split validation.
 - Archive and Excel logical inputs keep their own identifiers.
 - The public output contract defaults to `parquet/scan_results` and `parquet/scan_errors`, and CLI `--output-format` can additionally materialize `csv/...` and `excel/*.xlsx`.

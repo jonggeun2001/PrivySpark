@@ -32,9 +32,9 @@
 6. `(directory, format)` 기준 1차 그룹화
 7. 대표 파일 기준 스키마 샘플링
 8. schema-aware split 및 디렉토리 식별자 승격 가능성 판정
-9. sampled JSON group이면 exact split 재검증 후 재분류된 그룹 스캔
+9. sampled CSV/JSON group이면 exact split 재검증 후 재분류된 그룹 스캔
 10. `<output>/_progress-preparing.json` lock 획득 후 `<output>/_progress/<run_id>` 준비 및 stale progress 정리
-11. sampled non-JSON group을 포함한 batch-capable group이면 필요 시 file sampling 후 그룹 batch scan
+11. sampled non-CSV/non-JSON group을 포함한 batch-capable group이면 필요 시 file sampling 후 그룹 batch scan
 12. `xlsx` 등 batch scan 미지원 group은 direct file scan
 13. 일반 group batch 실패 시 파일 단위 fallback
 14. group/file/allowlist 작업 실행 중 in-flight marker를 만들고, group/file 완료 시 progress JSONL 기록
@@ -53,7 +53,7 @@
 - `--file-sample-ratio`는 batch scan과 file fallback scan에서 적용하고, 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 안정적인 해시 순위로 선택합니다.
 - 실제 file sampling이 적용된 그룹에서는 `--sample-ratio < 1.0`을 무시하고 warning 로그를 남깁니다.
 - file sampling이 적용된 group review row의 `review_scope_file_identifiers`, `review_scope_file_fingerprints`는 전체 디렉토리가 아니라 실제 선택된 파일 subset만 기준으로 기록됩니다.
-- sampled non-JSON group은 batch 경로를 먼저 사용하며, fallback exact split으로 재분류되지 않는 한 파일 식별자를 유지합니다.
+- sampled non-CSV/non-JSON group은 batch 경로를 먼저 사용하며, fallback exact split으로 재분류되지 않는 한 파일 식별자를 유지합니다.
 - sampled group은 exact split 검증 전까지 디렉토리 식별자로 승격하지 않습니다.
 - archive와 Excel 논리 입력은 자체 식별자를 유지합니다.
 - 최종 출력 계약은 기본 `parquet/scan_results`, `parquet/scan_errors`이고, CLI `--output-format`에 따라 `csv/...`, `excel/*.xlsx`가 추가됩니다.

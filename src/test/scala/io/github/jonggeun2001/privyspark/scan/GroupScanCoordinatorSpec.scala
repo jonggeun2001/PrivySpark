@@ -74,27 +74,39 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("scanGroup runs a batch scan for sampled CSV groups") {
+  test("scanGroup runs a batch scan for sampled Parquet groups") {
     val inputDir = Files.createTempDirectory("privyspark-coordinator-sampled-batch-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))
 
     try {
-      val left = groupedDir.resolve("part-a.csv")
-      val right = groupedDir.resolve("part-b.csv")
-      writeText(left,
-        "name,email\n" +
-          "alice,alice@example.com\n")
-      writeText(right,
-        "name,email\n" +
-          "bob,bob@example.com\n")
+      import spark.implicits._
+
+      Seq("alice@example.com")
+        .toDF("email")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq("bob@example.com")
+        .toDF("email")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      val left = groupedDir.resolve("part-a.parquet")
+      val right = groupedDir.resolve("part-b.parquet")
+      Files.move(findDataFile(leftWriteDir, ".parquet").get, left)
+      Files.move(findDataFile(rightWriteDir, ".parquet").get, right)
 
       val group = ScanGroup(
         directoryPath = groupedDir.toString,
-        format = "csv",
-        schemaSignature = "name|email",
+        format = "parquet",
+        schemaSignature = "email",
         filePaths = Seq(left.toString, right.toString),
         schemaSampled = true,
-        csvHasHeader = true,
         directoryIdentifierEligible = true
       )
 
@@ -110,8 +122,8 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(errors.isEmpty)
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
         Set(
-          ("users/part-a.csv", "email", 1L),
-          ("users/part-b.csv", "email", 1L)
+          ("users/part-a.parquet", "email", 1L),
+          ("users/part-b.parquet", "email", 1L)
         ))
       assert(!results.exists(_.file_identifier == "users"))
     } finally {
