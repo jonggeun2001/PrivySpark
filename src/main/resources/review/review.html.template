@@ -61,6 +61,10 @@
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
     .bulk-actions textarea { min-height: 3em; min-width: 240px; }
+    .review-file-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 16px 0; }
+    .review-file-actions label { display: inline-flex; gap: 8px; align-items: center; font-weight: 600; }
+    .review-file-actions input { width: auto; }
+    .status-message { color: #34495e; font-size: 13px; }
     .decision-fields[hidden], [data-decision-section][hidden] { display: none; }
   </style>
 </head>
@@ -78,12 +82,19 @@
     <label>오탐 사유 <textarea id="bulkFalsePositiveReason" rows="2"></textarea></label>
     <button type="button" id="applyBulkFalsePositiveReason">오탐 사유 일괄 등록</button>
   </div>
+  <div class="review-file-actions">
+    <button type="button" id="downloadReviewTsv">엑셀 편집용 TSV 다운로드</button>
+    <label>복호화한 TSV 불러오기 <input id="importReviewTsv" type="file" accept=".tsv,text/tab-separated-values,text/plain"></label>
+    <span id="tsvImportStatus" class="status-message" role="status" aria-live="polite"></span>
+  </div>
   <details class="review-guide" open aria-label="검토 안내">
     <summary>검토 안내</summary>
     <ul>
       <li>오탐은 다음 스캔에서 제외하고, 정탐은 제외하지 않고 조치 계획만 남깁니다.</li>
       <li>오탐은 Hive 테이블이 있으면 테이블/컬럼/개인정보 유형 기준, Hive 테이블이 없으면 경로/파일 식별자/컬럼/개인정보 유형 기준으로 반복 제외합니다.</li>
       <li>오탐은 별도 만료일 입력 없이 반복 제외 상태로 저장됩니다.</li>
+      <li>Excel 편집이 필요하면 TSV를 다운로드해 판정/사유/계획/예정일을 편집한 뒤 다시 불러옵니다. 사내 보안 솔루션이 TSV 파일을 암호화한 경우 반드시 암호화 해제한 TSV 파일을 불러옵니다.</li>
+      <li>TSV 임포트는 <code>finding_key</code> 기준으로 판정/사유/계획/예정일만 반영합니다.</li>
       <li>오탐 사유 예: <code>거래일시 포맷이 운전면허번호 규칙과 충돌</code>, <code>테스트 데이터의 더미 식별자</code>, <code>마스킹된 샘플 값 오인식</code>.</li>
       <li>정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>.</li>
       <li>정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다.</li>

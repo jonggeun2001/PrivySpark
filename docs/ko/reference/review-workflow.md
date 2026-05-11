@@ -18,7 +18,7 @@ privyspark review apply \
 
 ## 권장 흐름
 
-서버 없이 담당자에게 `review.html` 또는 `review.xlsm`을 전달하고 다음 스캔에서 반복 오탐을 제외하려면 다음 흐름을 사용합니다.
+서버 없이 담당자에게 `review.html`을 전달하고 다음 스캔에서 반복 오탐을 제외하려면 다음 흐름을 사용합니다.
 
 ```bash
 privyspark scan \
@@ -27,4 +27,4 @@ privyspark scan \
   --review-state-root /abs/review-state
 ```
 
-회수한 response JSON은 `/abs/review-state/inbox/*.json`에 업로드합니다. 다음 `scan --review-state-root /abs/review-state`는 스캔 시작 전에 자동으로 수집을 실행합니다. invalid response가 있거나 다른 collect가 `/abs/review-state/.collect.lock`을 보유 중이면 스캔은 시작하지 않고 실패합니다. `review.xlsm`을 사용한 경우 Excel 파일 자체가 아니라 통합 문서의 `회신용 첨부파일 생성` 버튼으로 만든 JSON 파일을 업로드합니다.
+회수한 response JSON은 `/abs/review-state/inbox/*.json`에 업로드합니다. 다음 `scan --review-state-root /abs/review-state`는 스캔 시작 전에 자동으로 수집을 실행합니다. invalid response가 있거나 다른 collect가 `/abs/review-state/.collect.lock`을 보유 중이면 스캔은 시작하지 않고 실패합니다. Excel 편집이 필요하면 `review.html`에서 TSV를 내려받아 편집하고, 사내 보안 솔루션이 TSV를 암호화한 경우 암호화 해제한 TSV를 다시 불러온 뒤 JSON 파일을 생성해 업로드합니다.
