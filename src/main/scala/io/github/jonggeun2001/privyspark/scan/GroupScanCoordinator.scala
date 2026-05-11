@@ -7,7 +7,7 @@ import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.AllowlistMatcher
 import io.github.jonggeun2001.privyspark.scan.GroupScanRoute.{BatchScan, FileScan, SampledExact}
-import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger, RpcGate}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
@@ -37,12 +37,20 @@ private[privyspark] object GroupScanCoordinator {
       return Seq.empty
     }
 
-    val parallelism = if (groupParallelism > 0) {
+    val requestedParallelism = if (groupParallelism > 0) {
       resolveParallelism(groups.size, groupParallelism)
     } else {
       resolveGroupParallelism(spark, groups.size)
     }
-    DriverLogger.debug("group_scan_parallelism", "groups" -> groups.size, "parallelism" -> parallelism)
+    val rpcGate = RpcGate.driverGate(spark)
+    val parallelism = capGroupDispatchParallelism(requestedParallelism, rpcGate)
+    DriverLogger.debug(
+      "group_scan_parallelism",
+      "groups" -> groups.size,
+      "parallelism" -> parallelism,
+      "requested_parallelism" -> requestedParallelism,
+      "driver_rpc_concurrency" -> rpcGate.map(_.permits).getOrElse("disabled")
+    )
     DriverTcpConnectionLogger.debugSnapshot(
       "group_scan_tcp_snapshot",
       "phase" -> "groups_start",
@@ -129,6 +137,14 @@ private[privyspark] object GroupScanCoordinator {
         }
       }
     })
+  }
+
+  private[privyspark] def capGroupDispatchParallelism(parallelism: Int, rpcGate: Option[RpcGate]): Int = {
+    require(parallelism > 0, "group scan parallelism must be > 0")
+    rpcGate match {
+      case Some(gate) => math.max(1, math.min(parallelism, gate.permits))
+      case None => parallelism
+    }
   }
 
   def scanGroup(

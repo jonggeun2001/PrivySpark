@@ -6,11 +6,14 @@ import org.apache.spark.sql.SparkSession
 
 import java.nio.file.NoSuchFileException
 import scala.annotation.tailrec
+import scala.util.Random
 import scala.util.control.NonFatal
 
 private[privyspark] object RetryIO {
-  val MaxFileReadAttempts = 2
+  val RetryRefreshParentConfKey = "spark.privyspark.retry.refreshParent"
+  val MaxFileReadAttempts = 3
   val FileReadRetryDelayMillis = 200L
+  val RetryJitterRatio = 0.25
   val RetriableFileReadErrorSnippets = Seq(
     "path does not exist",
     "file does not exist",
@@ -50,10 +53,18 @@ private[privyspark] object RetryIO {
     }
   }
 
-  private def refreshReadPaths(spark: SparkSession, filePaths: Seq[String]): Unit = {
-    val refreshTargets = filePaths.distinct.flatMap { path =>
-      Seq(Some(path), Option(new Path(path).getParent).map(_.toString)).flatten
+  private[privyspark] def refreshTargetsForRetry(filePaths: Seq[String], refreshParent: Boolean): Seq[String] = {
+    filePaths.distinct.flatMap { path =>
+      if (refreshParent) {
+        Seq(Some(path), Option(new Path(path).getParent).map(_.toString)).flatten
+      } else {
+        Seq(path)
+      }
     }.distinct
+  }
+
+  private def refreshReadPaths(spark: SparkSession, filePaths: Seq[String], refreshParent: Boolean): Unit = {
+    val refreshTargets = refreshTargetsForRetry(filePaths, refreshParent)
 
     refreshTargets.foreach { path =>
       try {
@@ -62,6 +73,19 @@ private[privyspark] object RetryIO {
         case NonFatal(_) => ()
       }
     }
+  }
+
+  private[privyspark] def retryDelayMillis(
+    baseDelayMs: Long,
+    nextAttempt: Int,
+    jitterRatio: Double,
+    randomFraction: Double
+  ): Long = {
+    val retryIndex = math.max(0, nextAttempt - 2)
+    val exponentialDelay = baseDelayMs * (1L << math.min(retryIndex, 20))
+    val boundedRandomFraction = math.max(0.0, math.min(1.0, randomFraction))
+    val jitter = (exponentialDelay * math.max(0.0, jitterRatio) * boundedRandomFraction).toLong
+    exponentialDelay + jitter
   }
 
   private def pauseBeforeRetry(delayMs: Long): Unit = {
@@ -84,6 +108,7 @@ private[privyspark] object RetryIO {
     retryDelayMs: Long = FileReadRetryDelayMillis
   )(block: => A): A = {
     require(maxAttempts >= 1, "maxAttempts must be >= 1")
+    val refreshParent = spark.sparkContext.getConf.getBoolean(RetryRefreshParentConfKey, false)
 
     def attempt(attemptNumber: Int): A = {
       try {
@@ -98,6 +123,7 @@ private[privyspark] object RetryIO {
             "attempt" -> nextAttempt,
             "max_attempts" -> maxAttempts,
             "files" -> filePaths.size,
+            "refresh_parent" -> refreshParent,
             "reason" -> reason
           )
           DriverLogger.debug(
@@ -106,10 +132,11 @@ private[privyspark] object RetryIO {
             "attempt" -> nextAttempt,
             "max_attempts" -> maxAttempts,
             "files" -> filePaths.size,
+            "refresh_parent" -> refreshParent,
             "reason" -> reason
           )
-          refreshReadPaths(spark, filePaths)
-          pauseBeforeRetry(retryDelayMs)
+          refreshReadPaths(spark, filePaths, refreshParent)
+          pauseBeforeRetry(retryDelayMillis(retryDelayMs, nextAttempt, RetryJitterRatio, Random.nextDouble()))
           attempt(nextAttempt)
       }
     }

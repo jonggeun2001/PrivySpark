@@ -26,8 +26,11 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 ## Small-File-Heavy Inputs
 - `--pre-scan-parallelism` is the first lever for directory discovery, probe, and schema-split latency.
 - `--group-parallelism` and `--file-parallelism` increase driver-side concurrent submissions, but they do not directly guarantee executor distribution.
+- `spark.privyspark.driverRpcConcurrency` prevents small-file group scans from flooding the NameNode with driver-side RPC work by capping scan concurrency at `48` by default. Lower values favor stability over latency; `0` disables the gate.
 - `--file-sample-ratio` can be more effective than `--sample-ratio` for small-file-heavy inputs because it reduces the number of files read at all.
 - The default `--file-sample-min-files 10` means small groups are not sampled. Lower the threshold if you want file sampling to kick in for smaller groups.
+- File-scope in-flight markers are disabled by default, so each file no longer creates and deletes a marker in HDFS. Group-scope markers and progress shards are still written.
+- Group scan paths reuse file size and modification time captured during pre-scan, avoiding an additional `getFileStatus` call when both metadata values are available.
 
 Stable hash-ranked file sampling is not only a performance feature. It keeps the sampled scope repeatable for the same group and file set while preserving file-level concentration risk better than size-weighted sampling, which would over-bias large files.
 
@@ -63,7 +66,7 @@ When `scan_directory_files_discovered` to `scan_directory_initial_groups_ready` 
 - Enable `info` or `debug` driver logs to separate pre-scan, grouping, and progress-merge bottlenecks.
 
 ## Tuning Priority
-1. For small-file-heavy inputs, start with `--pre-scan-parallelism`, `--file-sample-ratio`, and Spark file partition settings.
+1. For small-file-heavy inputs, start with `spark.privyspark.driverRpcConcurrency`, `--file-sample-ratio`, and Spark file partition settings.
 2. If group count is high, tune `--group-parallelism`.
 3. If fallback file scans are common, tune `--file-parallelism`.
 4. For wide schemas, reduce unnecessary metrics with `column_hints` and ruleset cleanup.

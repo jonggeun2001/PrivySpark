@@ -6,7 +6,7 @@ import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
 import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, ReviewScopeFingerprintCodec}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, RpcGate}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{executeInParallel, resolveFileParallelism}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveDirectoryIdentifier, resolveLogicalIdentifier, resolvePhysicalPath}
 import org.apache.spark.broadcast.Broadcast
@@ -37,6 +37,7 @@ private[privyspark] object AllowlistApplier {
     } else {
       ReviewSnapshotLog.logReviewSnapshotStart("batch", matchedSourceKeys.size, selectedFileCount)
       val parallelism = resolveFileParallelism(spark, matchedSourceKeys.size)
+      val rpcGate = RpcGate.driverGate(spark)
       val rescannedMetrics = executeInParallel(parallelism, matchedSourceKeys.map { sourceKey =>
         () => {
           val physicalPath = resolvePhysicalPath(group, sourceKey)
@@ -72,7 +73,7 @@ private[privyspark] object AllowlistApplier {
           }
           sourceKey -> scanResult
         }
-      })
+      }, gate = rpcGate)
 
       val metricMap = rescannedMetrics.map {
         case (_, Right(fileMetrics)) =>

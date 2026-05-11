@@ -5,7 +5,7 @@ import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
 import io.github.jonggeun2001.privyspark.scan.discovery.{DirectoryDiscovery, DiscoveredFile, PreScanExecutor, SchemaGroupSplitter}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, RpcGate}
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, ScanError, ScanFileEntry, ScanGroup, ScanReadOptions}
 import org.apache.hadoop.fs.Path
@@ -38,6 +38,7 @@ private[privyspark] object DirectoryScanner {
     val fs = path.getFileSystem(conf)
     val stagingPaths = ArrayBuffer.empty[String]
     val fileDiscoveryStartedAt = System.nanoTime()
+    val preScanRpcGate = RpcGate.preScanGate(spark)
 
     try {
       val inputStatus =
@@ -65,9 +66,10 @@ private[privyspark] object DirectoryScanner {
         DriverLogger.debug(
           "scan_directory_file_discovery_parallelism",
           "input_path" -> inputPath,
-          "parallelism" -> resolvedDiscoveryParallelism
+          "parallelism" -> resolvedDiscoveryParallelism,
+          "driver_rpc_concurrency" -> preScanRpcGate.map(_.permits).getOrElse("disabled")
         )
-        DirectoryDiscovery.discover(fs, path, inputPath, ignoreMatcher, resolvedDiscoveryParallelism)
+        DirectoryDiscovery.discover(fs, path, inputPath, ignoreMatcher, resolvedDiscoveryParallelism, rpcGate = preScanRpcGate)
       }
       ignoredFiles.foreach {
         case (filePath, pattern) =>
@@ -99,7 +101,8 @@ private[privyspark] object DirectoryScanner {
         "scan_directory_pre_scan_parallelism",
         "input_path" -> inputPath,
         "files" -> files.size,
-        "parallelism" -> resolvedPreScanParallelism
+        "parallelism" -> resolvedPreScanParallelism,
+        "driver_rpc_concurrency" -> preScanRpcGate.map(_.permits).getOrElse("disabled")
       )
 
       val preScanStartedAt = System.nanoTime()
@@ -112,7 +115,8 @@ private[privyspark] object DirectoryScanner {
         resolvedPreScanParallelism,
         readOptions,
         ignoreMatcher,
-        csvHeadCache
+        csvHeadCache,
+        preScanRpcGate
       )
       val ignoredArchiveEntryCount = preScanOutcomes.map(_.ignoredEntries).sum
       val totalIgnoredCount = ignoredFiles.size + ignoredArchiveEntryCount
@@ -223,7 +227,8 @@ private[privyspark] object DirectoryScanner {
         resolvedPreScanParallelism,
         csvHeadCache,
         schemaSigCache,
-        parseOkCache
+        parseOkCache,
+        preScanRpcGate
       )
       errors ++= splitAndFinalizeResult.errors
       directoriesWithPreScanErrors ++= splitAndFinalizeResult.directoriesWithPreScanErrors

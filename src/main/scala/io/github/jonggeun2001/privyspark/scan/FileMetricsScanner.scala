@@ -16,6 +16,11 @@ import org.apache.spark.sql.functions.lit
 import scala.util.control.NonFatal
 
 private[privyspark] object FileMetricsScanner {
+  private final case class FileMetadata(fileSize: Long, fileMtimeEpochMs: Long)
+
+  def shouldLoadFileStatus(fileSizeOverride: Option[Long], fileMtimeEpochMsOverride: Option[Long]): Boolean =
+    fileSizeOverride.isEmpty || fileMtimeEpochMsOverride.isEmpty
+
   def scanFileMetrics(
     spark: SparkSession,
     datasetPath: String,
@@ -33,7 +38,7 @@ private[privyspark] object FileMetricsScanner {
     readOptions: ScanReadOptions = ScanReadOptions(),
     suppressions: SuppressionSet = SuppressionSet.empty,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
-    captureRecordedFingerprintWhenMissing: Boolean = true,
+    captureRecordedFingerprintWhenMissing: Boolean = false,
     injectedFileIdentifierColumn: Option[(String, String)] = None
   ): Either[ScanError, FileScanMetrics] = {
     val physicalPath = physicalPathOverride.getOrElse(filePath)
@@ -60,18 +65,34 @@ private[privyspark] object FileMetricsScanner {
 
     try {
       withFileReadRetry(spark, Seq(physicalPath), "file_scan") {
-        val fileStatusStartNanos = System.nanoTime()
-        logTcpSnapshot("file_driver_hdfs_action_start", "action" -> "get_file_status")
-        val fileStatus = new Path(physicalPath).getFileSystem(spark.sparkContext.hadoopConfiguration)
-          .getFileStatus(new Path(physicalPath))
-        logTcpSnapshot(
-          "file_driver_hdfs_action_complete",
-          "action" -> "get_file_status",
-          "duration_ms" -> elapsedMs(fileStatusStartNanos),
-          "file_size" -> fileStatus.getLen
-        )
-        val effectiveFileSize = fileSizeOverride.getOrElse(fileStatus.getLen)
-        val effectiveFileMtimeEpochMs = fileMtimeEpochMsOverride.getOrElse(fileStatus.getModificationTime)
+        val fileMetadata =
+          if (shouldLoadFileStatus(fileSizeOverride, fileMtimeEpochMsOverride)) {
+            val fileStatusStartNanos = System.nanoTime()
+            logTcpSnapshot("file_driver_hdfs_action_start", "action" -> "get_file_status")
+            val fileStatus = new Path(physicalPath).getFileSystem(spark.sparkContext.hadoopConfiguration)
+              .getFileStatus(new Path(physicalPath))
+            logTcpSnapshot(
+              "file_driver_hdfs_action_complete",
+              "action" -> "get_file_status",
+              "duration_ms" -> elapsedMs(fileStatusStartNanos),
+              "file_size" -> fileStatus.getLen
+            )
+            FileMetadata(
+              fileSize = fileSizeOverride.getOrElse(fileStatus.getLen),
+              fileMtimeEpochMs = fileMtimeEpochMsOverride.getOrElse(fileStatus.getModificationTime)
+            )
+          } else {
+            logTcpSnapshot(
+              "file_driver_hdfs_action_skipped",
+              "action" -> "get_file_status",
+              "reason" -> "metadata_overrides_present",
+              "file_size" -> fileSizeOverride.get,
+              "file_mtime_epoch_ms" -> fileMtimeEpochMsOverride.get
+            )
+            FileMetadata(fileSizeOverride.get, fileMtimeEpochMsOverride.get)
+          }
+        val effectiveFileSize = fileMetadata.fileSize
+        val effectiveFileMtimeEpochMs = fileMetadata.fileMtimeEpochMs
         val effectiveRecordedFingerprint = recordedFingerprint.orElse {
           if (captureRecordedFingerprintWhenMissing) {
             Some(ReviewSnapshotLog.captureRecordedFingerprint(
