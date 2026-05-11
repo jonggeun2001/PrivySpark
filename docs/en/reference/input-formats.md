@@ -45,10 +45,10 @@ The text/CSV fallback exists because extension-based filtering alone would rejec
 - Multi-file groups may sample a single representative file first.
 - Group-level schema split reuses `--pre-scan-parallelism` on the driver.
 - Sampled CSV and JSON groups are revalidated with exact split before scanning.
-- Sampled batch-capable Parquet, ORC, and Avro groups take the batch path first and keep file-level identifiers when that batch scan succeeds.
+- Sampled batch-capable Parquet, ORC, and Avro groups run bounded exact schema validation before the batch path and keep file-level identifiers when validation and batch scan both succeed.
 - CSV exact split, when reached through fallback or explicit exact paths, also rechecks header drift.
 
-This separate schema sampling phase exists for two reasons. First, directory-level aggregation must not hide schema drift. Second, reading every file upfront for exact split would inflate pre-scan cost, so the representative-file path trades cost against correctness and lets non-CSV/non-JSON small-file groups use the cheaper batch route first.
+This separate schema sampling phase exists for two reasons. First, directory-level aggregation must not hide schema drift. Second, reading every file upfront for exact split would inflate pre-scan cost, so the representative-file path trades cost against correctness and lets non-CSV/non-JSON small-file groups use the cheaper batch route after bounded schema validation.
 
 ## CSV Header Handling
 - CSV delimiters are detected automatically. Built-in candidates include comma, tab, semicolon, pipe, colon, ASCII information separator, plus consistent 2-3 character non-alphanumeric delimiters such as `||` and `|~|`.
@@ -61,6 +61,6 @@ This separate schema sampling phase exists for two reasons. First, directory-lev
 ## Corrupt Inputs and Fallback
 - JSON files that only produce corrupt records are recorded as corrupt inputs.
 - Sampled CSV and JSON multi-file groups are exact-split revalidated before scanning.
-- Sampled non-CSV/non-JSON batch-capable groups are batch-scanned first; if the batch read fails, the fallback policy may exact-split revalidate before rescanning.
+- Sampled non-CSV/non-JSON batch-capable groups are schema-validated before batch scanning; if validation finds drift or the batch read fails, the fallback policy may exact-split revalidate before rescanning.
 - When a normal group batch scan fails, PrivySpark falls back to file-level scanning without another schema resplit.
 - File replacement or deletion during reads is retried for a limited number of attempts.

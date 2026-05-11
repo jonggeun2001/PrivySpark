@@ -131,6 +131,59 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
+  test("scanGroup exact-splits sampled Parquet groups when later files add columns") {
+    val inputDir = Files.createTempDirectory("privyspark-coordinator-sampled-parquet-drift-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+
+    try {
+      import spark.implicits._
+
+      Seq("alice")
+        .toDF("name")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq("010-1234-5678")
+        .toDF("phone")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      val left = groupedDir.resolve("part-a.parquet")
+      val right = groupedDir.resolve("part-b.parquet")
+      Files.move(findDataFile(leftWriteDir, ".parquet").get, left)
+      Files.move(findDataFile(rightWriteDir, ".parquet").get, right)
+
+      val group = ScanGroup(
+        directoryPath = groupedDir.toString,
+        format = "parquet",
+        schemaSignature = "name",
+        filePaths = Seq(left.toString, right.toString),
+        schemaSampled = true
+      )
+      val phoneRule = PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
+
+      val (results, errors) = GroupScanCoordinator.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        Seq(phoneRule),
+        sampleRatio = 1.0,
+        timestamp = Timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("users/part-b.parquet", "phone", 1L)))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanGroup uses the directory identifier when requested") {
     val inputDir = Files.createTempDirectory("privyspark-coordinator-directory-id-")
     val groupedDir = Files.createDirectories(inputDir.resolve("users"))

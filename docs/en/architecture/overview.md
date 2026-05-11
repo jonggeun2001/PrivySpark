@@ -52,7 +52,7 @@
 - `--file-sample-ratio` applies to both batch scans and file-fallback scans, but only when a group has more files than `--file-sample-min-files`; when it does apply, PrivySpark selects a stable hash-ranked file subset of size `ceil(fileCount * ratio)` with at least one file.
 - When file sampling actually applies, `--sample-ratio < 1.0` is ignored for that group and a warning is logged.
 - File-sampled group review rows record `review_scope_file_identifiers` and `review_scope_file_fingerprints` only for the selected files, not for the entire group directory.
-- Sampled non-CSV/non-JSON groups take the batch path first and keep file-level identifiers unless a fallback exact split reclassifies them.
+- Sampled non-CSV/non-JSON groups run bounded schema validation before the batch path and keep file-level identifiers when validation and batch scan both succeed.
 - Sampled groups are never promoted to directory-level identifiers before exact-split validation.
 - Archive and Excel logical inputs keep their own identifiers.
 - The public output contract defaults to `parquet/scan_results` and `parquet/scan_errors`, and CLI `--output-format` can additionally materialize `csv/...` and `excel/*.xlsx`.
