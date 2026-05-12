@@ -131,6 +131,27 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
+  test("prepareSampledGroupForBatchScan skips exact split for sampled text groups") {
+    val group = ScanGroup(
+      directoryPath = "/data/users",
+      format = "text",
+      schemaSignature = "value",
+      filePaths = Seq("/missing/a.log", "/missing/b.log"),
+      schemaSampled = true,
+      directoryIdentifierEligible = true
+    )
+
+    val result = GroupScanCoordinator.prepareSampledGroupForBatchScan(
+      spark,
+      "/data",
+      Timestamp,
+      group,
+      new CsvHeadCache()
+    )
+
+    assert(result == Right(group))
+  }
+
   test("scanGroup exact-splits sampled Parquet groups when later files add columns") {
     val inputDir = Files.createTempDirectory("privyspark-coordinator-sampled-parquet-drift-")
     val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
