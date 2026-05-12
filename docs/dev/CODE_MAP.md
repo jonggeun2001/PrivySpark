@@ -33,7 +33,7 @@
 - `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L13, `discover` L17.
 - `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L29, `runPreScan` L50.
 - `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L24, schema split scheduling L120, file schema task executor L140, `splitGroupBySchemaFast` L152, `splitGroupBySchema` L302.
-- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, sampled batch schema validation L319, batch fallback invocation L308, compatibility delegates L361/L399.
+- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, sampled batch schema gate L319, batch fallback invocation L308, compatibility delegates L361/L399.
 - `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L89, file progress record helper L96, group buffer flush L309.
 - `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.
 - `scan/GroupScanFallbackPolicy.scala`: batch failure fallback executor L7.

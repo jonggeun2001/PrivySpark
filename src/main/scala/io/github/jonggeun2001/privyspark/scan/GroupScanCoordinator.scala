@@ -323,7 +323,7 @@ private[privyspark] object GroupScanCoordinator {
     group: ScanGroup,
     csvHeadCache: CsvHeadCache
   ): Either[Unit, ScanGroup] = {
-    if (!group.schemaSampled || group.filePaths.size <= 1) {
+    if (!group.schemaSampled || group.filePaths.size <= 1 || !GroupScanRouter.requiresExactPerFileSchema(group)) {
       Right(group)
     } else {
       val (splitGroups, splitErrors) = DirectoryScanner.splitGroupBySchema(

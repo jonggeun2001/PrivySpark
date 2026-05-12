@@ -22,6 +22,6 @@ private[privyspark] object GroupScanRouter {
     }
   }
 
-  private def requiresExactPerFileSchema(group: ScanGroup): Boolean =
+  private[scan] def requiresExactPerFileSchema(group: ScanGroup): Boolean =
     group.format == "json" || group.format == "csv"
 }
