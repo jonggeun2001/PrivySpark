@@ -19,7 +19,7 @@
 - `scan/`: scan pipeline orchestration, directory scan, source expansion, grouping, group route/fallback policy, file sampling, batch/file scan orchestration.
 - `scan/archive/`: archive format dispatch, staging safety, entry loop, zip/tar/7z/rar handlers.
 - `scan/discovery/`: physical file discovery, pre-scan expansion, schema split/finalization helpers.
-- `util/`: driver logging, parallelism 설정, path identifier 정규화.
+- `util/`: driver logging, driver TCP socket 진단, RPC concurrency gate, parallelism 설정, path identifier 정규화.
 
 ## 핵심 파일 포인터
 
@@ -27,13 +27,14 @@
 - `cli/CliArgumentValidator.scala`: command path validation L6, absolute path error logging L51.
 - `config/SuppressionParser.scala`: parsed suppression ADT L15, CLI/file suppression parsing L17/L25, unknown pii warning L35.
 - `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L41, report merge/review hook L204.
-- `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L22, pre-scan collect/group build L132, schema split/finalization delegate L210.
+- `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L23, pre-scan collect/group build L141, schema split/finalization delegate L219.
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
-- `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L12, `discover` L16.
-- `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L27, `runPreScan` L48.
-- `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L22, `splitGroupBySchemaFast` L112, `splitGroupBySchema` L229.
-- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L179, batch fallback invocation L249, compatibility delegates L260/L298.
+- `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L13, `discover` L17.
+- `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L29, `runPreScan` L50.
+- `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L24, schema split scheduling L120, file schema task executor L140, `splitGroupBySchemaFast` L152, `splitGroupBySchema` L302.
+- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, sampled batch schema validation L319, batch fallback invocation L308, compatibility delegates L361/L399.
+- `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L89, file progress record helper L96, group buffer flush L309.
 - `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.
 - `scan/GroupScanFallbackPolicy.scala`: batch failure fallback executor L7.
 - `scan/FileSampling.scala`: deterministic file sampling L6.
@@ -56,6 +57,12 @@
 - `src/main/resources/review/review.html.template`: offline review HTML/CSS shell and `${REVIEW_DATA_JSON}` placeholder.
 - `src/main/resources/review/review.js`: offline review browser state, sorting, validation, and response download logic.
 - `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, metric planning L117.
+- `fsio/RetryIO.scala`: file read retry 정책, exponential backoff/jitter, retry 전 Spark catalog refresh 대상 제어.
+- `progress/ProgressIO.scala`: flush mode 설정 L19-L44, progress JSONL write L46/L108.
+- `progress/ProgressBuffer.scala`: group 단위 progress buffering L11, enqueue L23, flush L30.
+- `progress/ProgressRunManager.scala`: progress run prepare L21, merge L88-L101, active heartbeat L154-L181.
+- `util/DriverTcpConnectionSnapshot.scala`: Linux `/proc` 기반 driver TCP socket snapshot capture와 `group_scan_tcp_snapshot` debug log helper.
+- `util/RpcGate.scala`: `spark.privyspark.driverRpcConcurrency` 기반 driver-side RPC성 작업 동시성 gate.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.
 - `model/Models.scala`: `PiiRule` L14, `ScanResult` L32, `ScanError` L55.

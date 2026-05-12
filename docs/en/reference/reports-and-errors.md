@@ -50,6 +50,7 @@
 ## `file_identifier` Rules
 - The default is the input-relative path.
 - Promotion to a directory-level identifier only happens when exact split confirms identical schemas, there are no pre-scan errors, and directory-level aggregation is allowed for the multi-file group.
+- Sampled non-CSV/non-JSON groups that pass bounded schema validation and succeed on the batch path keep file-level identifiers because they have not been promoted through exact-split directory aggregation.
 - The input-root directory group uses `.`.
 - Partition, bucket, and skew/list-bucketing layout directories are treated as layout metadata for grouping, so eligible rows identify the normalized table path rather than each physical layout subdirectory.
 - Archive entries use `<archive>!<entry>`.
@@ -87,6 +88,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 
 ## In-Progress `_progress` Path
 - Intermediate shards may be written under `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, and `meta/completions/*.jsonl`.
+- File fallback scans flush progress shards when the group finishes by default. `_progress` remains the final merge source, but it is not a per-file live-tail contract; set `spark.privyspark.progress.flushMode=file` if shards must appear immediately after each file completes.
 - While a task is running, `<output>/_progress/<run_id>/in-flight/*.json` may contain one marker per active group, file, or allowlist snapshot rescan.
 - In-flight markers are operational diagnostics only. Completed work and recoverable failures remove their markers, while unrecovered group/file failures that end the Spark application as `FAILED` preserve the marker.
 - In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`. The original `identifier` remains in the marker JSON body.

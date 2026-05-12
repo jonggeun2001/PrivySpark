@@ -78,12 +78,19 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 
 ## 병렬도
 - CLI 값을 주면 해당 값이 앱 로직에 직접 전달됩니다.
-- CLI 값을 생략하면 `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 또는 앱 기본값(`4`, `4`, `3`)을 사용합니다.
+- CLI 값을 생략하면 `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 또는 앱 기본값(`32`, `16`, `8`)을 사용합니다.
 - pre-scan 병렬도는 디렉터리 discovery, 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용됩니다.
 - 디렉터리 discovery 단계에서는 BFS 레벨의 디렉터리 수와 safety ceiling `64` 기준으로 풀 크기가 제한되고, discovery 이후 pre-scan 병렬도는 기존처럼 파일 수와 safety ceiling `64` 기준으로 축소됩니다.
 - 그룹 병렬도와 파일 병렬도는 driver가 동시에 제출하는 작업 수를 제어합니다.
+- `spark.privyspark.driverRpcConcurrency`는 driver가 동시에 실행하는 HDFS/RPC 성격의 scan 작업 수를 추가로 제한합니다. 기본값은 group/file/snapshot scan 경로 `48`, pre-scan 경로 `64`이며, `0`으로 설정하면 이 안전망을 끕니다. group dispatch 병렬도도 이 값 이하로 축소되어 batch group scan 경로가 상한을 우회하지 않습니다.
+- `spark.privyspark.progress.flushMode`는 file fallback scan의 progress JSONL 기록 단위를 제어합니다. 기본값 `group`은 파일별 결과/오류를 메모리에 모아 group 종료 시 results/errors/completions shard를 한 번씩 flush합니다. 이전처럼 파일 완료 즉시 progress shard를 기록해야 하면 `file`로 설정합니다.
 
 여기서 중요한 점은 앱 레벨 병렬도가 곧 executor 수를 직접 보장하는 것은 아니라는 점입니다. 실제 executor 분산은 입력 파티션 수, Spark scheduler, dynamic allocation backlog에 함께 영향을 받습니다.
+
+## Retry와 HDFS refresh
+- 파일 read retry는 최대 3회 시도하며, 200ms 기준 exponential backoff와 jitter를 적용해 여러 driver thread가 동시에 재시도하는 상황을 줄입니다.
+- retry 전에 Spark catalog refresh를 수행할 때 기본적으로 원본 file path만 refresh합니다. parent directory refresh는 NameNode `listStatus` 부하를 크게 키울 수 있으므로 기본 off입니다.
+- 기존 동작이 필요한 환경에서는 `spark.privyspark.retry.refreshParent=true`로 parent directory refresh를 다시 켤 수 있습니다.
 
 ## Excel reader 설정
 - `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 Spark executor task의 StAX 스트리머에서 처리합니다.
@@ -111,20 +118,23 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - 지원값은 `error`, `warn`, `info`, `debug`, `off`입니다.
 - 기본값은 `warn`입니다.
 - 하위호환으로 `true`는 `debug`, `false`는 `warn`으로 해석합니다.
-- 로그 포맷은 `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...`입니다.
+- 로그 포맷은 `[PrivySpark][LEVEL][offset을 포함한 driver local ISO-8601 timestamp] event key=value...`입니다.
 
 `info` 레벨은 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 lifecycle을 보여주고, `debug` 레벨은 파일 발견, pre-scan 실행, 그룹화, progress 준비/쓰기/merge 같은 상세 이벤트를 추가로 남깁니다.
+
+group scan 중 driver TCP 연결 폭증을 확인해야 할 때는 `debug` 레벨의 `group_scan_tcp_snapshot` 이벤트를 봅니다. Linux/YARN driver에서는 현재 JVM이 보유한 `/proc` TCP socket fd를 읽어 `tcp_fd_count`, `tcp_states`, `tcp_remote_ports_top`을 기록합니다. macOS처럼 `/proc`가 없는 환경에서는 `tcp_snapshot_available=false`와 사유만 남깁니다. `phase=batch_action_start|batch_action_complete`, `action=sampled_rows_by_file|aggregate_matches|sample_matches|count_non_empty`, `phase=review_snapshot_stage_*`, `phase=file_spark_action_*`를 시간순으로 비교하면 어떤 Spark action 또는 review snapshot 단계에서 연결 수가 증가하는지 분리할 수 있습니다.
 
 ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped reason=ignored` 같은 이벤트와 함께 `ignored_files` 집계가 `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, `scan_complete`에 포함됩니다.
 
 ## `_progress` 경로 운영
 - 진행 중 shard는 `<output>/_progress/<run_id>/results`, `errors`, `meta/completions` 아래 JSONL로 기록됩니다.
-- 실행 중인 group, file, allowlist snapshot 작업은 `<output>/_progress/<run_id>/in-flight` 아래 임시 JSON marker를 생성합니다.
+- file fallback scan의 기본 progress flush 단위는 group입니다. 이 모드에서는 group이 끝나기 전까지 file별 완료 row가 `_progress`에 나타나지 않을 수 있으며, driver가 실패하면 해당 group은 다음 실행에서 group 단위로 재실행됩니다.
+- 실행 중인 group, allowlist snapshot 작업은 `<output>/_progress/<run_id>/in-flight` 아래 임시 JSON marker를 생성합니다. file 단위 marker는 small-file scan에서 HDFS create/delete 부하를 줄이기 위해 기본 off이며, 이전 수준의 file-level 관측이 필요하면 `spark.privyspark.progress.fileMarker.enabled=true`로 켤 수 있습니다.
 - 각 in-flight marker에는 `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`와 가능한 경우 `format`, `schemaSignature` 같은 스캔 메타데이터가 들어갑니다.
 - in-flight marker 파일명은 파일명에 안전한 UTF-8 문자/숫자와 `.`, `_`, `-`를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다. 원본 `identifier`는 JSON 본문에 유지됩니다.
 - 완료된 작업과 처리 가능한 실패의 in-flight marker는 삭제됩니다. Spark application을 `FAILED`로 끝내는 미복구 group/file 실패는 marker를 보존해 마지막 진행 중 작업을 확인할 수 있게 합니다.
 - setup 시작 전에는 `<output>/_progress-preparing.json` lock을 먼저 획득합니다.
-- 준비가 끝나면 `_progress/active-run.json` heartbeat marker로 전환합니다.
+- 준비가 끝나면 `_progress/active-run.json` heartbeat marker로 전환합니다. heartbeat는 progress shard write hot path와 분리된 주기 작업으로 갱신됩니다.
 - 다음 실행은 stale heartbeat, `FAILED` marker, stale preparing lock만 cleanup 대상으로 봅니다.
 - 최근 heartbeat의 `RUNNING` marker나 fresh preparing lock이 남아 있으면 충돌로 실패합니다.
 - unreadable `active-run.json`은 owner run이 `meta/run.json`을 근거로 self-heal합니다.

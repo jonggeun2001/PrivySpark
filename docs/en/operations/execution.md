@@ -76,12 +76,19 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 
 ## Parallelism
 - CLI values are passed directly into application logic.
-- When omitted, PrivySpark uses `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`, or the application defaults (`4`, `4`, `3`).
+- When omitted, PrivySpark uses `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`, or the application defaults (`32`, `16`, `8`).
 - Pre-scan parallelism covers directory discovery, input expansion, format probing, and group schema split.
 - During directory discovery, the pool is capped by the safety ceiling `64` and the number of directories in the current BFS level. After discovery, effective pre-scan parallelism is still bounded by discovered file count and the safety ceiling `64`.
 - Group and file parallelism control how many scan tasks the driver submits concurrently.
+- `spark.privyspark.driverRpcConcurrency` adds a second cap for driver-side HDFS/RPC-like scan work. The default is `48` for group/file/snapshot scan paths and `64` for pre-scan paths. Set it to `0` to disable this safety gate. Group dispatch parallelism is also reduced to this cap so batch group scans cannot bypass it.
+- `spark.privyspark.progress.flushMode` controls the progress JSONL write unit for file fallback scans. The default `group` buffers per-file results and errors in memory and flushes results/errors/completions shards once when the group finishes. Set it to `file` to restore immediate per-file progress shard writes.
 
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
+
+## Retry and HDFS Refresh
+- File read retry now attempts up to three times and uses exponential backoff from a 200ms base with jitter, reducing simultaneous retry waves from many driver threads.
+- Before retrying, Spark catalog refresh targets the original file paths by default. Parent directory refresh is disabled by default because it can trigger expensive NameNode `listStatus` calls on large directories.
+- Set `spark.privyspark.retry.refreshParent=true` to opt back into parent directory refresh if an environment depends on the previous behavior.
 
 ## Excel Reader Configuration
 - During `xlsx` pre-scan, the driver lightly parses workbook metadata and header row XML to build visible sheet lists and schema signatures; sheet body row/cell contents are handled by the executor-side StAX streamer.
@@ -109,20 +116,23 @@ Stable hash-ranked file sampling keeps the same subset for the same group and fi
 - Supported values are `error`, `warn`, `info`, `debug`, and `off`.
 - The default is `warn`.
 - For backward compatibility, `true` maps to `debug` and `false` maps to `warn`.
-- Log format: `[PrivySpark][LEVEL][ISO-8601 UTC timestamp] event key=value...`
+- Log format: `[PrivySpark][LEVEL][ISO-8601 local driver timestamp with offset] event key=value...`
 
 `info` exposes high-level lifecycle events such as `scan_start`, `scan_plan_ready`, and `scan_complete`. `debug` adds detailed events for file discovery, pre-scan execution, grouping, and `_progress` lifecycle.
+
+To diagnose driver TCP connection growth during group scan, inspect `group_scan_tcp_snapshot` events at `debug` level. On Linux/YARN drivers, PrivySpark reads the current JVM's `/proc` TCP socket fds and records `tcp_fd_count`, `tcp_states`, and `tcp_remote_ports_top`. On environments without `/proc`, such as macOS, it records `tcp_snapshot_available=false` with a reason. Compare `phase=batch_action_start|batch_action_complete`, `action=sampled_rows_by_file|aggregate_matches|sample_matches|count_non_empty`, `phase=review_snapshot_stage_*`, and `phase=file_spark_action_*` chronologically to isolate which Spark action or review snapshot step increases connections.
 
 When ignore rules apply, events such as `scan_directory_file_ignored` and `archive_entry_skipped reason=ignored` are emitted, and `ignored_files` is included in `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, and `scan_complete`.
 
 ## `_progress` Handling
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
-- Running group, file, and allowlist snapshot tasks create temporary JSON markers under `<output>/_progress/<run_id>/in-flight`.
+- File fallback scans flush progress at group granularity by default. In this mode, per-file completed rows may not appear under `_progress` until the group finishes, and a driver failure causes that group to be rerun on the next attempt.
+- Running group and allowlist snapshot tasks create temporary JSON markers under `<output>/_progress/<run_id>/in-flight`. File-level markers are disabled by default to avoid create/delete pressure during small-file scans; set `spark.privyspark.progress.fileMarker.enabled=true` to restore file-level in-flight visibility.
 - Each in-flight marker includes `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`, and available scan metadata such as `format` and `schemaSignature`.
 - In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`. The original `identifier` remains in the JSON body.
 - In-flight markers are removed for completed work and recoverable failures. Unrecovered group/file failures that make the Spark application end as `FAILED` preserve their markers so operators can inspect the last active work.
 - Before setup, PrivySpark acquires `<output>/_progress-preparing.json`.
-- Once setup is ready, it switches to `_progress/active-run.json` with heartbeat updates.
+- Once setup is ready, it switches to `_progress/active-run.json` with heartbeat updates. Heartbeats are updated by a periodic task outside the progress shard write hot path.
 - On the next run, only stale heartbeats, `FAILED` markers, or stale preparing locks are cleaned up.
 - A recent `RUNNING` heartbeat or fresh preparing lock causes a conflict failure instead of cleanup.
 - If `active-run.json` becomes unreadable, the owner run can self-heal it from `meta/run.json`.

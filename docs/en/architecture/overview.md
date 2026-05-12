@@ -31,10 +31,10 @@
 6. build first-pass groups by `(directory, format)`
 7. sample a representative file for schema detection
 8. perform schema-aware split and determine whether directory identifiers are safe
-9. exact-split revalidate sampled multi-file groups before scanning
+9. exact-split revalidate sampled CSV and JSON groups before scanning
 10. acquire `<output>/_progress-preparing.json`, prepare `<output>/_progress/<run_id>`, clean stale progress
-11. batch scan non-sampled batch-capable groups, optionally with file sampling
-12. direct-file scan non-sampled `xlsx` groups
+11. batch scan batch-capable groups, including sampled non-CSV/non-JSON groups, optionally with file sampling
+12. direct-file scan `xlsx` and other non-batch groups
 13. fall back to file-level scanning if a normal group batch scan fails
 14. create in-flight markers while group/file/allowlist work is active, then write progress JSONL shards when a group or file completes
 15. merge progress JSONL into final `scan_results` and `scan_errors`, then remove `_progress/<run_id>`
@@ -52,16 +52,18 @@
 - `--file-sample-ratio` applies to both batch scans and file-fallback scans, but only when a group has more files than `--file-sample-min-files`; when it does apply, PrivySpark selects a stable hash-ranked file subset of size `ceil(fileCount * ratio)` with at least one file.
 - When file sampling actually applies, `--sample-ratio < 1.0` is ignored for that group and a warning is logged.
 - File-sampled group review rows record `review_scope_file_identifiers` and `review_scope_file_fingerprints` only for the selected files, not for the entire group directory.
+- Sampled non-CSV/non-JSON groups run bounded schema validation before the batch path and keep file-level identifiers when validation and batch scan both succeed.
 - Sampled groups are never promoted to directory-level identifiers before exact-split validation.
 - Archive and Excel logical inputs keep their own identifiers.
 - The public output contract defaults to `parquet/scan_results` and `parquet/scan_errors`, and CLI `--output-format` can additionally materialize `csv/...` and `excel/*.xlsx`.
-- Clean completions also emit `meta/completions` markers.
+- Clean completions also emit `meta/completions` markers. File fallback scans buffer file progress in memory by default and flush once when the group finishes.
 - In-flight markers under `_progress/<run_id>/in-flight` are best-effort diagnostics for currently active work. Completed work and recoverable failures delete markers; unrecovered group/file failures that make the application `FAILED` preserve them.
 - In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`.
 - `_progress` is cleaned based on staleness when the next run starts. There is no shutdown hook cleanup.
 
 ## Why It Works This Way
 - Keeping `_progress` separate from final outputs preserves both observability and final report integrity.
+- File fallback progress flushes at group granularity to reduce the HDFS hot path created by per-file results/errors/completions shards and heartbeat updates during small-file scans.
 - In-flight markers expose current bottleneck work and the last active group/file work at application failure while preserving the completed-progress JSONL contract.
 - Cleanup happens on the next run instead of a shutdown hook because forced YARN termination and `kill -9` make shutdown hooks unreliable.
 - `_progress-preparing.json` exists so concurrent startup cannot delete another run's freshly created progress root before the active marker is ready.

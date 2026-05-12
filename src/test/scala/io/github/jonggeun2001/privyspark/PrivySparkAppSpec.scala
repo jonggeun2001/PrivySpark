@@ -5,7 +5,7 @@ import io.github.jonggeun2001.privyspark.config.RulesetLoader
 import io.github.jonggeun2001.privyspark.format.{CsvHeaderHeuristic, CsvInference}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CsvDialect, DirectoryScanPlan, PiiRule, PiiRuleMatchType, ScanError, ScanGroup, ScanReadOptions, ScanResult, Suppression}
-import io.github.jonggeun2001.privyspark.progress.ProgressRunManager
+import io.github.jonggeun2001.privyspark.progress.{ProgressIO, ProgressRunManager}
 import io.github.jonggeun2001.privyspark.report.{ReportWriter, WriteReportsRequest}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, DirectoryScanner, GroupScanCoordinator, ParseOkCache, SchemaSignatureCache}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig
@@ -405,9 +405,15 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       )
 
       assert(errors.isEmpty)
-      assert(results.map(_.file_identifier).toSet == Set("events"))
+      assert(results.map(_.file_identifier).toSet == Set(
+        "events/dt=2026-04-28/bucket_00000/part-a.parquet",
+        "events/dt=2026-04-29/country=KR/__HIVE_DEFAULT_LIST_BUCKETING_DIR_NAME__/bucket-00001/part-b.parquet"
+      ))
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
-        Set(("events", "email", 2L)))
+        Set(
+          ("events/dt=2026-04-28/bucket_00000/part-a.parquet", "email", 1L),
+          ("events/dt=2026-04-29/country=KR/__HIVE_DEFAULT_LIST_BUCKETING_DIR_NAME__/bucket-00001/part-b.parquet", "email", 1L)
+        ))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -435,18 +441,18 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         }
       }
 
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_structure_start.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_files_discovered.*duration_ms=\d+.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_execute_start.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_progress.*completed_files=\d+.*total_files=\d+.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_execute_complete.*duration_ms=\d+.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_collect_start.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_pre_scan_collect_complete.*duration_ms=\d+.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_group_build_start.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_initial_groups_ready.*duration_ms=\d+.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_group_schema_sample_start.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_group_planned.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_directory_structure_complete.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_structure_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_files_discovered.*duration_ms=\d+.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_pre_scan_execute_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_pre_scan_progress.*completed_files=\d+.*total_files=\d+.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_pre_scan_execute_complete.*duration_ms=\d+.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_pre_scan_collect_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_pre_scan_collect_complete.*duration_ms=\d+.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_group_build_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_initial_groups_ready.*duration_ms=\d+.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_group_schema_sample_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_group_planned.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_directory_structure_complete.*""")))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2530,7 +2536,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("scanGroup exact split restores directory identifier for eligible sampled parquet groups") {
+  test("scanGroup keeps eligible sampled parquet groups on file identifiers when batch scan succeeds") {
     val inputDir = Files.createTempDirectory("privyspark-sampled-parquet-dir-id-")
     val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
     val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
@@ -2582,9 +2588,14 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(group.schemaSampled)
       assert(!group.useDirectoryIdentifier)
       assert(errors.isEmpty)
-      assert(results.map(_.file_identifier).toSet == Set("users"))
+      assert(results.map(_.file_identifier).toSet == Set("users/part-a.parquet", "users/part-b.parquet"))
       assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
-        Set(("users", "email", 2L), ("users", "phone", 2L)))
+        Set(
+          ("users/part-a.parquet", "email", 1L),
+          ("users/part-a.parquet", "phone", 1L),
+          ("users/part-b.parquet", "email", 1L),
+          ("users/part-b.parquet", "phone", 1L)
+        ))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -2811,10 +2822,22 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         }
       }
 
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_batch_start.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] read_source_start.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_batch_source_ready.*""")))
-      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] group_scan_batch_complete.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] group_scan_batch_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] read_source_start.*""")))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] group_scan_batch_source_ready.*""")))
+      assert(logs.linesIterator.exists(line =>
+        line.contains("group_scan_tcp_snapshot") &&
+          line.contains("phase=batch_action_start") &&
+          line.contains("action=sampled_rows_by_file") &&
+          line.contains("dataframe_cached=false")
+      ))
+      assert(logs.linesIterator.exists(line =>
+        line.contains("group_scan_tcp_snapshot") &&
+          line.contains("phase=batch_action_complete") &&
+          line.contains("action=aggregate_matches") &&
+          line.contains("duration_ms=")
+      ))
+      assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[DEBUG\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] group_scan_batch_complete.*""")))
     } finally {
       deleteRecursively(inputDir)
     }
@@ -3403,7 +3426,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(exit.code == 1)
     }
 
-    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[ERROR\]\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] scan_failed.*reason="spark bootstrap failed".*""")))
+    assert(logs.linesIterator.exists(_.matches("""\[PrivySpark\]\[ERROR\]\[\d{4}-\d{2}-\d{2}T[^\]]+(?:Z|[+-]\d{2}:\d{2})\] scan_failed.*reason="spark bootstrap failed".*""")))
   }
 
   test("scanGroups parallel should match sequential results") {
@@ -5427,6 +5450,7 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(results.forall(result => result.sample_raw_value == "alice@example.com" && result.sample_matched_fragment == "alice@example.com"))
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/results"), ".jsonl") == 1L)
       assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/errors"), ".jsonl") == 1L)
+      assert(countFilesWithExtension(outputDir.resolve(s"_progress/${progressRun.runId}/meta/completions"), ".jsonl") == 1L)
     } finally {
       deleteRecursively(inputDir)
       deleteRecursively(outputDir)
@@ -5438,6 +5462,8 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
 
     val inputDir = Files.createTempDirectory("privyspark-progress-live-input-")
     val outputDir = Files.createTempDirectory("privyspark-progress-live-output-")
+    val previousFlushMode = spark.conf.getOption(ProgressIO.ProgressFlushModeConfKey)
+    spark.conf.set(ProgressIO.ProgressFlushModeConfKey, "file")
 
     try {
       val slowFile = inputDir.resolve("slow.csv")
@@ -5490,6 +5516,10 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(results.nonEmpty)
       assert(errors.nonEmpty)
     } finally {
+      previousFlushMode match {
+        case Some(value) => spark.conf.set(ProgressIO.ProgressFlushModeConfKey, value)
+        case None => spark.conf.unset(ProgressIO.ProgressFlushModeConfKey)
+      }
       deleteRecursively(inputDir)
       deleteRecursively(outputDir)
     }

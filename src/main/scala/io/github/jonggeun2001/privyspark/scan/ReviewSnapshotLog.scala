@@ -3,7 +3,7 @@ package io.github.jonggeun2001.privyspark.scan
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.deleteStagingPath
 import io.github.jonggeun2001.privyspark.model.ScanGroup
 import io.github.jonggeun2001.privyspark.review.{FileIdentifierResolver, RecordedFileFingerprint, ReviewScopeFingerprintCodec, ReviewScopeIdentifierCodec}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveLogicalIdentifier, resolvePhysicalPath}
 import org.apache.hadoop.fs.Path
 
@@ -35,8 +35,16 @@ private[privyspark] object ReviewSnapshotLog {
     val stagedPath = new Path(stagingRoot, sourcePath.getName)
     var inputStream: InputStream = null
     var outputStream: OutputStream = null
+    var bytesCopied = 0L
+    val startNanos = System.nanoTime()
 
     try {
+      DriverTcpConnectionLogger.debugSnapshot(
+        "group_scan_tcp_snapshot",
+        "phase" -> "review_snapshot_stage_start",
+        "file" -> sourcePath.toString,
+        "file_identifier" -> logicalIdentifier
+      )
       val sourceStatus = sourceFs.getFileStatus(sourcePath)
       val expectedFileSize = group.fileSizesByKey.getOrElse(sourceKey, sourceStatus.getLen)
       val expectedFileMtimeEpochMs = group.fileMtimesByKey.getOrElse(sourceKey, sourceStatus.getModificationTime)
@@ -56,10 +64,19 @@ private[privyspark] object ReviewSnapshotLog {
         if (bytesRead > 0) {
           outputStream.write(buffer, 0, bytesRead)
           crc32.update(buffer, 0, bytesRead)
+          bytesCopied += bytesRead
         }
         bytesRead = inputStream.read(buffer)
       }
 
+      DriverTcpConnectionLogger.debugSnapshot(
+        "group_scan_tcp_snapshot",
+        "phase" -> "review_snapshot_stage_complete",
+        "file" -> sourcePath.toString,
+        "file_identifier" -> logicalIdentifier,
+        "bytes_copied" -> bytesCopied,
+        "duration_ms" -> elapsedMs(startNanos)
+      )
       Right(StagedFileSnapshot(
         stagedRoot = stagingRoot.toString,
         stagedPath = stagedPath.toString,
@@ -73,6 +90,15 @@ private[privyspark] object ReviewSnapshotLog {
       ))
     } catch {
       case NonFatal(e) =>
+        DriverTcpConnectionLogger.debugSnapshot(
+          "group_scan_tcp_snapshot",
+          "phase" -> "review_snapshot_stage_error",
+          "file" -> sourcePath.toString,
+          "file_identifier" -> logicalIdentifier,
+          "bytes_copied" -> bytesCopied,
+          "duration_ms" -> elapsedMs(startNanos),
+          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+        )
         deleteStagingPath(conf, stagingRoot.toString)
         Left(s"Scan staging failed: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}")
     } finally {
@@ -96,8 +122,38 @@ private[privyspark] object ReviewSnapshotLog {
     fileSize: Long,
     fileMtimeEpochMs: Long
   ): RecordedFileFingerprint = {
-    val checksum = crc32Hex(conf, physicalPath)
-    recordedFingerprint(fileIdentifier, fileSize, fileMtimeEpochMs, checksum)
+    val startNanos = System.nanoTime()
+    DriverTcpConnectionLogger.debugSnapshot(
+      "group_scan_tcp_snapshot",
+      "phase" -> "recorded_fingerprint_start",
+      "file" -> physicalPath,
+      "file_identifier" -> fileIdentifier,
+      "file_size" -> fileSize
+    )
+    try {
+      val checksum = crc32Hex(conf, physicalPath)
+      DriverTcpConnectionLogger.debugSnapshot(
+        "group_scan_tcp_snapshot",
+        "phase" -> "recorded_fingerprint_complete",
+        "file" -> physicalPath,
+        "file_identifier" -> fileIdentifier,
+        "file_size" -> fileSize,
+        "duration_ms" -> elapsedMs(startNanos)
+      )
+      recordedFingerprint(fileIdentifier, fileSize, fileMtimeEpochMs, checksum)
+    } catch {
+      case NonFatal(e) =>
+        DriverTcpConnectionLogger.debugSnapshot(
+          "group_scan_tcp_snapshot",
+          "phase" -> "recorded_fingerprint_error",
+          "file" -> physicalPath,
+          "file_identifier" -> fileIdentifier,
+          "file_size" -> fileSize,
+          "duration_ms" -> elapsedMs(startNanos),
+          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
+        )
+        throw e
+    }
   }
 
   def recordedFingerprint(
@@ -200,4 +256,7 @@ private[privyspark] object ReviewSnapshotLog {
       }
     }
   }
+
+  private def elapsedMs(startNanos: Long): Long =
+    (System.nanoTime() - startNanos) / 1000000L
 }

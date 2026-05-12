@@ -4,17 +4,24 @@ import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.hive.{HiveTableFqnResolver, HiveTableLookupIndex}
 import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, MatchCount, PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
-import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
+import io.github.jonggeun2001.privyspark.progress.{ProgressBuffer, ProgressIO}
+import io.github.jonggeun2001.privyspark.progress.ProgressIO.{ProgressFlushMode, persistProgressRecords}
 import io.github.jonggeun2001.privyspark.review.{AllowlistMatcher, ReviewScopeFingerprintCodec}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger, RpcGate}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{executeInParallel, resolveFileParallelism, resolveParallelism}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveDirectoryIdentifier, resolveLogicalIdentifier, resolvePhysicalPath}
+import org.apache.spark.SparkConf
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 
 import scala.collection.mutable.ArrayBuffer
 
 private[privyspark] object GroupFileScanner {
+  val FileInFlightMarkerEnabledConfKey = "spark.privyspark.progress.fileMarker.enabled"
+
+  def fileInFlightMarkersEnabled(conf: SparkConf): Boolean =
+    conf.getBoolean(FileInFlightMarkerEnabledConfKey, false)
+
   def scanGroupByFile(
     spark: SparkSession,
     datasetPath: String,
@@ -63,14 +70,64 @@ private[privyspark] object GroupFileScanner {
       "use_directory_identifier" -> group.useDirectoryIdentifier,
       "parallelism" -> parallelism
     )
+    DriverTcpConnectionLogger.debugSnapshot(
+      "group_scan_tcp_snapshot",
+      "phase" -> "file_scan_parallelism",
+      "directory" -> group.directoryPath,
+      "format" -> group.format,
+      "schema" -> group.schemaSignature,
+      "files" -> group.filePaths.size,
+      "selected_files" -> effectiveSelectedSourceKeys.size,
+      "use_directory_identifier" -> group.useDirectoryIdentifier,
+      "parallelism" -> parallelism
+    )
     val successfulFileMetrics = ArrayBuffer.empty[FileScanMetrics]
     val fallbackErrors = ArrayBuffer.empty[ScanError]
+    val rpcGate = RpcGate.driverGate(spark)
+    val fileMarkersEnabled = fileInFlightMarkersEnabled(spark.sparkContext.getConf)
+    val progressFlushMode = ProgressIO.resolveFlushMode(spark)
+    val groupProgressBuffer =
+      if (!group.useDirectoryIdentifier && progressFlushMode == ProgressFlushMode.Group) {
+        progressRun.map(run => new ProgressBuffer(spark.sparkContext.hadoopConfiguration, run, "group", group.directoryPath))
+      } else {
+        None
+      }
+
+    def persistFileProgress(identifier: String, results: Seq[ScanResult], errors: Seq[ScanError]): Unit = {
+      progressRun.foreach { run =>
+        groupProgressBuffer match {
+          case Some(buffer) =>
+            buffer.enqueue(results, errors)
+          case None =>
+            persistProgressRecords(
+              spark.sparkContext.hadoopConfiguration,
+              run,
+              "file",
+              identifier,
+              results,
+              errors
+            )
+        }
+      }
+    }
+
     executeInParallel(parallelism, effectiveSelectedSourceKeys.map { sourceKey =>
       () => {
         val physicalPath = resolvePhysicalPath(group, sourceKey)
         val logicalIdentifier = resolveLogicalIdentifier(group, datasetPath, sourceKey)
         val fileHiveTableFqn = HiveTableFqnResolver.resolve(hiveLookup, physicalPath)
         DriverLogger.debug("group_scan_fallback_file_start", "file" -> physicalPath, "directory" -> group.directoryPath)
+        DriverTcpConnectionLogger.debugSnapshot(
+          "group_scan_tcp_snapshot",
+          "phase" -> "file_scan_source_start",
+          "directory" -> group.directoryPath,
+          "format" -> group.format,
+          "schema" -> group.schemaSignature,
+          "file" -> physicalPath,
+          "file_identifier" -> logicalIdentifier,
+          "use_directory_identifier" -> group.useDirectoryIdentifier,
+          "effective_sample_ratio" -> effectiveSampleRatio
+        )
         def scanFileMetrics(): Either[ScanError, FileScanMetrics] =
           if (group.useDirectoryIdentifier) {
             SourceKeyMetrics.scanSourceKeyUsingSnapshot(
@@ -154,7 +211,7 @@ private[privyspark] object GroupFileScanner {
             }
           }
         val fileMetrics = progressRun match {
-          case Some(run) =>
+          case Some(run) if fileMarkersEnabled =>
             InFlightMarker.run(
               spark.sparkContext.hadoopConfiguration,
               run.inFlightPath,
@@ -167,21 +224,14 @@ private[privyspark] object GroupFileScanner {
             }
           case None =>
             scanFileMetrics()
+          case Some(_) =>
+            scanFileMetrics()
         }
         sourceKey -> fileMetrics
           .fold(
             error => {
               if (!group.useDirectoryIdentifier) {
-                progressRun.foreach { run =>
-                  persistProgressRecords(
-                    spark.sparkContext.hadoopConfiguration,
-                    run,
-                    "file",
-                    error.file_identifier,
-                    Seq.empty,
-                    Seq(error)
-                  )
-                }
+                persistFileProgress(error.file_identifier, Seq.empty, Seq(error))
               }
               Left(error)
             },
@@ -206,22 +256,13 @@ private[privyspark] object GroupFileScanner {
                     reviewScopeFileFingerprints = ReviewSnapshotLog.encodeRecordedFingerprint(fileMetrics.recordedFingerprint)
                   )
                 )
-                progressRun.foreach { run =>
-                  persistProgressRecords(
-                    spark.sparkContext.hadoopConfiguration,
-                    run,
-                    "file",
-                    fileMetrics.fileIdentifier,
-                    fileResults,
-                    Seq.empty
-                  )
-                }
+                persistFileProgress(fileMetrics.fileIdentifier, fileResults, Seq.empty)
               }
               Right(fileMetrics)
             }
           )
       }
-    }).foreach {
+    }, gate = rpcGate).foreach {
       case (sourceKey, fileResult) =>
         val physicalPath = resolvePhysicalPath(group, sourceKey)
         fileResult match {
@@ -229,6 +270,17 @@ private[privyspark] object GroupFileScanner {
             successfulFileMetrics += fileMetrics
             DriverLogger.debug(
               "group_scan_fallback_file_success",
+              "file" -> physicalPath,
+              "file_identifier" -> fileMetrics.fileIdentifier,
+              "sampled_rows" -> fileMetrics.sampledRowCount,
+              "matches" -> fileMetrics.matchCounts.size
+            )
+            DriverTcpConnectionLogger.debugSnapshot(
+              "group_scan_tcp_snapshot",
+              "phase" -> "file_scan_source_complete",
+              "directory" -> group.directoryPath,
+              "format" -> group.format,
+              "schema" -> group.schemaSignature,
               "file" -> physicalPath,
               "file_identifier" -> fileMetrics.fileIdentifier,
               "sampled_rows" -> fileMetrics.sampledRowCount,
@@ -242,8 +294,19 @@ private[privyspark] object GroupFileScanner {
               "file_identifier" -> error.file_identifier,
               "reason" -> error.error_message
             )
+            DriverTcpConnectionLogger.debugSnapshot(
+              "group_scan_tcp_snapshot",
+              "phase" -> "file_scan_source_error",
+              "directory" -> group.directoryPath,
+              "format" -> group.format,
+              "schema" -> group.schemaSignature,
+              "file" -> physicalPath,
+              "file_identifier" -> error.file_identifier,
+              "reason" -> error.error_message
+            )
         }
     }
+    groupProgressBuffer.foreach(_.flush())
 
     val fallbackResults = if (group.useDirectoryIdentifier && fallbackErrors.isEmpty) {
       val directoryHiveTableFqn = HiveTableFqnResolver.resolve(hiveLookup, group.directoryPath)

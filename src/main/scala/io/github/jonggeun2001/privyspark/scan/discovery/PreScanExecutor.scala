@@ -9,7 +9,7 @@ import io.github.jonggeun2001.privyspark.model.{PreScanFileOutcome, ScanError, S
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion.expandPhysicalSource
 import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging.ArchiveFormats
 import io.github.jonggeun2001.privyspark.scan.CsvHeadCache
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, RpcGate}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.executeInParallel
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{normalizeHiveLayoutGroupingPath, resolveRelativeIdentifier}
 import org.apache.hadoop.fs.Path
@@ -56,7 +56,8 @@ private[privyspark] object PreScanExecutor {
     parallelism: Int,
     readOptions: ScanReadOptions,
     ignoreMatcher: IgnoreMatcher,
-    csvHeadCache: CsvHeadCache
+    csvHeadCache: CsvHeadCache,
+    rpcGate: Option[RpcGate] = None
   ): Seq[PreScanFileOutcome] = {
     val conf = spark.sparkContext.hadoopConfiguration
     val preScanStartedAt = System.nanoTime()
@@ -169,6 +170,6 @@ private[privyspark] object PreScanExecutor {
         }
         outcome
       }
-    })
+    }, gate = rpcGate)
   }
 }
