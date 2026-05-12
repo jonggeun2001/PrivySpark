@@ -61,7 +61,8 @@
 - `progress/ProgressIO.scala`: flush mode 설정 L19-L44, progress JSONL write L46/L108.
 - `progress/ProgressBuffer.scala`: group 단위 progress buffering L11, enqueue L23, flush L30.
 - `progress/ProgressRunManager.scala`: progress run prepare L21, merge L88-L101, active heartbeat L154-L181.
-- `util/DriverTcpConnectionSnapshot.scala`: Linux `/proc` 기반 driver TCP socket snapshot capture와 `group_scan_tcp_snapshot` debug log helper.
+- `format/CsvInference.scala`: CSV/header schema inference와 `read_schema_source_tcp_snapshot` schema-read TCP 진단 로그.
+- `util/DriverTcpConnectionSnapshot.scala`: Linux `/proc` 기반 driver TCP socket snapshot capture, ESTABLISHED endpoint 집계, TCP debug log helper.
 - `util/RpcGate.scala`: `spark.privyspark.driverRpcConcurrency` 기반 driver-side RPC성 작업 동시성 gate.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.

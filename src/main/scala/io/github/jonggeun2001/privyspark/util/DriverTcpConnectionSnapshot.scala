@@ -11,6 +11,8 @@ private[privyspark] final case class DriverTcpConnectionSnapshot(
   tcpFdCount: Int,
   stateCounts: Map[String, Int],
   remotePortCounts: Map[Int, Int],
+  establishedRemotePortCounts: Map[Int, Int],
+  establishedRemoteEndpointCounts: Map[String, Int],
   unavailableReason: Option[String] = None
 ) {
   def fields: Seq[(String, Any)] = {
@@ -19,7 +21,9 @@ private[privyspark] final case class DriverTcpConnectionSnapshot(
         "tcp_snapshot_available" -> true,
         "tcp_fd_count" -> tcpFdCount,
         "tcp_states" -> DriverTcpConnectionSnapshot.renderStateCounts(stateCounts),
-        "tcp_remote_ports_top" -> DriverTcpConnectionSnapshot.renderRemotePortCounts(remotePortCounts)
+        "tcp_remote_ports_top" -> DriverTcpConnectionSnapshot.renderRemotePortCounts(remotePortCounts),
+        "tcp_established_remote_ports_top" -> DriverTcpConnectionSnapshot.renderRemotePortCounts(establishedRemotePortCounts),
+        "tcp_established_remote_endpoints_top" -> DriverTcpConnectionSnapshot.renderRemoteEndpointCounts(establishedRemoteEndpointCounts)
       )
     } else {
       Seq(
@@ -101,11 +105,14 @@ private[privyspark] object DriverTcpConnectionSnapshot {
     procTcpLines: Seq[String]
   ): DriverTcpConnectionSnapshot = {
     val entries = procTcpLines.flatMap(parseTcpEntry(_, socketInodes))
+    val establishedEntries = entries.filter(_.state == "ESTABLISHED")
     DriverTcpConnectionSnapshot(
       available = true,
       tcpFdCount = entries.size,
       stateCounts = entries.groupBy(_.state).map { case (state, values) => state -> values.size },
-      remotePortCounts = entries.groupBy(_.remotePort).map { case (port, values) => port -> values.size }
+      remotePortCounts = entries.groupBy(_.remotePort).map { case (port, values) => port -> values.size },
+      establishedRemotePortCounts = establishedEntries.groupBy(_.remotePort).map { case (port, values) => port -> values.size },
+      establishedRemoteEndpointCounts = establishedEntries.groupBy(_.remoteEndpoint).map { case (endpoint, values) => endpoint -> values.size }
     )
   }
 
@@ -124,7 +131,7 @@ private[privyspark] object DriverTcpConnectionSnapshot {
     }
   }
 
-  private final case class TcpEntry(state: String, remotePort: Int)
+  private final case class TcpEntry(state: String, remotePort: Int, remoteEndpoint: String)
 
   private def parseTcpEntry(line: String, socketInodes: Set[String]): Option[TcpEntry] = {
     val parts = line.trim.split("\\s+")
@@ -139,20 +146,40 @@ private[privyspark] object DriverTcpConnectionSnapshot {
 
     for {
       state <- StateNames.get(parts(3).toUpperCase)
-      remotePort <- parseRemotePort(parts(2))
-    } yield TcpEntry(state, remotePort)
+      remote <- parseRemoteEndpoint(parts(2))
+    } yield TcpEntry(state, remote.port, remote.endpoint)
   }
 
-  private def parseRemotePort(remoteAddress: String): Option[Int] = {
+  private final case class RemoteEndpoint(host: String, port: Int) {
+    def endpoint: String = s"$host:$port"
+  }
+
+  private def parseRemoteEndpoint(remoteAddress: String): Option[RemoteEndpoint] = {
     val index = remoteAddress.lastIndexOf(':')
     if (index < 0 || index == remoteAddress.length - 1) {
       None
     } else {
       try {
-        Some(Integer.parseInt(remoteAddress.substring(index + 1), 16))
+        val host = parseRemoteHost(remoteAddress.substring(0, index))
+        val port = Integer.parseInt(remoteAddress.substring(index + 1), 16)
+        Some(RemoteEndpoint(host, port))
       } catch {
         case NonFatal(_) => None
       }
+    }
+  }
+
+  private[privyspark] def parseRemoteHost(rawAddress: String): String = {
+    val normalized = rawAddress.toUpperCase
+    if (normalized.length == 8) {
+      normalized
+        .grouped(2)
+        .toSeq
+        .reverse
+        .map(Integer.parseInt(_, 16).toString)
+        .mkString(".")
+    } else {
+      normalized
     }
   }
 
@@ -162,6 +189,8 @@ private[privyspark] object DriverTcpConnectionSnapshot {
       tcpFdCount = 0,
       stateCounts = Map.empty,
       remotePortCounts = Map.empty,
+      establishedRemotePortCounts = Map.empty,
+      establishedRemoteEndpointCounts = Map.empty,
       unavailableReason = Some(reason)
     )
 
@@ -176,6 +205,13 @@ private[privyspark] object DriverTcpConnectionSnapshot {
         .sortBy { case (port, count) => (-count, port) }
         .take(5)
         .map { case (port, count) => port.toString -> count }
+    )
+
+  private[privyspark] def renderRemoteEndpointCounts(remoteEndpointCounts: Map[String, Int]): String =
+    renderCounts(
+      remoteEndpointCounts.toSeq
+        .sortBy { case (endpoint, count) => (-count, endpoint) }
+        .take(5)
     )
 
   private def renderCounts(counts: Seq[(String, Int)]): String =
