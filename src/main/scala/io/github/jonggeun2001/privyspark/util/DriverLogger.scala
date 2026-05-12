@@ -29,8 +29,12 @@ private[privyspark] object DriverLogLevel {
 private[privyspark] object DriverLogger {
   val PropertyName = "privyspark.debug"
   val EnvName = "PRIVYSPARK_DEBUG"
+  val TimestampPatternPropertyName = "privyspark.debug.timestampPattern"
+  val TimestampPatternEnvName = "PRIVYSPARK_DEBUG_TIMESTAMP_PATTERN"
+  val DefaultTimestampPattern = "uuuu-MM-dd'T'HH:mm:ss.SSSXXX"
 
   @volatile private var currentLogLevelCache: DriverLogLevel = _
+  @volatile private var timestampFormatterCache: DateTimeFormatter = _
 
   def currentLogLevel: DriverLogLevel = {
     val cached = currentLogLevelCache
@@ -52,6 +56,7 @@ private[privyspark] object DriverLogger {
 
   def resetCache(): Unit = {
     currentLogLevelCache = null
+    timestampFormatterCache = null
   }
 
   def debug(event: String, fields: (String, Any)*): Unit = {
@@ -96,8 +101,36 @@ private[privyspark] object DriverLogger {
     s"[PrivySpark][${level.label}][${currentTimestamp}] $event$suffix"
   }
 
+  private[privyspark] def formatTimestamp(timestamp: OffsetDateTime): String = {
+    timestamp.format(currentTimestampFormatter)
+  }
+
   private def currentTimestamp: String = {
-    OffsetDateTime.now(ZoneId.systemDefault()).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+    formatTimestamp(OffsetDateTime.now(ZoneId.systemDefault()))
+  }
+
+  private def currentTimestampFormatter: DateTimeFormatter = {
+    val cached = timestampFormatterCache
+    if (cached != null) {
+      cached
+    } else {
+      val resolved = resolveTimestampFormatter(sys.props.get(TimestampPatternPropertyName), sys.env.get(TimestampPatternEnvName))
+      timestampFormatterCache = resolved
+      resolved
+    }
+  }
+
+  private[privyspark] def resolveTimestampFormatter(propertyValue: Option[String], envValue: Option[String]): DateTimeFormatter = {
+    val pattern = propertyValue
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .orElse(envValue.map(_.trim).filter(_.nonEmpty))
+      .getOrElse(DefaultTimestampPattern)
+    try {
+      DateTimeFormatter.ofPattern(pattern)
+    } catch {
+      case _: IllegalArgumentException => DateTimeFormatter.ofPattern(DefaultTimestampPattern)
+    }
   }
 
   private def renderValue(value: Any): String = {

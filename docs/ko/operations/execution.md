@@ -119,6 +119,8 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - 기본값은 `warn`입니다.
 - 하위호환으로 `true`는 `debug`, `false`는 `warn`으로 해석합니다.
 - 로그 포맷은 `[PrivySpark][LEVEL][offset을 포함한 driver local ISO-8601 timestamp] event key=value...`입니다.
+- 기본 timestamp 패턴은 `uuuu-MM-dd'T'HH:mm:ss.SSSXXX`이며 초 이하 자릿수는 항상 millisecond 3자리(`ss.SSS`)로 고정됩니다.
+- timestamp 패턴은 `PRIVYSPARK_DEBUG_TIMESTAMP_PATTERN` 또는 `-Dprivyspark.debug.timestampPattern=<DateTimeFormatter pattern>`로 바꿀 수 있습니다. 빈 값이나 잘못된 패턴은 기본값으로 되돌립니다.
 
 `info` 레벨은 `scan_start`, `scan_plan_ready`, `scan_complete` 같은 상위 lifecycle을 보여주고, `debug` 레벨은 파일 발견, pre-scan 실행, 그룹화, progress 준비/쓰기/merge 같은 상세 이벤트를 추가로 남깁니다.
 
