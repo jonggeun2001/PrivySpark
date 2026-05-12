@@ -131,26 +131,77 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
-  test("prepareSampledGroupForBatchScan skips exact split for sampled non-csv/json groups") {
-    Seq("text", "parquet", "orc", "avro").foreach { format =>
+  test("prepareSampledGroupForBatchScan skips exact split for sampled text groups") {
+    val group = ScanGroup(
+      directoryPath = "/data/users",
+      format = "text",
+      schemaSignature = "value",
+      filePaths = Seq("/missing/a.log", "/missing/b.log"),
+      schemaSampled = true,
+      directoryIdentifierEligible = true
+    )
+
+    val result = GroupScanCoordinator.prepareSampledGroupForBatchScan(
+      spark,
+      "/data",
+      Timestamp,
+      group,
+      new CsvHeadCache()
+    )
+
+    assert(result == Right(group))
+  }
+
+  test("scanGroup exact-splits sampled Parquet groups when later files add columns") {
+    val inputDir = Files.createTempDirectory("privyspark-coordinator-sampled-parquet-drift-")
+    val leftWriteDir = Files.createDirectory(inputDir.resolve("left-source"))
+    val rightWriteDir = Files.createDirectory(inputDir.resolve("right-source"))
+    val groupedDir = Files.createDirectories(inputDir.resolve("users"))
+
+    try {
+      import spark.implicits._
+
+      Seq("alice")
+        .toDF("name")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(leftWriteDir.toString)
+      Seq("010-1234-5678")
+        .toDF("phone")
+        .coalesce(1)
+        .write
+        .mode("overwrite")
+        .parquet(rightWriteDir.toString)
+
+      val left = groupedDir.resolve("part-a.parquet")
+      val right = groupedDir.resolve("part-b.parquet")
+      Files.move(findDataFile(leftWriteDir, ".parquet").get, left)
+      Files.move(findDataFile(rightWriteDir, ".parquet").get, right)
+
       val group = ScanGroup(
-        directoryPath = "/data/users",
-        format = format,
-        schemaSignature = "value",
-        filePaths = Seq(s"/missing/a.$format", s"/missing/b.$format"),
-        schemaSampled = true,
-        directoryIdentifierEligible = true
+        directoryPath = groupedDir.toString,
+        format = "parquet",
+        schemaSignature = "name",
+        filePaths = Seq(left.toString, right.toString),
+        schemaSampled = true
       )
+      val phoneRule = PiiRule("phone", "\\b\\d{2,3}-\\d{3,4}-\\d{4}\\b")
 
-      val result = GroupScanCoordinator.prepareSampledGroupForBatchScan(
+      val (results, errors) = GroupScanCoordinator.scanGroup(
         spark,
-        "/data",
-        Timestamp,
+        inputDir.toString,
         group,
-        new CsvHeadCache()
+        Seq(phoneRule),
+        sampleRatio = 1.0,
+        timestamp = Timestamp
       )
 
-      assert(result == Right(group))
+      assert(errors.isEmpty)
+      assert(results.map(result => (result.file_identifier, result.column_name, result.match_count)).toSet ==
+        Set(("users/part-b.parquet", "phone", 1L)))
+    } finally {
+      deleteRecursively(inputDir)
     }
   }
 

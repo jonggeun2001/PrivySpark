@@ -45,10 +45,11 @@
 - 다중 파일 그룹은 대표 파일 1개로 스키마를 먼저 샘플링할 수 있습니다.
 - 그룹별 schema split은 `--pre-scan-parallelism`을 재사용해 driver 측에서 병렬 수행합니다.
 - sampled CSV/JSON group은 스캔 전에 exact split으로 다시 검증합니다.
-- sampled `text`, Parquet, ORC, Avro group은 batch 전 exact schema validation을 건너뛰고 batch 경로에서 파일 식별자를 유지합니다.
+- sampled `text` group은 스키마가 단일 `value` 컬럼으로 고정되어 있으므로 batch 전 exact schema validation을 건너뜁니다.
+- sampled Parquet, ORC, Avro처럼 batch scan 가능한 group은 batch 전에 bounded exact schema validation을 유지하고, validation과 batch scan이 모두 성공하면 파일 식별자를 유지합니다.
 - CSV는 fallback 또는 명시적 exact 경로에서 exact split에 도달한 경우 헤더 유무 드리프트도 다시 확인합니다.
 
-스키마 샘플링을 별도 단계로 둔 이유는 두 가지입니다. 첫째, 같은 디렉토리라도 실제 스키마 드리프트가 있을 수 있으므로 디렉토리 단위 집계를 바로 적용하면 식별자 의미가 깨질 수 있습니다. 둘째, 모든 파일을 처음부터 exact split으로 읽으면 pre-scan 비용이 커지므로 대표 파일 샘플링으로 비용과 정확도 사이를 조정하고 non-CSV/non-JSON small-file group은 driver-side exact split 없이 더 저렴한 batch 경로를 사용합니다.
+스키마 샘플링을 별도 단계로 둔 이유는 두 가지입니다. 첫째, 같은 디렉토리라도 실제 스키마 드리프트가 있을 수 있으므로 디렉토리 단위 집계를 바로 적용하면 식별자 의미가 깨질 수 있습니다. 둘째, 모든 파일을 처음부터 exact split으로 읽으면 pre-scan 비용이 커지므로 대표 파일 샘플링으로 비용과 정확도 사이를 조정합니다. 스키마가 고정된 `text` group은 불필요한 exact split을 피하고, 컬럼 드리프트가 가능한 columnar group은 validation을 유지합니다.
 
 ## CSV 헤더 처리
 - CSV 구분자는 자동 감지합니다. 기본 후보는 콤마, 탭, 세미콜론, 파이프, 콜론, ASCII 정보 구분자이며, `||`, `|~|`처럼 라인 간 반복이 일정한 2-3글자 비영숫자 구분자도 후보로 사용합니다.
@@ -61,6 +62,7 @@
 ## 손상 입력과 fallback
 - JSON이 corrupt record만 생성하면 해당 파일은 손상 입력으로 기록합니다.
 - sampled CSV/JSON multi-file group은 스캔 전에 exact split으로 먼저 재검증합니다.
-- sampled non-CSV/non-JSON batch-capable group은 바로 batch scan으로 진행하며, batch read가 실패하면 fallback 정책에 따라 exact split 재검증 후 다시 스캔할 수 있습니다.
+- sampled `text` group은 대표 스키마 샘플링 후 바로 batch scan으로 진행합니다.
+- sampled Parquet, ORC, Avro group은 batch scan 전에 schema validation을 수행하고, validation에서 drift가 확인되거나 batch read가 실패하면 fallback 정책에 따라 exact split 재검증 후 다시 스캔할 수 있습니다.
 - 일반 group에서 batch scan이 실패하면 별도 schema resplit 없이 파일 단위 fallback으로 전환합니다.
 - 읽기 중 파일 교체/삭제가 발생하면 제한된 횟수 내에서 재시도합니다.
