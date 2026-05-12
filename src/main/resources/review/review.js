@@ -41,6 +41,24 @@
         .replace(/^-+|-+$/g, '');
       return safePath || 'scan';
     }
+    function formatReviewPartSuffix() {
+      const part = REVIEW_DATA.review_part;
+      if (!part) {
+        return '';
+      }
+      const partNumber = String(part.part_number).padStart(4, '0');
+      const partCount = String(part.part_count).padStart(4, '0');
+      return `-part-${partNumber}-of-${partCount}`;
+    }
+    function renderReviewPartInfo() {
+      const element = document.getElementById('reviewPartInfo');
+      const part = REVIEW_DATA.review_part;
+      if (!element || !part) {
+        return;
+      }
+      element.hidden = false;
+      element.textContent = `분할 리뷰 ${part.part_number}/${part.part_count} - finding ${part.finding_start}~${part.finding_end} / ${part.total_findings}. 이 part에서 생성한 응답 JSON을 다른 part 응답과 함께 제출하세요.`;
+    }
     const FormFieldDefaults = {
       decision: '',
       false_positive_reason: '',
@@ -566,7 +584,7 @@
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `review-${formatResponseScanPath(REVIEW_DATA.scan_path)}-${formatResponseTimestamp(new Date())}.csv`;
+      link.download = `review-${formatResponseScanPath(REVIEW_DATA.scan_path)}${formatReviewPartSuffix()}-${formatResponseTimestamp(new Date())}.csv`;
       link.click();
       URL.revokeObjectURL(url);
     }
@@ -895,6 +913,7 @@
         clearResponderValidation();
       }
     });
+    renderReviewPartInfo();
     renderFindings();
     document.getElementById('downloadResponse').addEventListener('click', () => {
       const values = collectFormValues();
@@ -933,11 +952,14 @@
         responded_at: new Date().toISOString(),
         responses: sanitizedResponses
       };
+      if (REVIEW_DATA.review_part) {
+        envelope.review_part = REVIEW_DATA.review_part;
+      }
       const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `response-${formatResponseScanPath(REVIEW_DATA.scan_path)}-${formatResponseTimestamp(new Date())}.json`;
+      link.download = `response-${formatResponseScanPath(REVIEW_DATA.scan_path)}${formatReviewPartSuffix()}-${formatResponseTimestamp(new Date())}.json`;
       link.click();
       URL.revokeObjectURL(url);
     });

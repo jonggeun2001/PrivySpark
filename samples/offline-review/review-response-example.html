@@ -74,6 +74,7 @@
 <body>
   <h1>Review Response Example</h1>
   <p>Scan path: <code id="scanPath"></code></p>
+  <p id="reviewPartInfo" class="status-message" hidden></p>
   <p class="field" id="responderField">
     <label><span>응답자사번</span><input id="responder" required pattern="[a-z0-9]+" autocapitalize="none" spellcheck="false" aria-invalid="false" aria-describedby="responderError"></label>
     <span id="responderError" class="field-error" hidden>응답자사번은 소문자 영어와 숫자만 입력하세요.</span>
@@ -102,6 +103,7 @@
       <li>Excel에서 전체 복사한 뒤 TSV 붙여넣기 칸에 붙여넣고 버튼을 누르면 아래 표에 반영됩니다.</li>
       <li>CSV 파일 업로드는 따옴표로 감싼 쉼표와 줄바꿈을 유지하고, TSV 붙여넣기는 탭과 줄바꿈을 기준으로 반영합니다. Excel이 줄바꿈 포함 셀을 큰따옴표로 감싼 경우 줄바꿈은 셀 내용으로 유지됩니다.</li>
       <li>CSV/TSV 임포트는 <code>finding_key</code> 기준으로 판정/사유/계획/예정일만 반영합니다.</li>
+      <li>검출 건수가 많아 파일이 분할된 경우 각 part 파일을 따로 열어 응답 파일을 생성하고, 생성된 JSON을 모두 제출합니다.</li>
       <li>오탐 사유 예: <code>거래일시 포맷이 운전면허번호 규칙과 충돌</code>, <code>테스트 데이터의 더미 식별자</code>, <code>마스킹된 샘플 값 오인식</code>.</li>
       <li>정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>.</li>
       <li>정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다.</li>
@@ -265,6 +267,24 @@
         .replace(/-+/g, '-')
         .replace(/^-+|-+$/g, '');
       return safePath || 'scan';
+    }
+    function formatReviewPartSuffix() {
+      const part = REVIEW_DATA.review_part;
+      if (!part) {
+        return '';
+      }
+      const partNumber = String(part.part_number).padStart(4, '0');
+      const partCount = String(part.part_count).padStart(4, '0');
+      return `-part-${partNumber}-of-${partCount}`;
+    }
+    function renderReviewPartInfo() {
+      const element = document.getElementById('reviewPartInfo');
+      const part = REVIEW_DATA.review_part;
+      if (!element || !part) {
+        return;
+      }
+      element.hidden = false;
+      element.textContent = `분할 리뷰 ${part.part_number}/${part.part_count} - finding ${part.finding_start}~${part.finding_end} / ${part.total_findings}. 이 part에서 생성한 응답 JSON을 다른 part 응답과 함께 제출하세요.`;
     }
     const FormFieldDefaults = {
       decision: '',
@@ -791,7 +811,7 @@
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `review-${formatResponseScanPath(REVIEW_DATA.scan_path)}-${formatResponseTimestamp(new Date())}.csv`;
+      link.download = `review-${formatResponseScanPath(REVIEW_DATA.scan_path)}${formatReviewPartSuffix()}-${formatResponseTimestamp(new Date())}.csv`;
       link.click();
       URL.revokeObjectURL(url);
     }
@@ -1120,6 +1140,7 @@
         clearResponderValidation();
       }
     });
+    renderReviewPartInfo();
     renderFindings();
     document.getElementById('downloadResponse').addEventListener('click', () => {
       const values = collectFormValues();
@@ -1158,11 +1179,14 @@
         responded_at: new Date().toISOString(),
         responses: sanitizedResponses
       };
+      if (REVIEW_DATA.review_part) {
+        envelope.review_part = REVIEW_DATA.review_part;
+      }
       const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `response-${formatResponseScanPath(REVIEW_DATA.scan_path)}-${formatResponseTimestamp(new Date())}.json`;
+      link.download = `response-${formatResponseScanPath(REVIEW_DATA.scan_path)}${formatReviewPartSuffix()}-${formatResponseTimestamp(new Date())}.json`;
       link.click();
       URL.revokeObjectURL(url);
     });

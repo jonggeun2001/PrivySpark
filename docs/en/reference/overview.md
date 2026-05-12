@@ -11,7 +11,7 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 - Only binary-looking unsupported inputs are recorded as `Unsupported file format`.
 - `--ignore` and `--ignore-file` define scan exclusions by basename or input-root-relative path.
 - `suppressions:` or `--suppress`, `--suppression-file` remove only selected `(column, pii_type)` result pairs.
-- `--review-state-root` automatically collects `inbox/*.json` before the scan starts, updates cumulative offline-review state, applies the state allowlist, and writes `<output>/review/review.html` by default. `--review-html-dir` can point the review file output directory to a separate absolute path or URI.
+- `--review-state-root` automatically collects `inbox/*.json` before the scan starts, updates cumulative offline-review state, applies the state allowlist, and writes `<output>/review/review.html` by default. Review HTML files are capped at 2MB each; oversized reviews are split into a `review.html` index and `review-part-*.html` part files. `--review-html-dir` can point the review file output directory to a separate absolute path or URI.
 
 ## Detection Model
 - Detection uses ruleset-based regexes directly.
@@ -30,7 +30,7 @@ PrivySpark is a Spark-based batch scanner that detects potential PII in a datase
 - Result report: `scan_results`
 - Error report: `scan_errors`
 - Output formats: Parquet + CSV
-- Offline review, when enabled: `<output>/review/review.html` by default, or `review.html` under the directory configured by `--review-html-dir`
+- Offline review, when enabled: `<output>/review/review.html` by default, or `review.html` under the directory configured by `--review-html-dir`; reviews over 2MB also create `review-part-*.html` files in the same directory
 - During long scans, intermediate JSONL shards may appear under `<output>/_progress/<run_id>`, but they are not the final consumer contract.
 
 ## Sample Datasets
