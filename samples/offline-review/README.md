@@ -14,7 +14,7 @@
 - False-positive responses use recurring review state only; exact scope and pattern selector controls are not shown.
 - False-positive reason and true-positive action-plan fields are split into individual columns and shown based on the selected decision. False-positive expiry is not shown in the review UI.
 - Use the bulk true-positive button to fill `action_plan` and `action_due_date` for findings already marked `true_positive`, or the bulk false-positive button to fill `false_positive_reason` for findings already marked `false_positive`.
-- Use the CSV download button for Excel editing. If corporate security software encrypts saved CSV files, import the decrypted CSV back into the page or paste the CSV text. Quoted commas and embedded line breaks remain part of the same cell.
+- Use the CSV download button for Excel editing. If corporate security software encrypts saved CSV files, import the decrypted CSV back into the page or paste the TSV clipboard text copied from Excel. CSV upload preserves quoted commas and embedded line breaks, while TSV paste preserves embedded line breaks when Excel wraps the cell in double quotes.
 - The download button validates every finding before creating JSON. Missing decisions, false-positive reasons, action plans, due dates, or due dates outside the next 30 days are highlighted in red and the first invalid cell is focused.
 - The responder employee-number field accepts lowercase English letters and digits only before JSON download; invalid input focuses the field and does not create a file.
 - Direct true-positive due-date inputs use the browser date picker and only allow dates from today through 30 days from today.

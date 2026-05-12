@@ -25,4 +25,4 @@ privyspark scan \
   --review-state-root /abs/review-state
 ```
 
-Upload returned response JSON files into `/abs/review-state/inbox/*.json`. The next `scan --review-state-root /abs/review-state` automatically collects them before scanning. If any response is invalid or another collect holds `/abs/review-state/.collect.lock`, the scan fails before the scan work starts.
+Upload returned response JSON files into `/abs/review-state/inbox/*.json`. The next `scan --review-state-root /abs/review-state` automatically collects them before scanning. If any response is invalid or another collect holds `/abs/review-state/.collect.lock`, the scan fails before the scan work starts. For Excel editing, reviewers can download the CSV, import the decrypted CSV file, or paste the TSV clipboard text copied from Excel. CSV upload preserves quoted commas and embedded line breaks; TSV paste uses tabs and row breaks, preserving embedded line breaks when Excel wraps the cell in double quotes.
