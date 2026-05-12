@@ -117,6 +117,8 @@ Stable hash-ranked file sampling keeps the same subset for the same group and fi
 - The default is `warn`.
 - For backward compatibility, `true` maps to `debug` and `false` maps to `warn`.
 - Log format: `[PrivySpark][LEVEL][ISO-8601 local driver timestamp with offset] event key=value...`
+- The default timestamp pattern is `uuuu-MM-dd'T'HH:mm:ss.SSSXXX`, so fractional seconds are always fixed to three millisecond digits (`ss.SSS`).
+- Override the timestamp pattern with `PRIVYSPARK_DEBUG_TIMESTAMP_PATTERN` or `-Dprivyspark.debug.timestampPattern=<DateTimeFormatter pattern>`. Blank or invalid patterns fall back to the default.
 
 `info` exposes high-level lifecycle events such as `scan_start`, `scan_plan_ready`, and `scan_complete`. `debug` adds detailed events for file discovery, pre-scan execution, grouping, and `_progress` lifecycle.
 

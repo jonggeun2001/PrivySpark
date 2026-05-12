@@ -30,6 +30,28 @@ class DriverLoggerSpec extends AnyFunSuite {
     assert(DriverLogger.resolveLogLevel(Some(""), Some("error")) == DriverLogLevel.Error)
   }
 
+  test("formats driver log timestamps with fixed millisecond precision by default") {
+    assert(DriverLogger.formatTimestamp(OffsetDateTime.parse("2026-05-12T11:22:33.100+09:00")) == "2026-05-12T11:22:33.100+09:00")
+    assert(DriverLogger.formatTimestamp(OffsetDateTime.parse("2026-05-12T11:22:33.120+09:00")) == "2026-05-12T11:22:33.120+09:00")
+    assert(DriverLogger.formatTimestamp(OffsetDateTime.parse("2026-05-12T11:22:33.000+09:00")) == "2026-05-12T11:22:33.000+09:00")
+  }
+
+  test("allows overriding driver log timestamp pattern with system property") {
+    val timestamp = OffsetDateTime.parse("2026-05-12T11:22:33.120+09:00")
+
+    assert(withDriverTimestampPattern("uuuu-MM-dd HH:mm:ss XXX") {
+      DriverLogger.formatTimestamp(timestamp)
+    } == "2026-05-12 11:22:33 +09:00")
+  }
+
+  test("falls back to default driver log timestamp pattern when override is invalid") {
+    val timestamp = OffsetDateTime.parse("2026-05-12T11:22:33.100+09:00")
+
+    assert(withDriverTimestampPattern("not a valid [ pattern") {
+      DriverLogger.formatTimestamp(timestamp)
+    } == "2026-05-12T11:22:33.100+09:00")
+  }
+
   test("filters structured driver logs by configured level") {
     val warnLogs = captureStderr {
       withDriverLogLevel("warn") {
@@ -96,6 +118,21 @@ class DriverLoggerSpec extends AnyFunSuite {
       previous match {
         case Some(value) => System.setProperty("privyspark.debug", value)
         case None => System.clearProperty("privyspark.debug")
+      }
+      DriverLogger.resetCache()
+    }
+  }
+
+  private def withDriverTimestampPattern[A](pattern: String)(block: => A): A = {
+    val previous = sys.props.get("privyspark.debug.timestampPattern")
+    DriverLogger.resetCache()
+    System.setProperty("privyspark.debug.timestampPattern", pattern)
+    try {
+      block
+    } finally {
+      previous match {
+        case Some(value) => System.setProperty("privyspark.debug.timestampPattern", value)
+        case None => System.clearProperty("privyspark.debug.timestampPattern")
       }
       DriverLogger.resetCache()
     }
