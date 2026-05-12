@@ -23,8 +23,8 @@
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
 - `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
-- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. 스캔 시작 전 `<review-state-root>/inbox/*.json`을 자동 수집해 `<review-state-root>/current`를 갱신한 뒤, `<review-state-root>/current/allowlist.jsonl`을 적용하고 기본 `<output>/review/review.html`을 생성
-- `--review-html-dir <ABS_PATH_OR_URI>`: 오프라인 리뷰 HTML 출력 디렉토리. 미지정 시 `<output>/review`, 파일명은 `review.html` 고정
+- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. 스캔 시작 전 `<review-state-root>/inbox/*.json`을 자동 수집해 `<review-state-root>/current`를 갱신한 뒤, `<review-state-root>/current/allowlist.jsonl`을 적용하고 기본 `<output>/review/review.html`을 생성. review HTML은 파일별 최대 2MB이며, 초과 시 `review.html` 인덱스와 `review-part-0001.html` 형식의 part 파일로 분할
+- `--review-html-dir <ABS_PATH_OR_URI>`: 오프라인 리뷰 HTML 출력 디렉토리. 미지정 시 `<output>/review`, 기본 진입 파일명은 `review.html` 고정
 - `--review-sample-mode <raw|masked|none>`: `review.html` 검출 샘플 표시 방식, 기본 `masked`
 - `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
 - `--suppression-file <PATH>`: 줄 단위 suppression 파일 경로, `#` 주석과 빈 줄 무시
@@ -43,7 +43,7 @@
 ## `review collect` CLI 인자
 - `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
 
-`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 담당자는 `review.html`에서 직접 JSON을 생성하거나, Excel 편집이 필요하면 CSV를 내려받아 편집한 뒤 암호화 해제한 CSV를 다시 불러오거나 Excel에서 전체 복사한 TSV 클립보드 내용을 붙여넣은 다음 JSON을 생성합니다. CSV 업로드는 따옴표로 감싼 쉼표와 줄바꿈을 셀 내용으로 유지하고, TSV 붙여넣기는 탭과 줄바꿈을 기준으로 반영합니다. Excel이 줄바꿈 포함 셀을 큰따옴표로 감싼 경우 줄바꿈은 셀 내용으로 유지됩니다. `--scan-results`는 더 이상 필요하지 않습니다. 같은 `--review-state-root`를 지정한 다음 스캔은 본 스캔 전에 이 collect를 자동 실행합니다. invalid response가 하나라도 있으면 current를 갱신하지 않고 명령을 실패 처리하며, `<review-state-root>/.collect.lock`이 이미 있으면 동시 갱신을 막기 위해 실패합니다. collect가 끝나면 lock 파일은 삭제됩니다.
+`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 담당자는 `review.html`에서 직접 JSON을 생성하거나, HTML이 2MB 단위로 분할된 경우 각 `review-part-*.html`에서 JSON을 각각 생성합니다. Excel 편집이 필요하면 CSV를 내려받아 편집한 뒤 암호화 해제한 CSV를 다시 불러오거나 Excel에서 전체 복사한 TSV 클립보드 내용을 붙여넣은 다음 JSON을 생성합니다. CSV 업로드는 따옴표로 감싼 쉼표와 줄바꿈을 셀 내용으로 유지하고, TSV 붙여넣기는 탭과 줄바꿈을 기준으로 반영합니다. Excel이 줄바꿈 포함 셀을 큰따옴표로 감싼 경우 줄바꿈은 셀 내용으로 유지됩니다. `--scan-results`는 더 이상 필요하지 않습니다. 같은 `--review-state-root`를 지정한 다음 스캔은 본 스캔 전에 이 collect를 자동 실행합니다. invalid response가 하나라도 있으면 current를 갱신하지 않고 명령을 실패 처리하며, `<review-state-root>/.collect.lock`이 이미 있으면 동시 갱신을 막기 위해 실패합니다. collect가 끝나면 lock 파일은 삭제됩니다.
 
 오프라인 리뷰 identity와 allowlist 매칭에서는 HDFS URI path의 중복 slash를 정규화합니다. 예를 들어 `hdfs:///user/name`과 `hdfs:////user/name`은 같은 스캔 경로로 취급됩니다.
 

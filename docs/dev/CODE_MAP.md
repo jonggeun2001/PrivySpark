@@ -50,8 +50,8 @@
 - `review/collect/ResponseValidator.scala`: envelope validation L9, response item validation L23.
 - `review/collect/ReviewStateBuilder.scala`: current state build L23, recurring/action-plan retention helpers L85.
 - `review/collect/ReviewStateWriter.scala`: action plan load L20, state write L47, atomic replace L60.
-- `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L16, public `write` overloads L21-L103, `writeFindings` L105.
-- `review/ReviewHtmlRenderer.scala`: resource template/script loading L14-L15, `render` L17.
+- `review/ReviewHtmlWriter.scala`: `normalizeSampleMode`, public `write` overloads, 2MB review HTML split, `writeFindings`.
+- `review/ReviewHtmlRenderer.scala`: resource template/script loading, review part metadata rendering, split index rendering.
 - `review/ReviewSampleMasker.scala`: finding JSON rendering L6, sample masking L17.
 - `review/ReviewActionPlanStatus.scala`: action plan state load/match L20, UI status label L75.
 - `src/main/resources/review/review.html.template`: offline review HTML/CSS shell and `${REVIEW_DATA_JSON}` placeholder.

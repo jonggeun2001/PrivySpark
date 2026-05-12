@@ -9,9 +9,12 @@ import org.scalatestplus.junit.JUnitRunner
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.Collections
+import scala.collection.JavaConverters._
 
 @RunWith(classOf[JUnitRunner])
 class ReviewHtmlWriterSpec extends AnyFunSuite {
+  private val MaxReviewHtmlBytes = 2L * 1024L * 1024L
+
   test("renderer preserves placeholder-looking text inside review data JSON") {
     val scanPath = "/data/${REVIEW_APP_SCRIPT}/project"
 
@@ -135,6 +138,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("CSV 파일 업로드는 따옴표로 감싼 쉼표와 줄바꿈을 유지하고, TSV 붙여넣기는 탭과 줄바꿈을 기준으로 반영합니다."))
     assert(html.contains("Excel이 줄바꿈 포함 셀을 큰따옴표로 감싼 경우 줄바꿈은 셀 내용으로 유지됩니다."))
     assert(html.contains("CSV/TSV 임포트는 <code>finding_key</code> 기준으로 판정/사유/계획/예정일만 반영합니다."))
+    assert(html.contains("검출 건수가 많아 파일이 분할된 경우 각 part 파일을 따로 열어 응답 파일을 생성하고, 생성된 JSON을 모두 제출합니다."))
     assert(html.contains("const ReviewCsvHeaders = ["))
     assert(html.contains("'finding_key'"))
     assert(html.contains("'검출샘플(검출값/데이터)'"))
@@ -238,7 +242,9 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("function formatResponseScanPath"))
     assert(html.contains("""replace(/[\\/:*?"<>|]+/g, '-')"""))
     assert(html.contains("""replace(/\s+/g, '-')"""))
-    assert(html.contains("link.download = `response-${formatResponseScanPath(REVIEW_DATA.scan_path)}-${formatResponseTimestamp(new Date())}.json`;"))
+    assert(html.contains("function formatReviewPartSuffix()"))
+    assert(html.contains("function renderReviewPartInfo()"))
+    assert(html.contains("link.download = `response-${formatResponseScanPath(REVIEW_DATA.scan_path)}${formatReviewPartSuffix()}-${formatResponseTimestamp(new Date())}.json`;"))
     assert(html.contains("""<details class="review-guide" open aria-label="검토 안내">"""))
     assert(html.contains("<summary>검토 안내</summary>"))
     assert(!html.contains("<section class=\"review-guide\""))
@@ -428,6 +434,61 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(!html.contains("여러 파일 증거가 있는 pattern 오탐은 경로 패턴이 필요합니다."))
     assert(!html.contains("alice@example.com"))
     assert(html.contains("a***e@example.com"))
+  }
+
+  test("write splits large review HTML into files no larger than 2MB") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-html-split-")
+    val largeSample = "detected-value-" + ("x" * 8192)
+    val results = (1 to 400).map { index =>
+      ScanResult(
+        dataset_path = "/data/project",
+        scan_timestamp = "2026-04-27T10:00:00Z",
+        file_identifier = f"customers/part-$index%05d.csv",
+        column_name = "email",
+        pii_type = "email",
+        match_count = 1L,
+        sampled_row_count = 1L,
+        match_ratio = 1.0,
+        non_empty_match_ratio = 1.0,
+        confidence = 0.9,
+        sample_raw_value = largeSample,
+        sample_matched_fragment = "detected-value",
+        file_size = 128L,
+        file_mtime_epoch_ms = 1710000000000L
+      )
+    }
+
+    ReviewHtmlWriter.write(
+      new Configuration(),
+      outputRoot.toString,
+      "/data/project",
+      results,
+      sampleMode = "raw"
+    )
+
+    val reviewDir = outputRoot.resolve("review")
+    val indexPath = reviewDir.resolve("review.html")
+    val partStream = Files.list(reviewDir)
+    val partFiles =
+      try {
+        partStream.iterator().asScala
+          .filter(path => path.getFileName.toString.matches("""review-part-\d{4}\.html"""))
+          .toSeq
+          .sortBy(_.getFileName.toString)
+      } finally {
+        partStream.close()
+      }
+    val indexHtml = new String(Files.readAllBytes(indexPath), StandardCharsets.UTF_8)
+    val firstPartHtml = new String(Files.readAllBytes(partFiles.head), StandardCharsets.UTF_8)
+
+    assert(partFiles.size >= 2)
+    assert(Files.size(indexPath) <= MaxReviewHtmlBytes)
+    partFiles.foreach(path => assert(Files.size(path) <= MaxReviewHtmlBytes, s"${path.getFileName} exceeded 2MB"))
+    assert(indexHtml.contains("review-part-0001.html"))
+    assert(indexHtml.contains("분할된 리뷰 파일"))
+    assert(firstPartHtml.contains(""""review_part":{"part_number":1"""))
+    assert(firstPartHtml.contains("formatReviewPartSuffix()"))
+    assert(firstPartHtml.contains("renderReviewPartInfo();"))
   }
 
   test("write can place review.html under a configured directory outside scan output") {

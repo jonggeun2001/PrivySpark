@@ -159,7 +159,7 @@ invalid response가 하나라도 있으면 collector는 `<review-state-root>/cur
 
 ## review.html
 
-`review.html`은 self-contained HTML입니다. 서버 호출 없이 브라우저에서 열고 응답 JSON을 다운로드합니다.
+`review.html`은 self-contained HTML입니다. 서버 호출 없이 브라우저에서 열고 응답 JSON을 다운로드합니다. 파일별 최대 크기는 2MB로 고정되며, 탐지가 많아 이 크기를 넘으면 `review.html`은 part 목록 인덱스가 되고 실제 검토 화면은 `review-part-0001.html`, `review-part-0002.html`처럼 분할됩니다. 각 part 파일은 자기 범위의 finding만 담으므로 각 파일에서 응답 JSON을 따로 생성해 모두 `<review-state-root>/inbox`에 제출합니다.
 
 표는 경로, Hive 테이블, 컬럼명, 개인정보 유형, 샘플 행 수, 검출 건수, `검출비율(%)`, `검출샘플(검출값/데이터)`, 판정, 기존 조치 상태, 오탐 사유, 정탐 조치 계획, 조치 예정일을 분리된 컬럼으로 표시합니다. 검출 비율은 `검출 건수 / 샘플 행 수 * 100`으로 계산해 소수점 둘째 자리까지 표시하고, 검출 샘플은 검출값과 원본 데이터 컨텍스트를 실제 줄바꿈으로 분리합니다.
 
