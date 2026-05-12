@@ -607,6 +607,11 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         "temporary content\n",
         disappearAfterListing = true
       )
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/transient.csv",
+        "name,email\nbob,bob@example.com\n",
+        disappearAfterListing = true
+      )
 
       val plan = DirectoryScanner.scanDirectoryStructure(
         spark,
