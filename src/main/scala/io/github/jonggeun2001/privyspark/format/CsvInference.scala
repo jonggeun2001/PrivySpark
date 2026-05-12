@@ -6,7 +6,7 @@ import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.inferWorkbookShe
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, CsvDialect, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, SchemaSignatureCache}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
 import org.apache.hadoop.io.{LongWritable, Text}
 import org.apache.hadoop.mapreduce.lib.input.TextInputFormat
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
@@ -20,6 +20,7 @@ private[privyspark] object CsvInference {
   val FileIdentifierColumn = "__privyspark_file_identifier"
   val XlsxFormat = "xlsx"
   val AvroFormat = "avro"
+  private val TextSchemaSignature = "value"
   private val SparkGlobSpecialCharacters = Set('\\', '*', '?', '[', ']', '{', '}')
 
   def detectCsvHasHeader(
@@ -67,33 +68,37 @@ private[privyspark] object CsvInference {
     readOptions: ScanReadOptions = ScanReadOptions(),
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
   ): Either[String, String] = {
-    try {
-      val cached = schemaSigCache.getOrCompute(filePath, format, readOptions) {
-        val schemaSignature = RetryIO.withFileReadRetry(spark, Seq(filePath), "schema_detection") {
-          if (format == XlsxFormat) {
-            val sheetName = readOptions.sheetName.getOrElse {
-              throw new IllegalArgumentException("Sheet name is required for xlsx sources")
-            }
-            inferWorkbookSheetSchemaSignature(spark.sparkContext.hadoopConfiguration, filePath, sheetName) match {
-              case Right(signature) => signature
-              case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
-            }
-          } else {
-            val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
-            val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
-            if (format == "csv") {
-              normalizedFieldNames.mkString("|")
+    if (format == TextFormat) {
+      Right(TextSchemaSignature)
+    } else {
+      try {
+        val cached = schemaSigCache.getOrCompute(filePath, format, readOptions) {
+          val schemaSignature = RetryIO.withFileReadRetry(spark, Seq(filePath), "schema_detection") {
+            if (format == XlsxFormat) {
+              val sheetName = readOptions.sheetName.getOrElse {
+                throw new IllegalArgumentException("Sheet name is required for xlsx sources")
+              }
+              inferWorkbookSheetSchemaSignature(spark.sparkContext.hadoopConfiguration, filePath, sheetName) match {
+                case Right(signature) => signature
+                case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
+              }
             } else {
-              normalizedFieldNames.sorted.mkString("|")
+              val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
+              val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
+              if (format == "csv") {
+                normalizedFieldNames.mkString("|")
+              } else {
+                normalizedFieldNames.sorted.mkString("|")
+              }
             }
           }
+          CachedSchemaSignature(schemaSignature, csvHasHeader = true)
         }
-        CachedSchemaSignature(schemaSignature, csvHasHeader = true)
+        Right(cached.signature)
+      } catch {
+        case NonFatal(e) =>
+          Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
       }
-      Right(cached.signature)
-    } catch {
-      case NonFatal(e) =>
-        Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
     }
   }
 
@@ -183,39 +188,69 @@ private[privyspark] object CsvInference {
     readOptions: ScanReadOptions = ScanReadOptions()
   ): DataFrame = {
     DriverLogger.debug("read_schema_source_start", "format" -> format, "file" -> filePath)
-    val literalFilePath = literalSparkPath(filePath)
-    val (df, internalCorruptRecordColumnName) = format match {
-      case "csv" =>
-        (
-          csvReader(spark, csvHasHeader, readOptions).csv(literalFilePath),
-          None
+    logReadSchemaSourceTcpSnapshot("read_schema_source_start", format, filePath)
+    try {
+      val literalFilePath = literalSparkPath(filePath)
+      val (df, internalCorruptRecordColumnName) = format match {
+        case "csv" =>
+          (
+            csvReader(spark, csvHasHeader, readOptions).csv(literalFilePath),
+            None
+          )
+        case "json" =>
+          val corruptRecordColumnName = newJsonCorruptRecordColumnName()
+          (
+            spark.read
+              .option("mode", "PERMISSIVE")
+              .option("columnNameOfCorruptRecord", corruptRecordColumnName)
+              .json(literalFilePath),
+            Some(corruptRecordColumnName)
+          )
+        case AvroFormat =>
+          (spark.read.format("avro").load(literalFilePath), None)
+        case XlsxFormat =>
+          (
+            readXlsx(spark, filePath, readOptions),
+            None
+          )
+        case TextFormat =>
+          (readTextSource(spark, Seq(filePath), readOptions), None)
+        case "parquet" =>
+          (spark.read.parquet(literalFilePath), None)
+        case "orc" =>
+          (spark.read.orc(literalFilePath), None)
+        case _ =>
+          throw new IllegalArgumentException(s"Unsupported format: $format")
+      }
+      val readableDf = ensureReadableSourceColumns(format, Seq(filePath), df, internalCorruptRecordColumnName)
+      logReadSchemaSourceTcpSnapshot("read_schema_source_complete", format, filePath)
+      readableDf
+    } catch {
+      case NonFatal(e) =>
+        logReadSchemaSourceTcpSnapshot(
+          "read_schema_source_error",
+          format,
+          filePath,
+          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
         )
-      case "json" =>
-        val corruptRecordColumnName = newJsonCorruptRecordColumnName()
-        (
-          spark.read
-            .option("mode", "PERMISSIVE")
-            .option("columnNameOfCorruptRecord", corruptRecordColumnName)
-            .json(literalFilePath),
-          Some(corruptRecordColumnName)
-        )
-      case AvroFormat =>
-        (spark.read.format("avro").load(literalFilePath), None)
-      case XlsxFormat =>
-        (
-          readXlsx(spark, filePath, readOptions),
-          None
-        )
-      case TextFormat =>
-        (readTextSource(spark, Seq(filePath), readOptions), None)
-      case "parquet" =>
-        (spark.read.parquet(literalFilePath), None)
-      case "orc" =>
-        (spark.read.orc(literalFilePath), None)
-      case _ =>
-        throw new IllegalArgumentException(s"Unsupported format: $format")
+        throw e
     }
-    ensureReadableSourceColumns(format, Seq(filePath), df, internalCorruptRecordColumnName)
+  }
+
+  private def logReadSchemaSourceTcpSnapshot(
+    phase: String,
+    format: String,
+    filePath: String,
+    fields: (String, Any)*
+  ): Unit = {
+    DriverTcpConnectionLogger.debugSnapshot(
+      "read_schema_source_tcp_snapshot",
+      (Seq(
+        "phase" -> phase,
+        "format" -> format,
+        "file" -> filePath
+      ) ++ fields): _*
+    )
   }
 
   def readSource(

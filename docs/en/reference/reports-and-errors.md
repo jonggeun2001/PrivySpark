@@ -50,7 +50,7 @@
 ## `file_identifier` Rules
 - The default is the input-relative path.
 - Promotion to a directory-level identifier only happens when exact split confirms identical schemas, there are no pre-scan errors, and directory-level aggregation is allowed for the multi-file group.
-- Sampled non-CSV/non-JSON groups that pass bounded schema validation and succeed on the batch path keep file-level identifiers because they have not been promoted through exact-split directory aggregation.
+- Sampled `text` groups and sampled Parquet/ORC/Avro groups that pass bounded schema validation keep file-level identifiers on the batch path because they have not been promoted through exact-split directory aggregation.
 - The input-root directory group uses `.`.
 - Partition, bucket, and skew/list-bucketing layout directories are treated as layout metadata for grouping, so eligible rows identify the normalized table path rather than each physical layout subdirectory.
 - Archive entries use `<archive>!<entry>`.

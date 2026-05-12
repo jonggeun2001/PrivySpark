@@ -24,10 +24,17 @@ class DriverTcpConnectionSnapshotSpec extends AnyFunSuite {
     assert(fields("tcp_fd_count") == 2)
     assert(fields("tcp_states") == "ESTABLISHED:1+CLOSE_WAIT:1")
     assert(fields("tcp_remote_ports_top") == "8020:1+9866:1")
+    assert(fields("tcp_established_remote_ports_top") == "9866:1")
+    assert(fields("tcp_established_remote_endpoints_top") == "10.0.0.2:9866:1")
   }
 
   test("parses socket fd symlink targets") {
     assert(DriverTcpConnectionSnapshot.parseSocketInode("socket:[12345]") == Some("12345"))
     assert(DriverTcpConnectionSnapshot.parseSocketInode("pipe:[12345]").isEmpty)
+  }
+
+  test("renders IPv4 proc tcp addresses in dotted decimal order") {
+    assert(DriverTcpConnectionSnapshot.parseRemoteHost("0200000A") == "10.0.0.2")
+    assert(DriverTcpConnectionSnapshot.parseRemoteHost("0100007F") == "127.0.0.1")
   }
 }

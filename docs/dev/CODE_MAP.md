@@ -33,7 +33,7 @@
 - `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L13, `discover` L17.
 - `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L29, `runPreScan` L50.
 - `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L24, schema split scheduling L120, file schema task executor L140, `splitGroupBySchemaFast` L152, `splitGroupBySchema` L302.
-- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, sampled batch schema validation L319, batch fallback invocation L308, compatibility delegates L361/L399.
+- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, sampled batch schema gate L319, batch fallback invocation L308, compatibility delegates L361/L399.
 - `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L89, file progress record helper L96, group buffer flush L309.
 - `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.
 - `scan/GroupScanFallbackPolicy.scala`: batch failure fallback executor L7.
@@ -50,8 +50,8 @@
 - `review/collect/ResponseValidator.scala`: envelope validation L9, response item validation L23.
 - `review/collect/ReviewStateBuilder.scala`: current state build L23, recurring/action-plan retention helpers L85.
 - `review/collect/ReviewStateWriter.scala`: action plan load L20, state write L47, atomic replace L60.
-- `review/ReviewHtmlWriter.scala`: `normalizeSampleMode` L16, public `write` overloads L21-L103, `writeFindings` L105.
-- `review/ReviewHtmlRenderer.scala`: resource template/script loading L14-L15, `render` L17.
+- `review/ReviewHtmlWriter.scala`: `normalizeSampleMode`, public `write` overloads, 2MB review HTML split, `writeFindings`.
+- `review/ReviewHtmlRenderer.scala`: resource template/script loading, review part metadata rendering, split index rendering.
 - `review/ReviewSampleMasker.scala`: finding JSON rendering L6, sample masking L17.
 - `review/ReviewActionPlanStatus.scala`: action plan state load/match L20, UI status label L75.
 - `src/main/resources/review/review.html.template`: offline review HTML/CSS shell and `${REVIEW_DATA_JSON}` placeholder.
@@ -61,7 +61,8 @@
 - `progress/ProgressIO.scala`: flush mode 설정 L19-L44, progress JSONL write L46/L108.
 - `progress/ProgressBuffer.scala`: group 단위 progress buffering L11, enqueue L23, flush L30.
 - `progress/ProgressRunManager.scala`: progress run prepare L21, merge L88-L101, active heartbeat L154-L181.
-- `util/DriverTcpConnectionSnapshot.scala`: Linux `/proc` 기반 driver TCP socket snapshot capture와 `group_scan_tcp_snapshot` debug log helper.
+- `format/CsvInference.scala`: CSV/header schema inference와 `read_schema_source_tcp_snapshot` schema-read TCP 진단 로그.
+- `util/DriverTcpConnectionSnapshot.scala`: Linux `/proc` 기반 driver TCP socket snapshot capture, ESTABLISHED endpoint 집계, TCP debug log helper.
 - `util/RpcGate.scala`: `spark.privyspark.driverRpcConcurrency` 기반 driver-side RPC성 작업 동시성 gate.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.

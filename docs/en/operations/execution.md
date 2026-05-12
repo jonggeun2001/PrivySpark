@@ -23,8 +23,8 @@
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
 - `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
-- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Before the scan starts, collects `<review-state-root>/inbox/*.json`, updates `<review-state-root>/current`, then applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html` by default
-- `--review-html-dir <ABS_PATH_OR_URI>`: offline review HTML output directory. Defaults to `<output>/review`, with the filename fixed to `review.html`
+- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Before the scan starts, collects `<review-state-root>/inbox/*.json`, updates `<review-state-root>/current`, then applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html` by default. Review HTML files are capped at 2MB each; oversized reviews are split into a `review.html` index and `review-part-0001.html` style part files
+- `--review-html-dir <ABS_PATH_OR_URI>`: offline review HTML output directory. Defaults to `<output>/review`, with `review.html` fixed as the entry filename
 - `--review-sample-mode <raw|masked|none>`: sample display mode for `review.html`, default `masked`
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
 - `--suppression-file <PATH>`: line-based suppression file path, with `#` comments and blank lines ignored
@@ -43,7 +43,7 @@
 ## `review collect` CLI Arguments
 - `--review-state-root <ABS_PATH_OR_URI>`: state root where response JSON files are read and cumulative review state is written
 
-`review collect` reads only `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`. Review owners can create JSON directly in `review.html`; if they need Excel editing, they download a CSV from `review.html`, edit it, import the decrypted CSV back into the page, or paste the TSV clipboard text copied from Excel, and then create the JSON. CSV upload preserves quoted commas and embedded line breaks as cell content. TSV paste is applied using tabs and row breaks, and embedded line breaks remain cell content when Excel wraps that cell in double quotes. `--scan-results` is no longer required. A later scan with the same `--review-state-root` runs this collect step automatically before scanning. If any response is invalid, current state is not updated and the command fails. If `<review-state-root>/.collect.lock` already exists, the command fails to prevent concurrent state updates; the lock is removed after collect finishes.
+`review collect` reads only `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`. Review owners can create JSON directly in `review.html`; when the review is split into 2MB part files, they create one response JSON from each `review-part-*.html` file and place all returned JSON files in the inbox. For Excel editing, they download a CSV from the review file, edit it, import the decrypted CSV back into the page, or paste the TSV clipboard text copied from Excel, and then create the JSON. CSV upload preserves quoted commas and embedded line breaks as cell content. TSV paste is applied using tabs and row breaks, and embedded line breaks remain cell content when Excel wraps that cell in double quotes. `--scan-results` is no longer required. A later scan with the same `--review-state-root` runs this collect step automatically before scanning. If any response is invalid, current state is not updated and the command fails. If `<review-state-root>/.collect.lock` already exists, the command fails to prevent concurrent state updates; the lock is removed after collect finishes.
 
 ## Ignore Patterns
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`
@@ -117,10 +117,14 @@ Stable hash-ranked file sampling keeps the same subset for the same group and fi
 - The default is `warn`.
 - For backward compatibility, `true` maps to `debug` and `false` maps to `warn`.
 - Log format: `[PrivySpark][LEVEL][ISO-8601 local driver timestamp with offset] event key=value...`
+- The default timestamp pattern is `uuuu-MM-dd'T'HH:mm:ss.SSSXXX`, so fractional seconds are always fixed to three millisecond digits (`ss.SSS`).
+- Override the timestamp pattern with `PRIVYSPARK_DEBUG_TIMESTAMP_PATTERN` or `-Dprivyspark.debug.timestampPattern=<DateTimeFormatter pattern>`. Blank or invalid patterns fall back to the default.
 
 `info` exposes high-level lifecycle events such as `scan_start`, `scan_plan_ready`, and `scan_complete`. `debug` adds detailed events for file discovery, pre-scan execution, grouping, and `_progress` lifecycle.
 
-To diagnose driver TCP connection growth during group scan, inspect `group_scan_tcp_snapshot` events at `debug` level. On Linux/YARN drivers, PrivySpark reads the current JVM's `/proc` TCP socket fds and records `tcp_fd_count`, `tcp_states`, and `tcp_remote_ports_top`. On environments without `/proc`, such as macOS, it records `tcp_snapshot_available=false` with a reason. Compare `phase=batch_action_start|batch_action_complete`, `action=sampled_rows_by_file|aggregate_matches|sample_matches|count_non_empty`, `phase=review_snapshot_stage_*`, and `phase=file_spark_action_*` chronologically to isolate which Spark action or review snapshot step increases connections.
+To diagnose driver TCP connection growth during group scan, inspect `group_scan_tcp_snapshot` events at `debug` level. On Linux/YARN drivers, PrivySpark reads the current JVM's `/proc` TCP socket fds and records `tcp_fd_count`, `tcp_states`, `tcp_remote_ports_top`, `tcp_established_remote_ports_top`, and `tcp_established_remote_endpoints_top`. On environments without `/proc`, such as macOS, it records `tcp_snapshot_available=false` with a reason. Compare `phase=batch_action_start|batch_action_complete`, `action=sampled_rows_by_file|aggregate_matches|sample_matches|count_non_empty`, `phase=review_snapshot_stage_*`, and `phase=file_spark_action_*` chronologically to isolate which Spark action or review snapshot step increases connections.
+
+When connection growth appears during schema detection, inspect `read_schema_source_tcp_snapshot` events as well. These events record `read_schema_source_start|read_schema_source_complete|read_schema_source_error` phases with `format` and `file`, so you can compare whether `ESTABLISHED` connections opened after `read_schema_source_start` remain after completion and whether the endpoints point to HDFS DataNodes or Spark executor/RPC ports.
 
 When ignore rules apply, events such as `scan_directory_file_ignored` and `archive_entry_skipped reason=ignored` are emitted, and `ignored_files` is included in `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, and `scan_complete`.
 
