@@ -154,7 +154,7 @@ private[privyspark] object DirectoryScanner {
             "scan_directory_file_skipped",
             "file" -> outcome.filePath,
             "directory" -> outcome.groupingDirectoryPath,
-            "reason" -> "zero_byte"
+            "reason" -> Option(outcome.skipReason).filter(_.nonEmpty).getOrElse("skipped")
           )
         } else if (outcome.expandedEntries.nonEmpty) {
           DriverLogger.debug(

@@ -9,6 +9,7 @@
 - UTF-8 텍스트 안에서 ASCII 정보 구분자(`0x1C`-`0x1F`, 예: RS 구분 파일)가 안정적인 컬럼 구분자로 반복되면 CSV로 처리할 수 있고, CSV dialect 감지에 실패한 나머지 텍스트는 text fallback 입력으로 처리합니다.
 - 바이너리처럼 보이는 입력만 `Unsupported file format`으로 오류 리포트에 기록합니다.
 - 0바이트 physical file은 pre-scan에서 즉시 건너뜁니다.
+- directory listing 시점에는 있었지만 pre-scan probe 전에 삭제된 physical file은 `scan_errors` 없이 건너뜁니다.
 - `--ignore`, `--ignore-file` 패턴에 매칭된 physical file은 pre-scan 전에 제외합니다.
 - 디렉토리 discovery에서 얻은 파일 길이와 수정 시간을 pre-scan에서 재사용하므로, small file이 많은 입력에서도 format expansion 전에 발견된 파일마다 file-status RPC를 다시 호출하지 않습니다. 긴 pre-scan에서는 파일 수 기준 interval 외에도 시간 기준 throttle로 progress 로그를 남깁니다.
 

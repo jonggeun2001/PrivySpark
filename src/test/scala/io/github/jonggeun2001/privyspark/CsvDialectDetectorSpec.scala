@@ -85,10 +85,18 @@ class CsvDialectDetectorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(CsvDialectDetector.detectDialectFromLines(spark, lines).map(_.delimiter).contains("|"))
   }
 
-  test("refineDetectedFormat falls back when dialect sample read fails") {
+  test("refineDetectedFormat propagates deleted file sample reads") {
     val missingPath = Files.createTempDirectory("privyspark-missing-dialect").resolve("missing.data").toUri.toString
     val readOptions = ScanReadOptions()
-    val refined = CsvDialectDetector.refineDetectedFormat(spark, missingPath, TextFormat, readOptions)
+
+    intercept[java.io.FileNotFoundException] {
+      CsvDialectDetector.refineDetectedFormat(spark, missingPath, TextFormat, readOptions)
+    }
+  }
+
+  test("refineDetectedFormat falls back when dialect sample read fails without deleted file") {
+    val readOptions = ScanReadOptions()
+    val refined = CsvDialectDetector.refineDetectedFormat(spark, "unsupportedfs:///sample.data", TextFormat, readOptions)
 
     assert(refined == ((TextFormat, readOptions)))
   }

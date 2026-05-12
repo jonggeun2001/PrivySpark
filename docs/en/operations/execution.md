@@ -128,6 +128,8 @@ When connection growth appears during schema detection, inspect `read_schema_sou
 
 When ignore rules apply, events such as `scan_directory_file_ignored` and `archive_entry_skipped reason=ignored` are emitted, and `ignored_files` is included in `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, and `scan_complete`.
 
+If a file is discovered and then deleted before pre-scan probing, the file is skipped and logged as `scan_directory_file_skipped reason=not_found`. It is included in `skipped_files` for `scan_directory_pre_scan_execute_complete`, not in `scan_errors`.
+
 ## `_progress` Handling
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
 - File fallback scans flush progress at group granularity by default. In this mode, per-file completed rows may not appear under `_progress` until the group finishes, and a driver failure causes that group to be rerun on the next attempt.

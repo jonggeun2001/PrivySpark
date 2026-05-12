@@ -8,9 +8,11 @@ import io.github.jonggeun2001.privyspark.format.CsvHeaderHeuristic.{
 }
 import io.github.jonggeun2001.privyspark.model.{CsvDialect, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.CsvHeadCache
+import io.github.jonggeun2001.privyspark.scan.DeletedFileDetection
 import org.apache.spark.sql.SparkSession
 
 import com.univocity.parsers.csv.{CsvParser, CsvParserSettings}
+import java.io.FileNotFoundException
 import java.io.StringReader
 import scala.collection.mutable
 import scala.util.control.NonFatal
@@ -140,6 +142,8 @@ private[privyspark] object CsvDialectDetector {
         (format, readOptions)
       }
     } catch {
+      case e: FileNotFoundException if DeletedFileDetection.isDeletedFile(e) =>
+        throw e
       case NonFatal(_) =>
         // Dialect probing is opportunistic; file-level scan handling should own read failures.
         (format, readOptions)

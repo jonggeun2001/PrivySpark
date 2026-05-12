@@ -28,10 +28,11 @@
 - `config/SuppressionParser.scala`: parsed suppression ADT L15, CLI/file suppression parsing L17/L25, unknown pii warning L35.
 - `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L41, report merge/review hook L204.
 - `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L23, pre-scan collect/group build L141, schema split/finalization delegate L219.
+- `scan/DeletedFileDetection.scala`: deleted-after-discovery `FileNotFoundException` classification L6.
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
 - `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L13, `discover` L17.
-- `scan/discovery/PreScanExecutor.scala`: CSV dialect refinement L29, `runPreScan` L50.
+- `scan/discovery/PreScanExecutor.scala`: skipped outcome helper L31, CSV dialect refinement L54, `runPreScan` L75.
 - `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L24, schema split scheduling L120, file schema task executor L140, `splitGroupBySchemaFast` L152, `splitGroupBySchema` L302.
 - `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, sampled batch schema gate L319, batch fallback invocation L308, compatibility delegates L361/L399.
 - `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L89, file progress record helper L96, group buffer flush L309.
@@ -67,7 +68,7 @@
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.
 - `model/Models.scala`: `PiiRule` L14, `ScanResult` L32, `ScanError` L55.
-- `model/ScanPlanModels.scala`: `ScanFileEntry` L20, `ScanGroup` L32, `DirectoryScanPlan` L49, `PreScanFileOutcome` L74, `ReportFormatPaths` L107.
+- `model/ScanPlanModels.scala`: `ScanFileEntry` L20, `ScanGroup` L32, `DirectoryScanPlan` L49, `PreScanFileOutcome` L74, `ReportFormatPaths` L108.
 
 ## 호출 트레이스
 

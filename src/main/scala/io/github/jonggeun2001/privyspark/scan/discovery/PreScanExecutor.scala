@@ -6,6 +6,7 @@ import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
 import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.model.{PreScanFileOutcome, ScanError, ScanFileEntry, ScanReadOptions}
+import io.github.jonggeun2001.privyspark.scan.DeletedFileDetection
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion.expandPhysicalSource
 import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging.ArchiveFormats
 import io.github.jonggeun2001.privyspark.scan.CsvHeadCache
@@ -15,6 +16,7 @@ import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{normalizeHiveLayo
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
 
+import java.io.FileNotFoundException
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
@@ -25,6 +27,29 @@ private[privyspark] object PreScanExecutor {
   private def elapsedMillis(startNanos: Long): Long = {
     (System.nanoTime() - startNanos) / 1000000L
   }
+
+  private def skippedOutcome(
+    filePath: String,
+    groupingDirectory: String,
+    preScanErrorScope: String,
+    localStagingPaths: Seq[String],
+    pathInferredFormat: Option[String],
+    probeRequired: Boolean,
+    reason: String
+  ): PreScanFileOutcome =
+    PreScanFileOutcome(
+      filePath = filePath,
+      groupingDirectoryPath = groupingDirectory,
+      preScanErrorScope = preScanErrorScope,
+      expandedEntries = Seq.empty,
+      expandedErrors = Seq.empty,
+      ignoredEntries = 0,
+      stagingPaths = localStagingPaths,
+      pathInferredFormat = pathInferredFormat,
+      probeRequired = probeRequired,
+      skipped = true,
+      skipReason = reason
+    )
 
   private def refineCsvLikeEntries(
     spark: SparkSession,
@@ -91,17 +116,14 @@ private[privyspark] object PreScanExecutor {
         val outcome =
           try {
             if (discovered.size == 0L) {
-              PreScanFileOutcome(
-                filePath = filePath,
-                groupingDirectoryPath = groupingDirectory,
-                preScanErrorScope = preScanErrorScope,
-                expandedEntries = Seq.empty,
-                expandedErrors = Seq.empty,
-                ignoredEntries = 0,
-                stagingPaths = localStagingPaths.toSeq,
-                pathInferredFormat = pathInferredFormat,
-                probeRequired = probeRequired,
-                skipped = true
+              skippedOutcome(
+                filePath,
+                groupingDirectory,
+                preScanErrorScope,
+                localStagingPaths.toSeq,
+                pathInferredFormat,
+                probeRequired,
+                "zero_byte"
               )
             } else {
               val (expandedEntries, expandedErrors, ignoredEntries) =
@@ -133,6 +155,16 @@ private[privyspark] object PreScanExecutor {
               )
             }
           } catch {
+            case e: FileNotFoundException if DeletedFileDetection.isDeletedFile(e) =>
+              skippedOutcome(
+                filePath,
+                groupingDirectory,
+                preScanErrorScope,
+                localStagingPaths.toSeq,
+                pathInferredFormat,
+                probeRequired,
+                "not_found"
+              )
             case NonFatal(e) =>
               PreScanFileOutcome(
                 filePath = filePath,
