@@ -20,6 +20,7 @@ private[privyspark] object CsvInference {
   val FileIdentifierColumn = "__privyspark_file_identifier"
   val XlsxFormat = "xlsx"
   val AvroFormat = "avro"
+  private val TextSchemaSignature = "value"
   private val SparkGlobSpecialCharacters = Set('\\', '*', '?', '[', ']', '{', '}')
 
   def detectCsvHasHeader(
@@ -67,33 +68,37 @@ private[privyspark] object CsvInference {
     readOptions: ScanReadOptions = ScanReadOptions(),
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
   ): Either[String, String] = {
-    try {
-      val cached = schemaSigCache.getOrCompute(filePath, format, readOptions) {
-        val schemaSignature = RetryIO.withFileReadRetry(spark, Seq(filePath), "schema_detection") {
-          if (format == XlsxFormat) {
-            val sheetName = readOptions.sheetName.getOrElse {
-              throw new IllegalArgumentException("Sheet name is required for xlsx sources")
-            }
-            inferWorkbookSheetSchemaSignature(spark.sparkContext.hadoopConfiguration, filePath, sheetName) match {
-              case Right(signature) => signature
-              case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
-            }
-          } else {
-            val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
-            val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
-            if (format == "csv") {
-              normalizedFieldNames.mkString("|")
+    if (format == TextFormat) {
+      Right(TextSchemaSignature)
+    } else {
+      try {
+        val cached = schemaSigCache.getOrCompute(filePath, format, readOptions) {
+          val schemaSignature = RetryIO.withFileReadRetry(spark, Seq(filePath), "schema_detection") {
+            if (format == XlsxFormat) {
+              val sheetName = readOptions.sheetName.getOrElse {
+                throw new IllegalArgumentException("Sheet name is required for xlsx sources")
+              }
+              inferWorkbookSheetSchemaSignature(spark.sparkContext.hadoopConfiguration, filePath, sheetName) match {
+                case Right(signature) => signature
+                case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
+              }
             } else {
-              normalizedFieldNames.sorted.mkString("|")
+              val schema = readSchemaSource(spark, format, filePath, readOptions = readOptions).schema
+              val normalizedFieldNames = schema.fieldNames.map(_.toLowerCase)
+              if (format == "csv") {
+                normalizedFieldNames.mkString("|")
+              } else {
+                normalizedFieldNames.sorted.mkString("|")
+              }
             }
           }
+          CachedSchemaSignature(schemaSignature, csvHasHeader = true)
         }
-        CachedSchemaSignature(schemaSignature, csvHasHeader = true)
+        Right(cached.signature)
+      } catch {
+        case NonFatal(e) =>
+          Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
       }
-      Right(cached.signature)
-    } catch {
-      case NonFatal(e) =>
-        Left(Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
     }
   }
 
