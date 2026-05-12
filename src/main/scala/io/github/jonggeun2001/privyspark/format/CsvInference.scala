@@ -6,7 +6,7 @@ import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.inferWorkbookShe
 import io.github.jonggeun2001.privyspark.fsio.RetryIO
 import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, CsvDialect, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.{CsvHeadCache, SchemaSignatureCache}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
+import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
 import org.apache.hadoop.io.{LongWritable, Text}
 import org.apache.hadoop.mapreduce.lib.input.TextInputFormat
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
@@ -188,39 +188,69 @@ private[privyspark] object CsvInference {
     readOptions: ScanReadOptions = ScanReadOptions()
   ): DataFrame = {
     DriverLogger.debug("read_schema_source_start", "format" -> format, "file" -> filePath)
-    val literalFilePath = literalSparkPath(filePath)
-    val (df, internalCorruptRecordColumnName) = format match {
-      case "csv" =>
-        (
-          csvReader(spark, csvHasHeader, readOptions).csv(literalFilePath),
-          None
+    logReadSchemaSourceTcpSnapshot("read_schema_source_start", format, filePath)
+    try {
+      val literalFilePath = literalSparkPath(filePath)
+      val (df, internalCorruptRecordColumnName) = format match {
+        case "csv" =>
+          (
+            csvReader(spark, csvHasHeader, readOptions).csv(literalFilePath),
+            None
+          )
+        case "json" =>
+          val corruptRecordColumnName = newJsonCorruptRecordColumnName()
+          (
+            spark.read
+              .option("mode", "PERMISSIVE")
+              .option("columnNameOfCorruptRecord", corruptRecordColumnName)
+              .json(literalFilePath),
+            Some(corruptRecordColumnName)
+          )
+        case AvroFormat =>
+          (spark.read.format("avro").load(literalFilePath), None)
+        case XlsxFormat =>
+          (
+            readXlsx(spark, filePath, readOptions),
+            None
+          )
+        case TextFormat =>
+          (readTextSource(spark, Seq(filePath), readOptions), None)
+        case "parquet" =>
+          (spark.read.parquet(literalFilePath), None)
+        case "orc" =>
+          (spark.read.orc(literalFilePath), None)
+        case _ =>
+          throw new IllegalArgumentException(s"Unsupported format: $format")
+      }
+      val readableDf = ensureReadableSourceColumns(format, Seq(filePath), df, internalCorruptRecordColumnName)
+      logReadSchemaSourceTcpSnapshot("read_schema_source_complete", format, filePath)
+      readableDf
+    } catch {
+      case NonFatal(e) =>
+        logReadSchemaSourceTcpSnapshot(
+          "read_schema_source_error",
+          format,
+          filePath,
+          "reason" -> Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
         )
-      case "json" =>
-        val corruptRecordColumnName = newJsonCorruptRecordColumnName()
-        (
-          spark.read
-            .option("mode", "PERMISSIVE")
-            .option("columnNameOfCorruptRecord", corruptRecordColumnName)
-            .json(literalFilePath),
-          Some(corruptRecordColumnName)
-        )
-      case AvroFormat =>
-        (spark.read.format("avro").load(literalFilePath), None)
-      case XlsxFormat =>
-        (
-          readXlsx(spark, filePath, readOptions),
-          None
-        )
-      case TextFormat =>
-        (readTextSource(spark, Seq(filePath), readOptions), None)
-      case "parquet" =>
-        (spark.read.parquet(literalFilePath), None)
-      case "orc" =>
-        (spark.read.orc(literalFilePath), None)
-      case _ =>
-        throw new IllegalArgumentException(s"Unsupported format: $format")
+        throw e
     }
-    ensureReadableSourceColumns(format, Seq(filePath), df, internalCorruptRecordColumnName)
+  }
+
+  private def logReadSchemaSourceTcpSnapshot(
+    phase: String,
+    format: String,
+    filePath: String,
+    fields: (String, Any)*
+  ): Unit = {
+    DriverTcpConnectionLogger.debugSnapshot(
+      "read_schema_source_tcp_snapshot",
+      (Seq(
+        "phase" -> phase,
+        "format" -> format,
+        "file" -> filePath
+      ) ++ fields): _*
+    )
   }
 
   def readSource(
