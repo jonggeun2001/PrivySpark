@@ -639,16 +639,16 @@
         status.textContent = message;
       }
     }
-    function importReviewCsvText(text) {
-      const rows = parseDelimitedText(text, ',').filter(row => row.some(value => !isBlank(value)));
+    function importReviewDelimitedText(text, delimiter, formatLabel) {
+      const rows = parseDelimitedText(text, delimiter).filter(row => row.some(value => !isBlank(value)));
       if (rows.length < 2) {
-        setCsvImportStatus('반영할 CSV 행이 없습니다.');
+        setCsvImportStatus(`반영할 ${formatLabel} 행이 없습니다.`);
         return;
       }
       const headers = rows[0].map(header => String(header ?? '').trim());
       const headerIndex = new Map(headers.map((header, index) => [header, index]));
       if (!headerIndex.has('finding_key')) {
-        setCsvImportStatus('finding_key 컬럼이 없어 CSV를 반영하지 못했습니다.');
+        setCsvImportStatus(`finding_key 컬럼이 없어 ${formatLabel}를 반영하지 못했습니다.`);
         return;
       }
       let applied = 0;
@@ -693,6 +693,12 @@
       }
       setCsvImportStatus(parts.join(', '));
     }
+    function importReviewCsvText(text) {
+      importReviewDelimitedText(text, ',', 'CSV');
+    }
+    function importReviewTsvText(text) {
+      importReviewDelimitedText(text, '\t', 'TSV');
+    }
     function handleReviewCsvFile(event) {
       const file = event.target.files && event.target.files[0];
       if (!file) {
@@ -709,16 +715,16 @@
       };
       reader.readAsText(file, 'utf-8');
     }
-    function importPastedReviewCsv() {
-      const textarea = document.getElementById('pasteReviewCsv');
+    function importPastedReviewTsv() {
+      const textarea = document.getElementById('pasteReviewTsv');
       if (!textarea) {
         return;
       }
       if (isBlank(textarea.value)) {
-        setCsvImportStatus('붙여넣은 CSV 내용이 없습니다.');
+        setCsvImportStatus('붙여넣은 TSV 내용이 없습니다.');
         return;
       }
-      importReviewCsvText(textarea.value);
+      importReviewTsvText(textarea.value);
     }
     function renderExistingActionCell(finding) {
       const state = finding.action_plan_state;
@@ -883,7 +889,7 @@
     document.getElementById('applyBulkFalsePositiveReason').addEventListener('click', applyBulkFalsePositiveReason);
     document.getElementById('downloadReviewCsv').addEventListener('click', downloadReviewCsv);
     document.getElementById('importReviewCsv').addEventListener('change', handleReviewCsvFile);
-    document.getElementById('importPastedReviewCsv').addEventListener('click', importPastedReviewCsv);
+    document.getElementById('importPastedReviewTsv').addEventListener('click', importPastedReviewTsv);
     responderInput.addEventListener('input', () => {
       if (ResponderPattern.test(responderInput.value.trim())) {
         clearResponderValidation();
