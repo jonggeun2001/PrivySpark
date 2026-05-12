@@ -130,6 +130,8 @@ schema detection 단계에서 driver TCP 연결 증가가 의심되면 `read_sch
 
 ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped reason=ignored` 같은 이벤트와 함께 `ignored_files` 집계가 `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, `scan_complete`에 포함됩니다.
 
+directory listing 이후 pre-scan probe 전에 파일이 삭제되면 해당 파일은 `scan_directory_file_skipped reason=not_found`로 기록하고 건너뜁니다. 이 건은 `scan_errors`가 아니라 `scan_directory_pre_scan_execute_complete`의 `skipped_files` 집계에 포함됩니다.
+
 ## `_progress` 경로 운영
 - 진행 중 shard는 `<output>/_progress/<run_id>/results`, `errors`, `meta/completions` 아래 JSONL로 기록됩니다.
 - file fallback scan의 기본 progress flush 단위는 group입니다. 이 모드에서는 group이 끝나기 전까지 file별 완료 row가 `_progress`에 나타나지 않을 수 있으며, driver가 실패하면 해당 group은 다음 실행에서 group 단위로 재실행됩니다.

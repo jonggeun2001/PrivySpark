@@ -3,8 +3,10 @@ package io.github.jonggeun2001.privyspark.scan.archive
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.model.{ScanError, ScanFileEntry, ScanReadOptions}
+import io.github.jonggeun2001.privyspark.scan.DeletedFileDetection
 import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging._
 
+import java.io.FileNotFoundException
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
@@ -52,6 +54,8 @@ private[privyspark] object ArchiveExpanders {
           archiveReadFailed(datasetPath, timestamp, logicalIdentifier, s"Unsupported archive format: $archivePath")
       }
     } catch {
+      case e: FileNotFoundException if DeletedFileDetection.isDeletedFile(e) =>
+        throw e
       case NonFatal(e) =>
         archiveReadFailed(datasetPath, timestamp, logicalIdentifier, Option(e.getMessage).getOrElse(e.getClass.getSimpleName))
     }

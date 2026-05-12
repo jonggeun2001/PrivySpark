@@ -11,6 +11,7 @@ import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanFileEntr
 import io.github.jonggeun2001.privyspark.util.{DriverLogger, PathIdentifiers}
 import org.apache.hadoop.fs.Path
 
+import java.io.FileNotFoundException
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
@@ -51,6 +52,8 @@ private[privyspark] object SourceExpansion {
             return (Seq.empty, Seq.empty, 0)
           }
         } catch {
+          case e: FileNotFoundException if DeletedFileDetection.isDeletedFile(e) =>
+            throw e
           case NonFatal(e) =>
             return (
               Seq.empty,
@@ -64,6 +67,8 @@ private[privyspark] object SourceExpansion {
       try {
         detectPhysicalFormatWithReadOptions(conf, physicalPath)
       } catch {
+        case e: FileNotFoundException if DeletedFileDetection.isDeletedFile(e) =>
+          throw e
         case NonFatal(e) =>
           return (
             Seq.empty,

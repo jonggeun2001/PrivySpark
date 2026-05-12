@@ -590,6 +590,40 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
+  test("scanDirectoryStructure skips files deleted after discovery") {
+    val rootPath = "trackingfs:///deleted-after-discovery"
+
+    spark.sparkContext.hadoopConfiguration.set("fs.trackingfs.impl", classOf[TrackingListingFileSystem].getName)
+    TrackingListingFileSystem.clear()
+
+    try {
+      TrackingListingFileSystem.registerDirectory(rootPath)
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/stable.csv",
+        "name,email\nalice,alice@example.com\n"
+      )
+      TrackingListingFileSystem.registerFile(
+        s"$rootPath/.tmp_upload",
+        "temporary content\n",
+        disappearAfterListing = true
+      )
+
+      val plan = DirectoryScanner.scanDirectoryStructure(
+        spark,
+        rootPath,
+        rootPath,
+        "2026-05-12T00:00:00Z",
+        preScanParallelism = 1
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 1)
+      assert(plan.groups.flatMap(_.filePaths).map(path => new java.io.File(path).getName) == Seq("stable.csv"))
+    } finally {
+      TrackingListingFileSystem.clear()
+    }
+  }
+
   test("resolveConfiguredPreScanParallelism caps large explicit values to the fixed safety ceiling") {
     val key = "spark.privyspark.preScanParallelism"
     assert(ParallelismConfig.resolveConfiguredPreScanParallelism(128, 128, key) == ParallelismConfig.maxSafePreScanParallelism)
@@ -5788,6 +5822,7 @@ object TrackingListingFileSystem {
 
   private val directoryChildren = TrieMap.empty[String, Vector[Child]]
   private val fileContents = TrieMap.empty[String, Array[Byte]]
+  private val disappearAfterListFiles = TrieMap.empty[String, Boolean]
   private val delayedDirectories = TrieMap.empty[String, Long]
   private val trackedDirectories = TrieMap.empty[String, Boolean]
   private val listedStatusPaths = new ConcurrentLinkedQueue[String]()
@@ -5827,9 +5862,14 @@ object TrackingListingFileSystem {
       .foreach(parentKey => addChild(parentKey, Child(normalized, isDirectory = true)))
   }
 
-  def registerFile(path: String, contents: String): Unit = {
+  def registerFile(path: String, contents: String, disappearAfterListing: Boolean = false): Unit = {
     val normalized = key(path)
     fileContents.put(normalized, contents.getBytes(StandardCharsets.UTF_8))
+    if (disappearAfterListing) {
+      disappearAfterListFiles.put(normalized, true)
+    } else {
+      disappearAfterListFiles.remove(normalized)
+    }
     Option(new org.apache.hadoop.fs.Path(path).getParent)
       .map(key)
       .foreach(parentKey => addChild(parentKey, Child(normalized, isDirectory = false)))
@@ -5838,6 +5878,7 @@ object TrackingListingFileSystem {
   def clear(): Unit = {
     directoryChildren.clear()
     fileContents.clear()
+    disappearAfterListFiles.clear()
     delayedDirectories.clear()
     trackedDirectories.clear()
     listedStatusPaths.clear()
@@ -5867,6 +5908,13 @@ object TrackingListingFileSystem {
 
   private[privyspark] def contents(path: org.apache.hadoop.fs.Path): Array[Byte] = {
     fileContents.getOrElse(key(path), throw new java.io.FileNotFoundException(path.toString))
+  }
+
+  private[privyspark] def removeAfterListIfConfigured(path: org.apache.hadoop.fs.Path): Unit = {
+    val normalized = key(path)
+    if (disappearAfterListFiles.remove(normalized).isDefined) {
+      fileContents.remove(normalized)
+    }
   }
 
   private[privyspark] def children(path: org.apache.hadoop.fs.Path): Vector[Child] = {
@@ -5993,8 +6041,11 @@ class TrackingListingFileSystem extends org.apache.hadoop.fs.FileSystem {
         if (child.isDirectory) {
           new org.apache.hadoop.fs.FileStatus(0L, true, 1, 4096L, 0L, qualifiedPath)
         } else {
-          val bytes = TrackingListingFileSystem.contents(new org.apache.hadoop.fs.Path(child.path))
-          new org.apache.hadoop.fs.FileStatus(bytes.length.toLong, false, 1, 4096L, 0L, qualifiedPath)
+          val childSourcePath = new org.apache.hadoop.fs.Path(child.path)
+          val bytes = TrackingListingFileSystem.contents(childSourcePath)
+          val status = new org.apache.hadoop.fs.FileStatus(bytes.length.toLong, false, 1, 4096L, 0L, qualifiedPath)
+          TrackingListingFileSystem.removeAfterListIfConfigured(childSourcePath)
+          status
         }
       }.toArray
     } finally {

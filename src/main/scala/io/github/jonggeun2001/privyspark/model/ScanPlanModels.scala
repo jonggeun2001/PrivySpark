@@ -82,6 +82,7 @@ private[privyspark] final case class PreScanFileOutcome(
   pathInferredFormat: Option[String] = None,
   probeRequired: Boolean = false,
   skipped: Boolean = false,
+  skipReason: String = "",
   failure: Option[Throwable] = None
 )
 
