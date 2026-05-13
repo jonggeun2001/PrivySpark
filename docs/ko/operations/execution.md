@@ -128,7 +128,11 @@ group scan 중 driver TCP 연결 폭증을 확인해야 할 때는 `debug` 레�
 
 schema detection 단계에서 driver TCP 연결 증가가 의심되면 `read_schema_source_tcp_snapshot` 이벤트를 함께 봅니다. 이 이벤트는 `read_schema_source_start|read_schema_source_complete|read_schema_source_error` phase와 `format`, `file`을 기록하므로 `read_schema_source_start` 이후 생긴 `ESTABLISHED` 연결이 complete 이후에도 남는지, 그리고 HDFS DataNode 포트인지 Spark executor/RPC 포트인지 endpoint 단위로 비교할 수 있습니다.
 
+pre-scan에서 만든 schema signature cache는 group scan의 sampled batch validation과 exact split fallback 경로에서도 재사용합니다. 본스캔 전환 시 새 schema cache를 만들어 같은 파일의 `spark.read.<format>` schema read를 반복하는 일을 줄입니다.
+
 ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped reason=ignored` 같은 이벤트와 함께 `ignored_files` 집계가 `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, `scan_complete`에 포함됩니다.
+
+directory listing 이후 pre-scan probe 전에 파일이 삭제되면 해당 파일은 `scan_directory_file_skipped reason=not_found`로 기록하고 건너뜁니다. 이 건은 `scan_errors`가 아니라 `scan_directory_pre_scan_execute_complete`의 `skipped_files` 집계에 포함됩니다.
 
 ## `_progress` 경로 운영
 - 진행 중 shard는 `<output>/_progress/<run_id>/results`, `errors`, `meta/completions` 아래 JSONL로 기록됩니다.
@@ -149,5 +153,5 @@ ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped rea
 - GitHub Release는 `v*` 또는 bare semver 태그 푸시로 트리거됩니다.
 - Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행합니다.
 - 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html`입니다.
-- `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드와 CSV 편집/임포트 및 Excel TSV 붙여넣기 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
+- `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드와 CSV 편집/임포트 및 Excel 셀 복사 후 붙여넣기 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
 - `privyspark-<tag>-review-response-viewer.html`은 회수한 `response-<scan-path>-YYYYMMDD-HHMMSS.json`을 운영자가 로컬에서 파일 선택, 드래그앤드롭, 원문 붙여넣기로 열어 envelope 메타데이터, 검증 메시지, finding별 판정을 확인하는 self-contained 파일입니다.

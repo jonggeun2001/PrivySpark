@@ -126,7 +126,11 @@ To diagnose driver TCP connection growth during group scan, inspect `group_scan_
 
 When connection growth appears during schema detection, inspect `read_schema_source_tcp_snapshot` events as well. These events record `read_schema_source_start|read_schema_source_complete|read_schema_source_error` phases with `format` and `file`, so you can compare whether `ESTABLISHED` connections opened after `read_schema_source_start` remain after completion and whether the endpoints point to HDFS DataNodes or Spark executor/RPC ports.
 
+The schema-signature cache created for pre-scan is reused by group-scan sampled batch validation and exact split fallback paths. This avoids creating a fresh schema cache at the scan transition and reduces repeated driver-side `spark.read.<format>` schema reads for files whose signatures were already detected.
+
 When ignore rules apply, events such as `scan_directory_file_ignored` and `archive_entry_skipped reason=ignored` are emitted, and `ignored_files` is included in `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, and `scan_complete`.
+
+If a file is discovered and then deleted before pre-scan probing, the file is skipped and logged as `scan_directory_file_skipped reason=not_found`. It is included in `skipped_files` for `scan_directory_pre_scan_execute_complete`, not in `scan_errors`.
 
 ## `_progress` Handling
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
@@ -147,5 +151,5 @@ This design keeps long-running progress observable without mixing partial output
 - GitHub Release is triggered by pushing a `v*` tag or bare semver tag.
 - The release workflow runs `./gradlew clean shadowJar packageSampleDatasets`.
 - Release assets are `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, and `privyspark-<tag>-review-response-viewer.html`.
-- `privyspark-<tag>-review-response-example.html` is a self-contained example for checking the offline owner review response JSON download, CSV edit/import, and Excel TSV paste flow. Production files are generated at `<scan-output>/review/review.html` after running `scan --review-state-root`.
+- `privyspark-<tag>-review-response-example.html` is a self-contained example for checking the offline owner review response JSON download, CSV edit/import, and Excel cell copy/paste flow. Production files are generated at `<scan-output>/review/review.html` after running `scan --review-state-root`.
 - `privyspark-<tag>-review-response-viewer.html` is a self-contained operator page for inspecting a collected `response-<scan-path>-YYYYMMDD-HHMMSS.json` locally by choosing, dragging and dropping, or pasting the file contents, including envelope metadata, validation messages, and per-finding decisions.

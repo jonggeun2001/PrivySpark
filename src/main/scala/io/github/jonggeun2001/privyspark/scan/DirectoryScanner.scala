@@ -154,7 +154,7 @@ private[privyspark] object DirectoryScanner {
             "scan_directory_file_skipped",
             "file" -> outcome.filePath,
             "directory" -> outcome.groupingDirectoryPath,
-            "reason" -> "zero_byte"
+            "reason" -> Option(outcome.skipReason).filter(_.nonEmpty).getOrElse("skipped")
           )
         } else if (outcome.expandedEntries.nonEmpty) {
           DriverLogger.debug(
@@ -295,8 +295,8 @@ private[privyspark] object DirectoryScanner {
     datasetPath: String,
     timestamp: String,
     group: ScanGroup,
-    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
-    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
+    csvHeadCache: CsvHeadCache,
+    schemaSigCache: SchemaSignatureCache
   ): (Seq[ScanGroup], Seq[ScanError]) = {
     SchemaGroupSplitter.splitGroupBySchema(
       spark,
