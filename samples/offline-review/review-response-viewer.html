@@ -153,6 +153,15 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .high-ratio-false-positive {
+      background: #fff5f5;
+      box-shadow: inset 4px 0 0 var(--bad);
+    }
+    .risk-note {
+      color: var(--bad);
+      font-weight: 700;
+      margin-top: 6px;
+    }
     .hidden {
       display: none;
     }
@@ -195,6 +204,7 @@
       <div class="metric">오탐<strong id="metricFalsePositive">0</strong></div>
       <div class="metric">정탐<strong id="metricTruePositive">0</strong></div>
       <div class="metric">Recurring Allowlist<strong id="metricPattern">0</strong></div>
+      <div class="metric">검출비율 50% 초과 오탐<strong id="metricHighRatioFalsePositive">0</strong></div>
     </div>
     <table>
       <tbody id="metaTable"></tbody>
@@ -234,8 +244,8 @@
           "column_name": "customer_no",
           "pii_type": "driver_license_number",
           "sample_row_count": 1000,
-          "match_count": 24,
-          "non_empty_match_ratio": 0.024,
+          "match_count": 620,
+          "non_empty_match_ratio": 0.62,
           "decision": "false_positive",
           "false_positive_reason": "Synthetic customer number pattern",
           "expires_at": "9999-12-31"
@@ -285,6 +295,7 @@
       setText('metricFalsePositive', '0');
       setText('metricTruePositive', '0');
       setText('metricPattern', '0');
+      setText('metricHighRatioFalsePositive', '0');
     };
 
     const setStatus = (state, messages) => {
@@ -316,6 +327,31 @@
       const parsed = new Date(`${value}T00:00:00Z`);
       return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
     };
+
+    function detectionRatioPercent(response) {
+      const ratio = Number(response && response.non_empty_match_ratio);
+      if (Number.isFinite(ratio)) {
+        return ratio > 1 ? ratio : ratio * 100;
+      }
+      const matchCount = Number(response && response.match_count);
+      const sampleRowCount = Number(response && response.sample_row_count);
+      if (Number.isFinite(matchCount) && Number.isFinite(sampleRowCount) && sampleRowCount > 0) {
+        return matchCount / sampleRowCount * 100;
+      }
+      return null;
+    }
+
+    function formatDetectionRatio(response) {
+      const percent = detectionRatioPercent(response);
+      return percent === null ? '-' : `${percent.toFixed(2)}%`;
+    }
+
+    function isHighRatioFalsePositive(response) {
+      const percent = detectionRatioPercent(response);
+      return textValue(response && response.decision) === 'false_positive' &&
+        percent !== null &&
+        percent > 50;
+    }
 
     const validateEnvelope = envelope => {
       const errors = [];
@@ -400,11 +436,13 @@
       const falsePositiveCount = responses.filter(response => response.decision === 'false_positive').length;
       const truePositiveCount = responses.filter(response => response.decision === 'true_positive').length;
       const recurringCount = responses.filter(response => response.decision === 'false_positive').length;
+      const highRatioFalsePositiveCount = responses.filter(isHighRatioFalsePositive).length;
 
       setText('metricTotal', responses.length);
       setText('metricFalsePositive', falsePositiveCount);
       setText('metricTruePositive', truePositiveCount);
       setText('metricPattern', recurringCount);
+      setText('metricHighRatioFalsePositive', highRatioFalsePositiveCount);
 
       document.getElementById('metaTable').innerHTML = [
         ['schema_version', envelope.schema_version],
@@ -413,13 +451,17 @@
         ['responded_at', envelope.responded_at]
       ].map(([key, value]) => `<tr><th>${escapeHtml(key)}</th><td>${field(value)}</td></tr>`).join('');
 
-      document.getElementById('responsesBody').innerHTML = responses.map(response => `
-        <tr>
+      document.getElementById('responsesBody').innerHTML = responses.map(response => {
+        const highRatioFalsePositive = isHighRatioFalsePositive(response);
+        return `
+        <tr class="${highRatioFalsePositive ? 'high-ratio-false-positive' : ''}" ${highRatioFalsePositive ? 'data-risk="high_false_positive"' : ''}>
           <td data-field="decision">${field(response.decision)}</td>
           <td>
             <div>${field(response.file_identifier)}</div>
             <div class="muted">${field(response.hive_table_fqn)}</div>
             <div class="muted">${field(response.column_name)} / ${field(response.pii_type)}</div>
+            <div class="muted">검출비율: ${escapeHtml(formatDetectionRatio(response))}</div>
+            ${highRatioFalsePositive ? '<div class="risk-note">검출비율 50% 초과 오탐</div>' : ''}
           </td>
           <td class="sample">${field(response.finding_key)}
 ${field(response.finding_hash)}</td>
@@ -434,7 +476,7 @@ ${field(response.finding_hash)}</td>
             <div class="muted">due: ${field(response.action_due_date)}</div>
           </td>
         </tr>
-      `).join('');
+      `; }).join('');
 
       document.getElementById('summaryPanel').classList.remove('hidden');
       document.getElementById('responsesPanel').classList.remove('hidden');
