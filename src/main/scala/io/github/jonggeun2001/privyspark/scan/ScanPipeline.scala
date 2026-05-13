@@ -193,6 +193,7 @@ private[privyspark] object ScanPipeline {
         Some(preparedProgressRun),
         retainPayloads = false,
         csvHeadCache = csvHeadCache,
+        schemaSigCache = schemaSigCache,
         hiveLookup = Some(hiveLookupBroadcast)
       )
 

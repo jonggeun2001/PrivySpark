@@ -128,6 +128,8 @@ group scan 중 driver TCP 연결 폭증을 확인해야 할 때는 `debug` 레�
 
 schema detection 단계에서 driver TCP 연결 증가가 의심되면 `read_schema_source_tcp_snapshot` 이벤트를 함께 봅니다. 이 이벤트는 `read_schema_source_start|read_schema_source_complete|read_schema_source_error` phase와 `format`, `file`을 기록하므로 `read_schema_source_start` 이후 생긴 `ESTABLISHED` 연결이 complete 이후에도 남는지, 그리고 HDFS DataNode 포트인지 Spark executor/RPC 포트인지 endpoint 단위로 비교할 수 있습니다.
 
+pre-scan에서 만든 schema signature cache는 group scan의 sampled batch validation과 exact split fallback 경로에서도 재사용합니다. 본스캔 전환 시 새 schema cache를 만들어 같은 파일의 `spark.read.<format>` schema read를 반복하는 일을 줄입니다.
+
 ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped reason=ignored` 같은 이벤트와 함께 `ignored_files` 집계가 `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, `scan_complete`에 포함됩니다.
 
 directory listing 이후 pre-scan probe 전에 파일이 삭제되면 해당 파일은 `scan_directory_file_skipped reason=not_found`로 기록하고 건너뜁니다. 이 건은 `scan_errors`가 아니라 `scan_directory_pre_scan_execute_complete`의 `skipped_files` 집계에 포함됩니다.

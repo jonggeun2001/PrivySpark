@@ -295,8 +295,8 @@ private[privyspark] object DirectoryScanner {
     datasetPath: String,
     timestamp: String,
     group: ScanGroup,
-    csvHeadCache: CsvHeadCache = new CsvHeadCache(),
-    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache()
+    csvHeadCache: CsvHeadCache,
+    schemaSigCache: SchemaSignatureCache
   ): (Seq[ScanGroup], Seq[ScanError]) = {
     SchemaGroupSplitter.splitGroupBySchema(
       spark,

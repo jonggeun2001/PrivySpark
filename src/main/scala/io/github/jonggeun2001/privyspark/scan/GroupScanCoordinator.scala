@@ -31,6 +31,7 @@ private[privyspark] object GroupScanCoordinator {
     progressRun: Option[ProgressRun] = None,
     retainPayloads: Boolean = true,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
     hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): Seq[(ScanGroup, Seq[ScanResult], Seq[ScanError])] = {
     if (groups.isEmpty) {
@@ -95,6 +96,7 @@ private[privyspark] object GroupScanCoordinator {
             allowlistInputRoot,
             progressRun,
             csvHeadCache,
+            schemaSigCache,
             hiveLookup = hiveLookup
           )
         val (groupResults, groupErrors) = progressRun match {
@@ -162,6 +164,7 @@ private[privyspark] object GroupScanCoordinator {
     allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
+    schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
     selectedSourceKeys: Option[Seq[String]] = None,
     hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
@@ -195,6 +198,7 @@ private[privyspark] object GroupScanCoordinator {
         allowlistInputRoot,
         progressRun,
         csvHeadCache,
+        schemaSigCache,
         hiveLookup
       )
 
@@ -249,7 +253,7 @@ private[privyspark] object GroupScanCoordinator {
 
       case BatchScan =>
         val batchReadyGroupResult =
-          prepareSampledGroupForBatchScan(spark, datasetPath, timestamp, group, csvHeadCache)
+          prepareSampledGroupForBatchScan(spark, datasetPath, timestamp, group, csvHeadCache, schemaSigCache)
         batchReadyGroupResult match {
           case Left(_) =>
             val exactSplitResult = rescanSampledGroupWithExactSplit("sampled_batch_schema_resplit")
@@ -321,7 +325,8 @@ private[privyspark] object GroupScanCoordinator {
     datasetPath: String,
     timestamp: String,
     group: ScanGroup,
-    csvHeadCache: CsvHeadCache
+    csvHeadCache: CsvHeadCache,
+    schemaSigCache: SchemaSignatureCache
   ): Either[Unit, ScanGroup] = {
     if (!group.schemaSampled || group.filePaths.size <= 1 || group.format == "text") {
       Right(group)
@@ -331,7 +336,8 @@ private[privyspark] object GroupScanCoordinator {
         datasetPath,
         timestamp,
         group.copy(schemaSampled = false),
-        csvHeadCache
+        csvHeadCache,
+        schemaSigCache
       )
       val validated = splitErrors.isEmpty && splitGroups.size == 1
       DriverLogger.debug(

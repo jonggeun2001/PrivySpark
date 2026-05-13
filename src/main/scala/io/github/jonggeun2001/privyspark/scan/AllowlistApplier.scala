@@ -206,6 +206,7 @@ private[privyspark] object AllowlistApplier {
     allowlistInputRoot: Option[String],
     progressRun: Option[ProgressRun],
     csvHeadCache: CsvHeadCache,
+    schemaSigCache: SchemaSignatureCache,
     hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
   ): (Seq[ScanResult], Seq[ScanError]) = {
     val (splitGroups, splitErrors) = DirectoryScanner.splitGroupBySchema(
@@ -213,7 +214,8 @@ private[privyspark] object AllowlistApplier {
       datasetPath,
       timestamp,
       group.copy(schemaSampled = false),
-      csvHeadCache
+      csvHeadCache,
+      schemaSigCache
     )
     val exactSplitCanUseDirectoryIdentifier =
       group.directoryIdentifierEligible &&
@@ -255,6 +257,7 @@ private[privyspark] object AllowlistApplier {
         allowlistInputRoot,
         progressRun,
         csvHeadCache,
+        schemaSigCache,
         hiveLookup = hiveLookup
       )
       rescannedResults ++= groupResults

@@ -125,7 +125,9 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         spark,
         inputDir.toString,
         "2026-03-05T00:00:00Z",
-        group
+        group,
+        new CsvHeadCache(),
+        new SchemaSignatureCache()
       )
 
       assert(splitErrors.isEmpty)
@@ -685,7 +687,9 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         spark,
         inputDir.toString,
         "2026-03-05T00:00:00Z",
-        group
+        group,
+        new CsvHeadCache(),
+        new SchemaSignatureCache()
       )
 
       assert(splitErrors.isEmpty)
@@ -977,7 +981,9 @@ class PrivySparkAppSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         spark,
         inputDir.toString,
         "2026-03-13T00:00:00Z",
-        group
+        group,
+        new CsvHeadCache(),
+        new SchemaSignatureCache()
       )
 
       assert(spacedFastPath == spacedSparkSignature)
