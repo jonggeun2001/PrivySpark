@@ -126,6 +126,8 @@ To diagnose driver TCP connection growth during group scan, inspect `group_scan_
 
 When connection growth appears during schema detection, inspect `read_schema_source_tcp_snapshot` events as well. These events record `read_schema_source_start|read_schema_source_complete|read_schema_source_error` phases with `format` and `file`, so you can compare whether `ESTABLISHED` connections opened after `read_schema_source_start` remain after completion and whether the endpoints point to HDFS DataNodes or Spark executor/RPC ports.
 
+The schema-signature cache created for pre-scan is reused by group-scan sampled batch validation and exact split fallback paths. This avoids creating a fresh schema cache at the scan transition and reduces repeated driver-side `spark.read.<format>` schema reads for files whose signatures were already detected.
+
 When ignore rules apply, events such as `scan_directory_file_ignored` and `archive_entry_skipped reason=ignored` are emitted, and `ignored_files` is included in `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, and `scan_complete`.
 
 If a file is discovered and then deleted before pre-scan probing, the file is skipped and logged as `scan_directory_file_skipped reason=not_found`. It is included in `skipped_files` for `scan_directory_pre_scan_execute_complete`, not in `scan_errors`.

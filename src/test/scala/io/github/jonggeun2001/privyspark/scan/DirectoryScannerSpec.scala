@@ -176,7 +176,9 @@ class DirectoryScannerSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         spark,
         inputDir.toString,
         Timestamp,
-        group
+        group,
+        new CsvHeadCache(),
+        new SchemaSignatureCache()
       )
 
       assert(splitErrors.isEmpty)

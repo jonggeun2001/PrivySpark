@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.PrivySparkSpecFixtures
 import io.github.jonggeun2001.privyspark.detect.testing.DetectionFaultInjectors
-import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanGroup}
+import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, PiiRule, ScanGroup}
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
@@ -146,10 +146,39 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       "/data",
       Timestamp,
       group,
-      new CsvHeadCache()
+      new CsvHeadCache(),
+      new SchemaSignatureCache()
     )
 
     assert(result == Right(group))
+  }
+
+  test("prepareSampledGroupForBatchScan reuses schema signature cache during sampled batch validation") {
+    val group = ScanGroup(
+      directoryPath = "/data/users",
+      format = "parquet",
+      schemaSignature = "email",
+      filePaths = Seq("/missing/a.parquet", "/missing/b.parquet"),
+      schemaSampled = true,
+      directoryIdentifierEligible = true
+    )
+    val schemaSigCache = new SchemaSignatureCache()
+    group.filePaths.foreach { path =>
+      schemaSigCache.getOrCompute(path, group.format) {
+        CachedSchemaSignature("email", csvHasHeader = true)
+      }
+    }
+
+    val result = GroupScanCoordinator.prepareSampledGroupForBatchScan(
+      spark,
+      "/data",
+      Timestamp,
+      group,
+      new CsvHeadCache(),
+      schemaSigCache
+    )
+
+    assert(result.map(_.filePaths) == Right(group.filePaths))
   }
 
   test("scanGroup exact-splits sampled Parquet groups when later files add columns") {

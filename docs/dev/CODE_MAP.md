@@ -26,15 +26,15 @@
 - `PrivySparkApp.scala`: `main` L13, `runMain` L17, scan auto collect dispatch L49, default scan dispatch L79, Excel compatibility warning L92.
 - `cli/CliArgumentValidator.scala`: command path validation L6, absolute path error logging L51.
 - `config/SuppressionParser.scala`: parsed suppression ADT L15, CLI/file suppression parsing L17/L25, unknown pii warning L35.
-- `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L41, report merge/review hook L204.
-- `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L23, pre-scan collect/group build L141, schema split/finalization delegate L219.
+- `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L42, schema cache handoff to group scan L179, report merge/review hook L206.
+- `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L23, pre-scan collect/group build L141, schema split/finalization delegate L219, explicit-cache `splitGroupBySchema` L293.
 - `scan/DeletedFileDetection.scala`: deleted-after-discovery `FileNotFoundException` classification L6.
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
 - `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L13, `discover` L17.
 - `scan/discovery/PreScanExecutor.scala`: skipped outcome helper L31, CSV dialect refinement L54, `runPreScan` L75.
 - `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L24, schema split scheduling L120, file schema task executor L140, `splitGroupBySchemaFast` L152, `splitGroupBySchema` L302.
-- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L221, sampled batch schema gate L319, batch fallback invocation L308, compatibility delegates L361/L399.
+- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L225, sampled batch schema gate L323, batch fallback invocation L312, compatibility delegates L367/L405.
 - `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L89, file progress record helper L96, group buffer flush L309.
 - `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.
 - `scan/GroupScanFallbackPolicy.scala`: batch failure fallback executor L7.
