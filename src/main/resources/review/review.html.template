@@ -88,8 +88,8 @@
   <div class="review-file-actions">
     <button type="button" id="downloadReviewCsv">엑셀 편집용 CSV 다운로드</button>
     <label>복호화한 CSV 불러오기 <input id="importReviewCsv" type="file" accept=".csv,text/csv,text/plain"></label>
-    <label class="tsv-paste-field">Excel TSV 붙여넣기 <textarea id="pasteReviewTsv" rows="3" spellcheck="false"></textarea></label>
-    <button type="button" id="importPastedReviewTsv">붙여넣은 TSV 반영</button>
+    <label class="tsv-paste-field">Excel 셀 복사 후 붙여넣기 <textarea id="pasteReviewTsv" rows="3" spellcheck="false"></textarea></label>
+    <button type="button" id="importPastedReviewTsv">반영</button>
     <span id="csvImportStatus" class="status-message" role="status" aria-live="polite"></span>
   </div>
   <details class="review-guide" open aria-label="검토 안내">
