@@ -150,7 +150,7 @@ bash scripts/verify-worktree.sh
 ## 샘플
 - 재현 가능한 입력 케이스 번들은 [samples/input-cases/README.md](samples/input-cases/README.md)에 있습니다.
 - 오프라인 리뷰 응답 HTML 예시는 [samples/offline-review/review-response-example.html](samples/offline-review/review-response-example.html)에 있습니다.
-- 회수한 오프라인 리뷰 응답 JSON을 파일 선택, 드래그앤드롭, 원문 붙여넣기로 확인하는 운영자 HTML은 [samples/offline-review/review-response-viewer.html](samples/offline-review/review-response-viewer.html)에 있습니다.
+- 회수한 오프라인 리뷰 응답 JSON을 파일 선택, 드래그앤드롭, 원문 붙여넣기로 확인하고 검출비율 50% 초과 오탐 응답을 빨간색으로 표시하는 운영자 HTML은 [samples/offline-review/review-response-viewer.html](samples/offline-review/review-response-viewer.html)에 있습니다.
 - `./gradlew generateSampleDatasets`는 현재 입력 처리 경로를 재현하는 샘플 케이스를 다시 생성합니다.
 - `./gradlew packageSampleDatasets`는 샘플 번들을 `build/distributions/privyspark-sample-datasets.zip`으로 패키징하고, 릴리즈 자산에서는 `privyspark-<tag>-sample-datasets.zip`으로 배포합니다.
 
