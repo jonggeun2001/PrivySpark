@@ -154,4 +154,4 @@ directory listing 이후 pre-scan probe 전에 파일이 삭제되면 해당 파
 - Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행합니다.
 - 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html`입니다.
 - `privyspark-<tag>-review-response-example.html`은 오프라인 리뷰 담당자가 response JSON 다운로드와 CSV 편집/임포트 및 Excel 셀 복사 후 붙여넣기 흐름을 확인할 수 있는 self-contained 예시 파일입니다. 실제 운영 파일은 `scan --review-state-root` 실행 후 `<scan-output>/review/review.html`에 생성됩니다.
-- `privyspark-<tag>-review-response-viewer.html`은 회수한 `response-<scan-path>-YYYYMMDD-HHMMSS.json`을 운영자가 로컬에서 파일 선택, 드래그앤드롭, 원문 붙여넣기로 열어 envelope 메타데이터, 검증 메시지, finding별 판정을 확인하는 self-contained 파일입니다. 검출비율이 50%를 넘는데 오탐으로 기재된 응답은 빨간색으로 강조합니다.
+- `privyspark-<tag>-review-response-viewer.html`은 회수한 `response-<scan-path>-YYYYMMDD-HHMMSS.json`을 운영자가 로컬에서 파일 선택, 드래그앤드롭, 원문 붙여넣기로 열어 envelope 메타데이터, 검증 메시지, finding별 판정, 샘플/추출값을 확인하는 self-contained 파일입니다. 응답 목록은 대상과 검출비율로 정렬할 수 있고, 검출비율이 50%를 넘는데 오탐으로 기재된 응답은 빨간색으로 강조합니다.
