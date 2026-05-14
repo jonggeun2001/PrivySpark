@@ -37,10 +37,11 @@
 12. direct-file scan `xlsx` and other non-batch groups
 13. fall back to file-level scanning if a normal group batch scan fails
 14. create in-flight markers while group/file/allowlist work is active, then write progress JSONL shards when a group or file completes
-15. merge progress JSONL into final `scan_results` and `scan_errors`, then remove `_progress/<run_id>`
+15. merge progress JSONL into final `scan_results` and `scan_errors` with Hive table-level result aggregation applied, then remove `_progress/<run_id>`
 
 ## Operational Invariants
 - `scan_results` stores two interpretation aids: `sample_matched_fragment` keeps the detected fragment itself, and `sample_raw_value` keeps only up to 50 characters of surrounding context on each side.
+- Final `scan_results` groups Hive-mapped rows by `hive_table_fqn`, column, and PII type, sums `non_empty_value_count`, and recalculates ratios and confidence. `_progress` JSONL shards are raw in-progress records before this final aggregation.
 - `--pre-scan-parallelism` applies to directory discovery, input expansion, format probing, and schema split.
 - `--ignore` and `--ignore-file` apply immediately after physical file discovery and again during archive entry expansion.
 - Suppression is applied during `DetectionAggregator.buildMetrics`, before metric planning, so excluded `(column, pii_type)` pairs never materialize result rows.

@@ -38,10 +38,11 @@
 12. `xlsx` 등 batch scan 미지원 group은 direct file scan
 13. 일반 group batch 실패 시 파일 단위 fallback
 14. group/file/allowlist 작업 실행 중 in-flight marker를 만들고, group/file 완료 시 progress JSONL 기록
-15. progress JSONL을 최종 `scan_results`/`scan_errors`로 merge 후 `_progress/<run_id>` 삭제
+15. progress JSONL을 Hive 테이블 단위 최종 결과 집계가 반영된 `scan_results`/`scan_errors`로 merge 후 `_progress/<run_id>` 삭제
 
 ## 운영 불변 조건
 - `scan_results`에는 해석용 샘플 값 두 개를 저장합니다. `sample_matched_fragment`는 검출된 조각 그대로이고, `sample_raw_value`는 앞뒤 최대 50자 문맥만 저장합니다.
+- 최종 `scan_results`는 Hive 매핑이 있는 결과를 `hive_table_fqn`, 컬럼, 개인정보 유형 단위로 묶고 `non_empty_value_count`를 합산해 비율과 confidence를 재계산합니다. `_progress` JSONL shard는 최종 집계 전 원시 진행 기록입니다.
 - `--pre-scan-parallelism`은 디렉터리 discovery, 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용합니다.
 - `--ignore`, `--ignore-file`은 물리 파일 수집 직후와 archive entry 확장 단계에서 적용합니다.
 - suppression은 `DetectionAggregator.buildMetrics`에서 metric plan 생성 전에 적용해 제외된 `(column, pii_type)` 조합이 결과 row 자체를 만들지 않게 합니다.

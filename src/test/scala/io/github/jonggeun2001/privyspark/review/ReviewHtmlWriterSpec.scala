@@ -456,8 +456,9 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
       pii_type = "email",
       match_count = 1L,
       sampled_row_count = 10L,
+      non_empty_value_count = 2L,
       match_ratio = 0.1,
-      non_empty_match_ratio = 0.1,
+      non_empty_match_ratio = 0.5,
       confidence = 0.1,
       sample_raw_value = "owner=alice@example.com",
       sample_matched_fragment = "alice@example.com",
@@ -471,6 +472,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
         file_identifier = "customers/dt=2026-05-01/part-001.parquet",
         match_count = 2L,
         sampled_row_count = 20L,
+        non_empty_value_count = 4L,
         sample_raw_value = "owner=bob@example.com",
         sample_matched_fragment = "bob@example.com"
       ),
@@ -478,6 +480,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
         file_identifier = "customers/dt=2026-05-02/part-000.parquet",
         match_count = 3L,
         sampled_row_count = 30L,
+        non_empty_value_count = 4L,
         sample_raw_value = "owner=carol@example.com",
         sample_matched_fragment = "carol@example.com"
       )
@@ -497,6 +500,10 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(occurrences(html, """"finding_key":"""") == 1)
     assert(occurrences(html, """"hive_table_fqn":"mart.customers"""") == 1)
     assert(html.contains(""""file_identifier":"customers""""))
+    assert(html.contains(""""match_count":6"""))
+    assert(html.contains(""""sampled_row_count":60"""))
+    assert(html.contains(""""match_ratio":0.1"""))
+    assert(html.contains(""""non_empty_match_ratio":0.6"""))
     assert(html.contains(""""aggregated":true"""))
     assert(html.contains(""""aggregated_file_count":3"""))
     assert(html.contains(""""aggregated_partition_count":2"""))

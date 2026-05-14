@@ -23,6 +23,21 @@ class ScanResultBuilderSpec extends AnyFunSuite {
     assert(results.head.hive_table_fqn == "")
   }
 
+  test("buildScanResults records the non-empty value count used by non_empty_match_ratio") {
+    val results = ScanResultBuilder.buildScanResults(
+      datasetPath = "/data",
+      scanTimestamp = "2026-04-27T00:00:00Z",
+      fileIdentifier = "customers.csv",
+      sampledRowCount = 10L,
+      nonEmptyValueCounts = Map("email" -> 4L),
+      matchCounts = Seq(MatchCount("email", "email", 2L, "email"))
+    )
+
+    assert(results.size == 1)
+    assert(results.head.non_empty_value_count == 4L)
+    assert(results.head.non_empty_match_ratio == 0.5)
+  }
+
   test("comparableResultPayloads ignores hive_table_fqn") {
     val baseResults = ScanResultBuilder.buildScanResults(
       datasetPath = "/data",
