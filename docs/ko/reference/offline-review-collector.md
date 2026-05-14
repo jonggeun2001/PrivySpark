@@ -155,6 +155,8 @@ collector는 response JSON에 대해 다음을 검증합니다.
 - `expires_at`, `action_due_date`는 `YYYY-MM-DD`
 - `allowlist_scope=exact` 등 recurring이 아닌 scope는 거부
 
+`review.html`이 생성하는 response JSON은 운영자가 회수 파일을 해석할 수 있도록 `sample_matched_fragment`, `sample_raw_value` 보조 필드를 함께 담습니다. collector는 이 두 필드를 review state 판단에 사용하지 않으며, `review-response-viewer.html`에서 샘플/추출값 표시용으로 사용합니다.
+
 invalid response가 하나라도 있으면 collector는 `<review-state-root>/current`를 갱신하지 않고 실패합니다. `scan --review-state-root`에서 자동 수집 중 같은 실패가 발생하면 스캔 본 작업을 시작하지 않습니다.
 
 ## review.html

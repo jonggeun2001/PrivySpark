@@ -469,6 +469,10 @@
         value !== null && value !== undefined && value !== ''
       ));
     }
+    function firstEvidenceSampleValue(finding, fieldName) {
+      const sample = finding && Array.isArray(finding.evidence_samples) ? finding.evidence_samples[0] : null;
+      return sample ? sample[fieldName] : '';
+    }
     function responseBase(response) {
       return {
         finding_key: response.finding_key,
@@ -483,6 +487,8 @@
         sample_row_count: response.sample_row_count,
         match_count: response.match_count,
         non_empty_match_ratio: response.non_empty_match_ratio,
+        sample_matched_fragment: response.sample_matched_fragment,
+        sample_raw_value: response.sample_raw_value,
         decision: response.decision
       };
     }
@@ -947,7 +953,9 @@
           pii_type: finding.pii_type,
           sample_row_count: finding.sampled_row_count,
           match_count: finding.match_count,
-          non_empty_match_ratio: finding.non_empty_match_ratio
+          non_empty_match_ratio: finding.non_empty_match_ratio,
+          sample_matched_fragment: firstEvidenceSampleValue(finding, 'sample_matched_fragment'),
+          sample_raw_value: firstEvidenceSampleValue(finding, 'sample_raw_value')
         }, values[index] || {});
         return response;
       });

@@ -85,6 +85,19 @@
       background: #ffffff;
       color: #17202a;
     }
+    .sort-button {
+      background: transparent;
+      border: 0;
+      color: inherit;
+      font: inherit;
+      font-weight: 700;
+      padding: 0;
+      text-align: left;
+    }
+    .sort-button:focus-visible {
+      outline: 2px solid #1f6feb;
+      outline-offset: 2px;
+    }
     table {
       border-collapse: collapse;
       width: 100%;
@@ -153,6 +166,17 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .sample-block + .sample-block {
+      border-top: 1px solid var(--border);
+      margin-top: 8px;
+      padding-top: 8px;
+    }
+    .sample-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
     .high-ratio-false-positive {
       background: #fff5f5;
       box-shadow: inset 4px 0 0 var(--bad);
@@ -217,8 +241,9 @@
       <thead>
         <tr>
           <th>판정</th>
-          <th>대상</th>
-          <th>근거 식별자</th>
+          <th data-sort-key="target" aria-sort="none"><button type="button" class="sort-button">대상 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+          <th data-sort-key="detection_ratio" aria-sort="none"><button type="button" class="sort-button">검출비율 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+          <th>샘플/추출값</th>
           <th>오탐 설정</th>
           <th>조치 계획</th>
         </tr>
@@ -246,6 +271,8 @@
           "sample_row_count": 1000,
           "match_count": 620,
           "non_empty_match_ratio": 0.62,
+          "sample_matched_fragment": "82***21",
+          "sample_raw_value": "customer_no=82***21",
           "decision": "false_positive",
           "false_positive_reason": "Synthetic customer number pattern",
           "expires_at": "9999-12-31"
@@ -262,6 +289,8 @@
           "sample_row_count": 1000,
           "match_count": 830,
           "non_empty_match_ratio": 0.83,
+          "sample_matched_fragment": "a***e@example.test",
+          "sample_raw_value": "contact=a***e@example.test",
           "decision": "true_positive",
           "action_plan": "Mask email before downstream export",
           "action_due_date": "2026-05-15"
@@ -296,6 +325,7 @@
       setText('metricTruePositive', '0');
       setText('metricPattern', '0');
       setText('metricHighRatioFalsePositive', '0');
+      updateResponseSortHeaders();
     };
 
     const setStatus = (state, messages) => {
@@ -344,6 +374,62 @@
     function formatDetectionRatio(response) {
       const percent = detectionRatioPercent(response);
       return percent === null ? '-' : `${percent.toFixed(2)}%`;
+    }
+
+    let responseSortState = { key: 'target', direction: 'asc' };
+
+    function responseTargetSortText(response) {
+      return [
+        response && response.file_identifier,
+        response && response.hive_table_fqn,
+        response && response.column_name,
+        response && response.pii_type
+      ].map(value => String(value ?? '').trim()).filter(Boolean).join(' ');
+    }
+
+    function getResponseSortValue(response) {
+      switch (responseSortState.key) {
+        case 'detection_ratio':
+          return detectionRatioPercent(response) ?? -1;
+        case 'target':
+        default:
+          return responseTargetSortText(response);
+      }
+    }
+
+    function sortResponses(responses) {
+      const collator = new Intl.Collator('ko-KR', { numeric: true, sensitivity: 'base' });
+      return responses
+        .map((response, index) => ({ response, index }))
+        .sort((left, right) => {
+          const leftValue = getResponseSortValue(left.response);
+          const rightValue = getResponseSortValue(right.response);
+          let comparison;
+          if (typeof leftValue === 'number' && typeof rightValue === 'number') {
+            comparison = leftValue === rightValue ? 0 : leftValue < rightValue ? -1 : 1;
+          } else {
+            comparison = collator.compare(String(leftValue ?? ''), String(rightValue ?? ''));
+          }
+          if (comparison === 0) {
+            comparison = collator.compare(responseTargetSortText(left.response), responseTargetSortText(right.response));
+          }
+          if (comparison === 0) {
+            comparison = left.index - right.index;
+          }
+          return responseSortState.direction === 'asc' ? comparison : -comparison;
+        })
+        .map(entry => entry.response);
+    }
+
+    function updateResponseSortHeaders() {
+      document.querySelectorAll('#responsesPanel th[data-sort-key]').forEach(th => {
+        const isActive = th.getAttribute('data-sort-key') === responseSortState.key;
+        th.setAttribute('aria-sort', isActive ? (responseSortState.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+        const indicator = th.querySelector('.sort-indicator');
+        if (indicator) {
+          indicator.textContent = isActive ? (responseSortState.direction === 'asc' ? '▲' : '▼') : '';
+        }
+      });
     }
 
     function isHighRatioFalsePositive(response) {
@@ -451,7 +537,7 @@
         ['responded_at', envelope.responded_at]
       ].map(([key, value]) => `<tr><th>${escapeHtml(key)}</th><td>${field(value)}</td></tr>`).join('');
 
-      document.getElementById('responsesBody').innerHTML = responses.map(response => {
+      document.getElementById('responsesBody').innerHTML = sortResponses(responses).map(response => {
         const highRatioFalsePositive = isHighRatioFalsePositive(response);
         return `
         <tr class="${highRatioFalsePositive ? 'high-ratio-false-positive' : ''}" ${highRatioFalsePositive ? 'data-risk="high_false_positive"' : ''}>
@@ -460,11 +546,19 @@
             <div>${field(response.file_identifier)}</div>
             <div class="muted">${field(response.hive_table_fqn)}</div>
             <div class="muted">${field(response.column_name)} / ${field(response.pii_type)}</div>
-            <div class="muted">검출비율: ${escapeHtml(formatDetectionRatio(response))}</div>
             ${highRatioFalsePositive ? '<div class="risk-note">검출비율 50% 초과 오탐</div>' : ''}
           </td>
-          <td class="sample">${field(response.finding_key)}
-${field(response.finding_hash)}</td>
+          <td>${escapeHtml(formatDetectionRatio(response))}</td>
+          <td class="sample">
+            <div class="sample-block">
+              <div class="sample-label">추출값</div>
+              <div>${field(response.sample_matched_fragment)}</div>
+            </div>
+            <div class="sample-block">
+              <div class="sample-label">샘플</div>
+              <div>${field(response.sample_raw_value)}</div>
+            </div>
+          </td>
           <td>
             <div>scope: recurring</div>
             <div>reason: ${field(response.false_positive_reason)}</div>
@@ -480,6 +574,7 @@ ${field(response.finding_hash)}</td>
 
       document.getElementById('summaryPanel').classList.remove('hidden');
       document.getElementById('responsesPanel').classList.remove('hidden');
+      updateResponseSortHeaders();
     };
 
     const parseAndRender = text => {
@@ -588,6 +683,23 @@ ${field(response.finding_hash)}</td>
       document.getElementById('statusPanel').classList.add('hidden');
       document.getElementById('messages').innerHTML = '';
       clearRenderedState();
+    });
+
+    document.querySelectorAll('#responsesPanel th[data-sort-key] button').forEach(button => {
+      button.addEventListener('click', () => {
+        const key = button.closest('th').getAttribute('data-sort-key');
+        if (responseSortState.key === key) {
+          responseSortState.direction = responseSortState.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+          responseSortState = { key, direction: 'asc' };
+        }
+        const text = rawJsonInput.value.trim();
+        if (text) {
+          parseAndRender(text);
+        } else {
+          updateResponseSortHeaders();
+        }
+      });
     });
   </script>
 </body>
