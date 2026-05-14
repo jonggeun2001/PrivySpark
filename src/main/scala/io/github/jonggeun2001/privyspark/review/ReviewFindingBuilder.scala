@@ -146,6 +146,7 @@ private[privyspark] object ReviewFindingBuilder {
     private val resultFileIdentifiers = mutable.LinkedHashSet.empty[String]
     private val partitionIdentifiers = mutable.LinkedHashSet.empty[String]
     private val evidenceSamplesByFile = mutable.LinkedHashMap.empty[String, mutable.ArrayBuffer[ReviewEvidence]]
+    private var evidenceSampleCandidateCount = 0
 
     private val findingKey = findingKeyForFields(
       groupKey.scanPath,
@@ -157,21 +158,22 @@ private[privyspark] object ReviewFindingBuilder {
     def add(result: ScanResult): Unit = {
       val resultHiveTableFqn = Option(result.hive_table_fqn).map(_.trim).getOrElse("")
       val hiveMapped = resultHiveTableFqn.nonEmpty
+      val resultEvidence = evidenceFromScanResult(result)
+      val aggregateFileIdentifiers = aggregationFileIdentifiers(result, resultEvidence)
       if (hiveTableFqn.trim.isEmpty && resultHiveTableFqn.nonEmpty) {
         hiveTableFqn = resultHiveTableFqn
         val split = splitHiveTableFqn(hiveTableFqn)
         hiveDatabase = split._1
         hiveTable = split._2
       }
-      resultFileIdentifiers += result.file_identifier
-      if (hiveMapped) {
-        partitionIdentifierFor(result.file_identifier).foreach(partitionIdentifiers += _)
+      aggregateFileIdentifiers.foreach { fileIdentifier =>
+        resultFileIdentifiers += fileIdentifier
+        if (hiveMapped) {
+          partitionIdentifierFor(fileIdentifier).foreach(partitionIdentifiers += _)
+        }
       }
       if (displayFileIdentifier.isEmpty) {
-        displayFileIdentifier = Some(
-          if (hiveMapped) PathIdentifiers.stripTrailingHivePartitionSegments(result.file_identifier)
-          else result.file_identifier
-        )
+        displayFileIdentifier = Some(displayIdentifierFor(result, hiveMapped, aggregateFileIdentifiers))
       }
       matchCount += result.match_count
       sampledRowCount += result.sampled_row_count
@@ -179,7 +181,7 @@ private[privyspark] object ReviewFindingBuilder {
       nonEmptyMatchRatio = math.max(nonEmptyMatchRatio, result.non_empty_match_ratio)
       confidence = math.max(confidence, result.confidence)
 
-      evidenceFromScanResult(result).foreach { evidence =>
+      resultEvidence.foreach { evidence =>
         updateDigest(evidenceDigest, evidenceHashPart(result, evidence))
         if (evidence.fileChecksum.trim.isEmpty) {
           fingerprintComplete = false
@@ -191,12 +193,7 @@ private[privyspark] object ReviewFindingBuilder {
             firstFileIdentifier = Some(evidence.fileIdentifier)
           case _ =>
         }
-        if (sampleLimit > 0) {
-          val samplesForFile = evidenceSamplesByFile.getOrElseUpdate(evidence.fileIdentifier, mutable.ArrayBuffer.empty[ReviewEvidence])
-          if (samplesForFile.size < sampleLimit) {
-            samplesForFile += evidence
-          }
-        }
+        addEvidenceSampleCandidate(evidence)
       }
     }
 
@@ -251,11 +248,69 @@ private[privyspark] object ReviewFindingBuilder {
         selected.toSeq.sortBy(e => (e.fileIdentifier, e.fileChecksum))
       }
     }
+
+    private def addEvidenceSampleCandidate(evidence: ReviewEvidence): Unit = {
+      if (sampleLimit > 0) {
+        evidenceSamplesByFile.get(evidence.fileIdentifier) match {
+          case Some(samples) if evidenceSampleCandidateCount < sampleLimit =>
+            samples += evidence
+            evidenceSampleCandidateCount += 1
+          case Some(_) =>
+          case None if evidenceSampleCandidateCount < sampleLimit =>
+            evidenceSamplesByFile += evidence.fileIdentifier -> mutable.ArrayBuffer(evidence)
+            evidenceSampleCandidateCount += 1
+          case None =>
+            dropDuplicateEvidenceSample()
+            if (evidenceSampleCandidateCount < sampleLimit) {
+              evidenceSamplesByFile += evidence.fileIdentifier -> mutable.ArrayBuffer(evidence)
+              evidenceSampleCandidateCount += 1
+            }
+        }
+      }
+    }
+
+    private def dropDuplicateEvidenceSample(): Unit = {
+      evidenceSamplesByFile.toSeq
+        .filter { case (_, samples) => samples.size > 1 }
+        .sortBy { case (fileIdentifier, samples) => (-samples.size, fileIdentifier) }
+        .headOption
+        .foreach { case (_, samples) =>
+          samples.remove(samples.size - 1)
+          evidenceSampleCandidateCount -= 1
+        }
+    }
   }
 
   private def tableKeyForResult(result: ScanResult): String = {
     val hiveTableFqn = Option(result.hive_table_fqn).map(_.trim).getOrElse("")
     if (hiveTableFqn.nonEmpty) hiveTableFqn else result.file_identifier
+  }
+
+  private def aggregationFileIdentifiers(result: ScanResult, evidence: Seq[ReviewEvidence]): Seq[String] = {
+    val scopeIdentifiers = ReviewScopeIdentifierCodec.decode(result.review_scope_file_identifiers).getOrElse(Seq.empty)
+    val identifiers = (scopeIdentifiers ++ evidence.map(_.fileIdentifier))
+      .map(identifier => Option(identifier).getOrElse(""))
+      .filter(_.trim.nonEmpty)
+      .distinct
+    if (identifiers.nonEmpty) identifiers else Seq(result.file_identifier)
+  }
+
+  private def displayIdentifierFor(
+    result: ScanResult,
+    hiveMapped: Boolean,
+    aggregateFileIdentifiers: Seq[String]
+  ): String = {
+    if (!hiveMapped) {
+      result.file_identifier
+    } else {
+      val candidates = (aggregateFileIdentifiers :+ result.file_identifier)
+        .map(identifier => Option(identifier).getOrElse(""))
+        .filter(_.trim.nonEmpty)
+      candidates
+        .find(identifier => PathIdentifiers.splitHiveLayoutIdentifier(identifier).partitionDepth > 0)
+        .map(PathIdentifiers.stripTrailingHivePartitionSegments)
+        .getOrElse(PathIdentifiers.stripTrailingHivePartitionSegments(result.file_identifier))
+    }
   }
 
   private def partitionIdentifierFor(fileIdentifier: String): Option[String] = {

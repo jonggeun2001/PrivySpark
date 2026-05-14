@@ -504,6 +504,60 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("""+${escapeHtml(finding.aggregated_partition_count)} partitions · +${escapeHtml(finding.aggregated_file_count)} files"""))
   }
 
+  test("write counts scoped Hive fingerprint files when aggregating") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-html-hive-scope-")
+    val scopedIdentifiers = Seq(
+      "customers/dt=2026-05-01/part-000.parquet",
+      "customers/dt=2026-05-01/part-001.parquet",
+      "customers/dt=2026-05-02/part-000.parquet"
+    )
+    val fingerprints = ReviewScopeFingerprintCodec.encode(scopedIdentifiers.zipWithIndex.map { case (identifier, index) =>
+      RecordedFileFingerprint(
+        fileIdentifier = identifier,
+        fileSize = 128L + index,
+        fileMtimeEpochMs = 1710000000000L + index,
+        fileChecksumAlgo = "sha256",
+        fileChecksum = s"checksum-$index"
+      )
+    })
+    val result = ScanResult(
+      dataset_path = "/data/project",
+      scan_timestamp = "2026-04-27T10:00:00Z",
+      file_identifier = "customers",
+      column_name = "email",
+      pii_type = "email",
+      match_count = 6L,
+      sampled_row_count = 60L,
+      match_ratio = 0.1,
+      non_empty_match_ratio = 0.1,
+      confidence = 0.1,
+      sample_raw_value = "owner=alice@example.com",
+      sample_matched_fragment = "alice@example.com",
+      file_size = 128L,
+      file_mtime_epoch_ms = 1710000000000L,
+      hive_table_fqn = "mart.customers",
+      review_scope_file_identifiers = ReviewScopeIdentifierCodec.encode(scopedIdentifiers),
+      review_scope_file_fingerprints = fingerprints
+    )
+
+    ReviewHtmlWriter.write(
+      new Configuration(),
+      outputRoot.toString,
+      "/data/project",
+      Seq(result),
+      sampleMode = "masked"
+    )
+
+    val htmlPath = outputRoot.resolve("review").resolve("review.html")
+    val html = new String(Files.readAllBytes(htmlPath), StandardCharsets.UTF_8)
+
+    assert(occurrences(html, """"finding_key":"""") == 1)
+    assert(html.contains(""""file_identifier":"customers""""))
+    assert(html.contains(""""aggregated":true"""))
+    assert(html.contains(""""aggregated_file_count":3"""))
+    assert(html.contains(""""aggregated_partition_count":2"""))
+  }
+
   test("write keeps non-Hive findings separated by file identifier") {
     val outputRoot = Files.createTempDirectory("privyspark-review-html-non-hive-separate-")
     val baseResult = ScanResult(
