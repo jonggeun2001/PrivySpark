@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.progress
 
 import io.github.jonggeun2001.privyspark.report.JsonCodec.{activeRunMetadataJson, progressRunMetadataJson}
-import io.github.jonggeun2001.privyspark.report.{OutputFormats, ReportWriter, WriteReportsRequest}
+import io.github.jonggeun2001.privyspark.report.{OutputFormats, ReportWriter, ScanResultReportAggregator, WriteReportsRequest}
 import io.github.jonggeun2001.privyspark.model.{ProgressRun, ScanError}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.hadoop.fs.Path
@@ -115,13 +115,14 @@ private[privyspark] object ProgressRunManager {
     )
     val resultDf = ProgressIO.readProgressScanResults(spark, progressRun.resultsPath)
     val errorDf = ProgressIO.readProgressRecords(spark, progressRun.errorsPath, Encoders.product[ScanError].schema)
-    val resultCount = resultDf.count()
+    val reportResultDf = ScanResultReportAggregator.aggregateForReport(resultDf)
+    val resultCount = reportResultDf.count()
     val errorCount = errorDf.count()
     ReportWriter.writeReports(
       spark,
       WriteReportsRequest(
         outputRoot,
-        resultDf,
+        reportResultDf,
         errorDf,
         normalizedOutputFormats
       )

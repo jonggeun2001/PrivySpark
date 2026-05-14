@@ -2,6 +2,7 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, SampleValue, ScanResult}
 import io.github.jonggeun2001.privyspark.review.{ReviewScopeFingerprintCodec, ReviewScopeIdentifierCodec}
+import io.github.jonggeun2001.privyspark.util.DetectionMetricMath
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.functions.{coalesce, col, lit, pmod, xxhash64}
 
@@ -32,10 +33,7 @@ private[privyspark] object ScanResultBuilder {
       Seq.empty
     } else {
       matchCounts.map { matchCount =>
-        val matchRatio = roundProbability(matchCount.count.toDouble / sampledRowCount.toDouble)
         val nonEmptyDenominator = nonEmptyValueCounts.get(matchCount.columnName).filter(_ > 0L).getOrElse(sampledRowCount)
-        val nonEmptyMatchRatio = roundProbability(matchCount.count.toDouble / nonEmptyDenominator.toDouble)
-        val confidenceValue = roundProbability(wilsonLowerBound(matchCount.count, nonEmptyDenominator))
         val sampleValue = sampleValues.get(matchCount.metricAlias)
         ScanResult(
           dataset_path = datasetPath,
@@ -45,9 +43,10 @@ private[privyspark] object ScanResultBuilder {
           pii_type = matchCount.piiType,
           match_count = matchCount.count,
           sampled_row_count = sampledRowCount,
-          match_ratio = matchRatio,
-          non_empty_match_ratio = nonEmptyMatchRatio,
-          confidence = confidenceValue,
+          non_empty_value_count = nonEmptyDenominator,
+          match_ratio = DetectionMetricMath.ratio(matchCount.count, sampledRowCount),
+          non_empty_match_ratio = DetectionMetricMath.ratio(matchCount.count, nonEmptyDenominator),
+          confidence = DetectionMetricMath.wilsonLowerBound(matchCount.count, nonEmptyDenominator),
           sample_raw_value = sampleValue.map(_.sampleRawValue).getOrElse(""),
           sample_matched_fragment = sampleValue.map(_.sampleMatchedFragment).getOrElse(""),
           file_size = fileSize,
@@ -60,7 +59,7 @@ private[privyspark] object ScanResultBuilder {
     }
   }
 
-  def comparableResultPayloads(results: Seq[ScanResult]): Seq[(String, String, String, Long, Long, Double, Double, Double)] =
+  def comparableResultPayloads(results: Seq[ScanResult]): Seq[(String, String, String, Long, Long, Long, Double, Double, Double)] =
     // Hive mapping depends on external metastore state and must not invalidate review snapshots.
     results
       .map(result =>
@@ -70,6 +69,7 @@ private[privyspark] object ScanResultBuilder {
           result.pii_type,
           result.match_count,
           result.sampled_row_count,
+          result.non_empty_value_count,
           result.match_ratio,
           result.non_empty_match_ratio,
           result.confidence
@@ -101,25 +101,4 @@ private[privyspark] object ScanResultBuilder {
     }
   }
 
-  private def wilsonLowerBound(successes: Long, trials: Long): Double = {
-    if (trials <= 0L) {
-      0.0
-    } else {
-      val n = trials.toDouble
-      val p = successes.toDouble / n
-      val z = 1.96
-      val z2 = z * z
-      val center = p + z2 / (2.0 * n)
-      val margin = z * math.sqrt(p * (1.0 - p) / n + z2 / (4.0 * n * n))
-      val denominator = 1.0 + z2 / n
-      val lowerBound = (center - margin) / denominator
-      math.max(0.0, math.min(1.0, lowerBound))
-    }
-  }
-
-  private def roundProbability(value: Double): Double = {
-    BigDecimal.decimal(value)
-      .setScale(2, scala.math.BigDecimal.RoundingMode.HALF_UP)
-      .toDouble
-  }
 }

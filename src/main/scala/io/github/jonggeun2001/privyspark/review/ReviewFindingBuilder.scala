@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.review
 
 import io.github.jonggeun2001.privyspark.model.ScanResult
-import io.github.jonggeun2001.privyspark.util.PathIdentifiers
+import io.github.jonggeun2001.privyspark.util.{DetectionMetricMath, PathIdentifiers}
 
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -136,9 +136,7 @@ private[privyspark] object ReviewFindingBuilder {
     private var hiveTable = ""
     private var matchCount = 0L
     private var sampledRowCount = 0L
-    private var matchRatio = 0.0
-    private var nonEmptyMatchRatio = 0.0
-    private var confidence = 0.0
+    private var nonEmptyValueCount = 0L
     private var fingerprintComplete = true
     private var firstFileIdentifier: Option[String] = None
     private var displayFileIdentifier: Option[String] = None
@@ -177,9 +175,7 @@ private[privyspark] object ReviewFindingBuilder {
       }
       matchCount += result.match_count
       sampledRowCount += result.sampled_row_count
-      matchRatio = math.max(matchRatio, result.match_ratio)
-      nonEmptyMatchRatio = math.max(nonEmptyMatchRatio, result.non_empty_match_ratio)
-      confidence = math.max(confidence, result.confidence)
+      nonEmptyValueCount += effectiveNonEmptyValueCount(result)
 
       resultEvidence.foreach { evidence =>
         updateDigest(evidenceDigest, evidenceHashPart(result, evidence))
@@ -202,6 +198,9 @@ private[privyspark] object ReviewFindingBuilder {
       val aggregatedFileCount = math.max(1, resultFileIdentifiers.size)
       val aggregatedPartitionCount = if (hiveTableFqn.trim.nonEmpty) partitionIdentifiers.size else 0
       val findingHash = sha256(s"$findingKey|${bytesToHex(evidenceDigest.digest())}")
+      val matchRatio = DetectionMetricMath.ratio(matchCount, sampledRowCount)
+      val nonEmptyMatchRatio = DetectionMetricMath.ratio(matchCount, nonEmptyValueCount)
+      val confidence = DetectionMetricMath.wilsonLowerBound(matchCount, nonEmptyValueCount)
       ReviewFinding(
         scanPath = groupKey.scanPath,
         fileIdentifier = displayFileIdentifier.getOrElse(groupKey.tableKey),
@@ -336,8 +335,17 @@ private[privyspark] object ReviewFindingBuilder {
     result.sampled_row_count.toString,
     result.match_ratio.toString,
     result.non_empty_match_ratio.toString,
+    result.non_empty_value_count.toString,
     result.confidence.toString
   )
+
+  private def effectiveNonEmptyValueCount(result: ScanResult): Long =
+    if (result.non_empty_value_count > 0L) result.non_empty_value_count
+    else if (result.non_empty_match_ratio > 0.0 && result.match_count > 0L) {
+      math.round(result.match_count.toDouble / result.non_empty_match_ratio)
+    } else {
+      result.sampled_row_count
+    }
 
   private def findingKeyForFields(
     scanPath: String,

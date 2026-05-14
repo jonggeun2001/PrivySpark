@@ -68,6 +68,7 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     assert(allowlist.contains(""""entry_type":"recurring""""))
     assert(allowlist.contains("mart.customers"))
+    assert(allowlist.contains("\"file_identifier_pattern\":\"\""))
     assert(allowlist.contains("daily dummy account column"))
     assert(allowlist.contains(""""sample_row_count":1000"""))
     assert(!allowlist.contains("file_checksum"))

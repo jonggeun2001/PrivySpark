@@ -22,6 +22,7 @@
 - `pii_type`
 - `match_count`
 - `sampled_row_count`
+- `non_empty_value_count`
 - `match_ratio`
 - `non_empty_match_ratio`
 - `confidence`
@@ -30,6 +31,9 @@
 - `file_size`
 - `file_mtime_epoch_ms`
 - `hive_table_fqn`
+- `aggregated`
+- `aggregated_file_count`
+- `aggregated_partition_count`
 - `review_status`
 - `review_reason`
 - `review_invalidated`
@@ -42,6 +46,8 @@
 - `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다.
 - 활성화되면 driver가 설정된 JDBC driver class로 Hive Metastore `DBS`/`TBLS`/`SDS` 테이블을 1회 조회하고, table-level `LOCATION`을 정규화 URI prefix 인덱스로 broadcast 합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다. CLI 값이 Spark conf보다 우선합니다.
 - 결과 row의 입력 파일 경로가 등록된 table `LOCATION` 하위에 있으면 `db.table` 형식으로 `hive_table_fqn`을 채웁니다.
+- 최종 `scan_results`는 `hive_table_fqn`이 있는 결과를 `dataset_path`, `hive_table_fqn`, `column_name`, `pii_type` 단위로 묶습니다. 파티션/파일별 반복 row는 테이블 단위 row 1개가 되고, `match_count`, `sampled_row_count`, `non_empty_value_count`는 합산한 뒤 `match_ratio`, `non_empty_match_ratio`, `confidence`를 다시 계산합니다.
+- 테이블 단위로 묶인 row는 `file_identifier`에 파티션 세그먼트를 제거한 테이블 루트 식별자를 기록하고, `aggregated=true`, `aggregated_file_count`, `aggregated_partition_count`로 묶인 규모를 표시합니다. Hive 매핑이 없는 결과는 기존 파일/디렉토리 식별자 단위를 유지합니다.
 - 여러 table `LOCATION`이 겹치면 정규화된 URI 기준 longest-prefix match를 사용합니다. 같은 길이의 중복 prefix는 deterministic 정렬 결과를 사용합니다.
 - archive entry와 Excel sheet 식별자는 `<archive>!<entry>`, `<workbook>#<sheet>`에서 host archive/workbook path만 떼어 lookup 합니다.
 - 옵션이 미지정됐거나, JDBC 접속/쿼리/password 파일 읽기가 실패했거나, 매칭되는 table이 없으면 빈 문자열 `""`을 기록합니다.
@@ -66,13 +72,14 @@
 - `review_status` 기본값은 `pending`입니다. 운영 검토에서 `false_positive`, `true_positive`로 편집할 수 있습니다.
 - `review_reason`은 검토 사유 텍스트입니다. `false_positive` 판정 시 필수로 채우는 것을 권장합니다.
 - `review_invalidated=true`는 이전 allowlist와 같은 `(dataset_path, file_identifier, column_name, pii_type)` 조합이 있었지만, 현재 파일 메타데이터와 checksum이 달라져 재검토가 필요함을 의미합니다.
-- `review_scope_file_identifiers`는 디렉토리 집계 row가 실제로 포함한 concrete file identifier 목록입니다. `|` 구분 문자열로 저장되고 `review apply`는 이 목록만 allowlist로 전개합니다.
-- `review_scope_file_fingerprints`는 디렉토리 집계 row의 파일별 fingerprint snapshot입니다. 내부 인코딩 문자열로 저장되고 `review apply`는 scope 안의 모든 fingerprint가 일치할 때만 false positive를 staged 합니다.
+- `review_scope_file_identifiers`는 디렉토리 또는 Hive 테이블 집계 row가 실제로 포함한 concrete file identifier 목록입니다. `|` 구분 문자열로 저장되고 `review apply`는 이 목록만 allowlist로 전개합니다.
+- `review_scope_file_fingerprints`는 디렉토리 또는 Hive 테이블 집계 row의 파일별 fingerprint snapshot입니다. 내부 인코딩 문자열로 저장되고 `review apply`는 scope 안의 모든 fingerprint가 일치할 때만 false positive를 staged 합니다.
 - `--allowlist`를 쓰지 않으면 review 관련 필드는 기본값만 채워집니다.
 
 ## 비율 필드
 - `match_ratio`는 샘플링된 행 기준 비율입니다.
 - `sampled_row_count`는 실제 탐지에 사용된 샘플링 후 행 수입니다.
+- `non_empty_value_count`는 해당 컬럼에서 비어 있지 않아 `non_empty_match_ratio`와 `confidence` 계산 분모로 사용된 값 수입니다.
 - `non_empty_match_ratio`는 해당 컬럼에서 비어 있지 않은 값만 분모로 사용한 비율입니다.
 - 비어 있는 값은 `null`이거나 `trim(column)` 결과가 blank인 값입니다.
 - `full_column`도 `match_count` 기준만 달라질 뿐, `confidence`는 여전히 해당 컬럼의 non-empty 값 기준으로 계산됩니다.
@@ -93,7 +100,7 @@
 - in-flight marker는 운영 진단용입니다. 완료된 작업과 처리 가능한 실패는 marker를 삭제하지만, Spark application을 `FAILED`로 끝내는 미복구 group/file 실패는 marker를 보존합니다.
 - in-flight marker 파일명은 파일명에 안전한 UTF-8 문자/숫자와 `.`, `_`, `-`를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다. 원본 `identifier`는 marker JSON 본문에 유지됩니다.
 - clean completion은 탐지나 오류 row 없이 completion marker만 남깁니다.
-- 정상 종료 시 `_progress` 내용을 merge해 선택된 최종 출력 포맷을 만들고 `_progress/<run_id>`를 삭제합니다.
+- 정상 종료 시 `_progress` 내용을 merge하고 Hive 테이블 단위 최종 집계를 적용해 선택된 최종 출력 포맷을 만든 뒤 `_progress/<run_id>`를 삭제합니다. `_progress`의 중간 JSONL은 디버깅용 원시 shard이며 최종 소비 계약이 아닙니다.
 
 progress 경로를 별도로 둔 이유는 두 가지입니다. 첫째, 긴 스캔에서 이미 끝난 범위의 결과를 바로 확인할 수 있어야 합니다. 둘째, 최종 리포트 소비자가 부분 결과를 완성본으로 오해하지 않게 해야 합니다.
 

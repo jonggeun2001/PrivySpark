@@ -65,8 +65,10 @@
 - `format/CsvInference.scala`: CSV/header schema inference와 `read_schema_source_tcp_snapshot` schema-read TCP 진단 로그.
 - `util/DriverTcpConnectionSnapshot.scala`: Linux `/proc` 기반 driver TCP socket snapshot capture, ESTABLISHED endpoint 집계, TCP debug log helper.
 - `util/RpcGate.scala`: `spark.privyspark.driverRpcConcurrency` 기반 driver-side RPC성 작업 동시성 gate.
+- `util/DetectionMetricMath.scala`: report/review ratio와 Wilson lower bound 계산 helper L3.
 - `report/WriteReportsRequest.scala`: report write request ADT L5.
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.
+- `report/ScanResultReportAggregator.scala`: Hive table 단위 최종 scan result aggregation L11, metric/scope accumulator L31.
 - `model/Models.scala`: `PiiRule` L14, `ScanResult` L32, `ScanError` L55.
 - `model/ScanPlanModels.scala`: `ScanFileEntry` L20, `ScanGroup` L32, `DirectoryScanPlan` L49, `PreScanFileOutcome` L74, `ReportFormatPaths` L108.
 
@@ -81,6 +83,7 @@ main
   -> GroupScanCoordinator.scanGroups
   -> DetectionAggregator
   -> ProgressRunManager.mergeProgressReports
+  -> ScanResultReportAggregator.aggregateForReport
   -> ReportWriter.writeReports
   -> afterReportWrite callback
   -> ReviewHtmlWriter.write (reviewStateRoot 설정 시)

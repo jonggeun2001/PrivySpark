@@ -22,6 +22,7 @@
 - `pii_type`
 - `match_count`
 - `sampled_row_count`
+- `non_empty_value_count`
 - `match_ratio`
 - `non_empty_match_ratio`
 - `confidence`
@@ -30,6 +31,9 @@
 - `file_size`
 - `file_mtime_epoch_ms`
 - `hive_table_fqn`
+- `aggregated`
+- `aggregated_file_count`
+- `aggregated_partition_count`
 - `review_status`
 - `review_reason`
 - `review_invalidated`
@@ -42,6 +46,8 @@
 - Lookup is enabled only when `--hive-metastore-jdbc-url`, `--hive-metastore-user`, and `--hive-metastore-password-file` are all provided.
 - When enabled, the driver queries Hive Metastore `DBS`/`TBLS`/`SDS` tables once through the configured JDBC driver class and broadcasts a normalized URI-prefix index of table-level `LOCATION` values. The default driver class is `org.mariadb.jdbc.Driver`; set `--hive-metastore-jdbc-driver-class` or Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass` to override it. CLI values take precedence over Spark conf.
 - If a result row's input file path is under a registered table `LOCATION`, PrivySpark writes the matched `db.table` value into `hive_table_fqn`.
+- Final `scan_results` groups rows that have `hive_table_fqn` by `dataset_path`, `hive_table_fqn`, `column_name`, and `pii_type`. Repeated partition/file rows become one table-level row, `match_count`, `sampled_row_count`, and `non_empty_value_count` are summed, and `match_ratio`, `non_empty_match_ratio`, and `confidence` are recalculated.
+- Table-level rows store the partition-stripped table-root identifier in `file_identifier` and expose the grouped size through `aggregated=true`, `aggregated_file_count`, and `aggregated_partition_count`. Results without Hive mapping keep the existing file or directory identifier unit.
 - When table `LOCATION` values overlap, PrivySpark uses normalized-URI longest-prefix matching. Duplicate prefixes of the same length use deterministic ordering.
 - Archive entry and Excel sheet identifiers are looked up by their host archive/workbook path, stripping `<archive>!<entry>` and `<workbook>#<sheet>` suffixes.
 - If the options are omitted, JDBC connection/query/password-file reading fails, or no table matches, the field is an empty string `""`.
@@ -66,13 +72,14 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 - `review_status` defaults to `pending`. Operators can edit it to `false_positive` or `true_positive`.
 - `review_reason` stores the operator note. It should be filled when a row is marked `false_positive`.
 - `review_invalidated=true` means the same `(dataset_path, file_identifier, column_name, pii_type)` tuple existed in the allowlist before, but the current file metadata and checksum no longer match and the row should be reviewed again.
-- `review_scope_file_identifiers` stores the concrete file identifiers included in a directory-level row. It is encoded as a `|`-delimited string, and `review apply` expands only this recorded scope.
-- `review_scope_file_fingerprints` stores the recorded per-file fingerprint snapshot for directory-level rows. It uses an internal encoded string format and `review apply` requires every scoped file fingerprint to match before staging a false-positive review.
+- `review_scope_file_identifiers` stores the concrete file identifiers included in a directory-level or Hive table-level row. It is encoded as a `|`-delimited string, and `review apply` expands only this recorded scope.
+- `review_scope_file_fingerprints` stores the recorded per-file fingerprint snapshot for directory-level or Hive table-level rows. It uses an internal encoded string format and `review apply` requires every scoped file fingerprint to match before staging a false-positive review.
 - When `--allowlist` is not provided, all review fields stay at their default values.
 
 ## Ratio Fields
 - `match_ratio` is based on sampled rows.
 - `sampled_row_count` is the post-sampling row count that was actually scanned.
+- `non_empty_value_count` is the number of non-empty values used as the denominator for `non_empty_match_ratio` and `confidence`.
 - `non_empty_match_ratio` uses only non-empty values in the column as its denominator.
 - Empty means `null` or a value whose `trim(column)` is blank.
 - `full_column` only changes how `match_count` is computed. `confidence` is still calculated against non-empty values for the column.
@@ -93,7 +100,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 - In-flight markers are operational diagnostics only. Completed work and recoverable failures remove their markers, while unrecovered group/file failures that end the Spark application as `FAILED` preserve the marker.
 - In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`. The original `identifier` remains in the marker JSON body.
 - Clean completions produce completion markers without result or error rows.
-- On normal completion, PrivySpark merges `_progress` into the selected final output formats and removes `_progress/<run_id>`.
+- On normal completion, PrivySpark merges `_progress`, applies final Hive table-level result aggregation, writes the selected final output formats, and removes `_progress/<run_id>`. Intermediate `_progress` JSONL files are raw diagnostic shards, not the final consumer contract.
 
 The separate progress path serves two purposes: it exposes already completed work during long scans, and it keeps partial results away from the final consumer-facing report locations.
 
