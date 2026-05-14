@@ -26,6 +26,7 @@
 
 - Open it directly in a browser.
 - Choose the response JSON file, drop it onto the upload area, or paste its contents.
-- Review the envelope metadata, validation messages, and per-finding decisions.
+- Review the envelope metadata, validation messages, per-finding decisions, detection samples, and extracted values.
+- Sort the response list by target or detection ratio. Finding keys and hashes stay in the JSON for collection but are not shown as the primary operator column.
 
 GitHub Release publishes these files as `privyspark-<tag>-review-response-example.html` and `privyspark-<tag>-review-response-viewer.html`.
