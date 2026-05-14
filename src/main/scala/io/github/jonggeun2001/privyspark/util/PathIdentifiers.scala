@@ -6,6 +6,8 @@ import org.apache.hadoop.fs.Path
 import scala.util.control.NonFatal
 
 private[privyspark] object PathIdentifiers {
+  final case class HiveLayoutSplit(tableRoot: String, partitionDepth: Int)
+
   private val HiveBucketDirectoryPattern = """(?i)^bucket[-_]\d+$""".r
   private val HivePartitionDirectoryPattern = """^[^=/]+=[^/]*$""".r
   private val HiveDefaultListBucketingDirectoryNames = Set(
@@ -92,6 +94,43 @@ private[privyspark] object PathIdentifiers {
     }
 
     loop(directoryPath)
+  }
+
+  def stripTrailingHivePartitionSegments(relativeIdentifier: String): String =
+    splitHiveLayoutIdentifier(relativeIdentifier).tableRoot
+
+  def splitHiveLayoutIdentifier(relativeIdentifier: String): HiveLayoutSplit = {
+    val normalized = stripTrailingSlash(relativeIdentifier)
+    val directSplit = stripTrailingHiveLayoutSegments(normalized)
+    if (directSplit.partitionDepth > 0) {
+      directSplit
+    } else {
+      parentIdentifier(normalized)
+        .map(stripTrailingHiveLayoutSegments)
+        .filter(_.partitionDepth > 0)
+        .getOrElse(HiveLayoutSplit(normalized, 0))
+    }
+  }
+
+  private def stripTrailingHiveLayoutSegments(identifier: String): HiveLayoutSplit = {
+    val segments = identifier.split('/').filter(_.nonEmpty)
+    var endExclusive = segments.length
+    var stripped = 0
+    while (endExclusive > 0 && isHiveLayoutDirectorySegment(segments(endExclusive - 1))) {
+      endExclusive -= 1
+      stripped += 1
+    }
+
+    if (stripped > 0) {
+      HiveLayoutSplit(segments.take(endExclusive).mkString("/"), stripped)
+    } else {
+      HiveLayoutSplit(identifier, 0)
+    }
+  }
+
+  private def parentIdentifier(identifier: String): Option[String] = {
+    val slashIndex = identifier.lastIndexOf('/')
+    if (slashIndex > 0) Some(identifier.substring(0, slashIndex)) else None
   }
 
   private def isHiveLayoutDirectorySegment(segment: String): Boolean =

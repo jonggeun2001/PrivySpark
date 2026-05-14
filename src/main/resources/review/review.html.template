@@ -58,6 +58,7 @@
     .reason-cell, .plan-cell { min-width: 220px; }
     .placeholder-cell { min-height: 120px; color: #566573; background: #fbfcfc; }
     .placeholder-summary { display: block; max-height: 120px; overflow: hidden; }
+    .aggregate-badge { display: inline-block; margin-left: 6px; padding: 1px 6px; font-size: 12px; border-radius: 10px; background: #eef2f7; color: #34495e; white-space: nowrap; }
     .bulk-actions { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
     .bulk-actions label { display: inline-flex; flex-direction: column; gap: 4px; font-weight: 600; }
     .bulk-actions textarea { min-height: 3em; min-width: 240px; }
@@ -103,6 +104,7 @@
       <li>CSV 파일 업로드는 따옴표로 감싼 쉼표와 줄바꿈을 유지하고, TSV 붙여넣기는 탭과 줄바꿈을 기준으로 반영합니다. Excel이 줄바꿈 포함 셀을 큰따옴표로 감싼 경우 줄바꿈은 셀 내용으로 유지됩니다.</li>
       <li>CSV/TSV 임포트는 <code>finding_key</code> 기준으로 판정/사유/계획/예정일만 반영합니다.</li>
       <li>검출 건수가 많아 파일이 분할된 경우 각 part 파일을 따로 열어 응답 파일을 생성하고, 생성된 JSON을 모두 제출합니다.</li>
+      <li>Hive 테이블이 있는 finding은 파티션·파일이 같은 테이블의 같은 컬럼/유형이면 한 행으로 묶이고, 경로 옆 배지로 묶인 규모를 표시합니다.</li>
       <li>오탐 사유 예: <code>거래일시 포맷이 운전면허번호 규칙과 충돌</code>, <code>테스트 데이터의 더미 식별자</code>, <code>마스킹된 샘플 값 오인식</code>.</li>
       <li>정탐 조치 계획 예: <code>삭제 처리</code>, <code>컬럼 마스킹</code>.</li>
       <li>정탐 조치 예정일은 오늘부터 30일 이내만 선택할 수 있습니다.</li>

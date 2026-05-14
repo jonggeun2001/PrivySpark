@@ -1,6 +1,7 @@
 package io.github.jonggeun2001.privyspark.review
 
 import io.github.jonggeun2001.privyspark.model.ScanResult
+import io.github.jonggeun2001.privyspark.util.PathIdentifiers
 
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -35,6 +36,9 @@ private[privyspark] final case class ReviewFinding(
   findingHash: String,
   fingerprintComplete: Boolean,
   hasMultipleFileEvidence: Boolean,
+  aggregatedFileCount: Int,
+  aggregatedPartitionCount: Int,
+  aggregated: Boolean,
   evidence: Seq[ReviewEvidence]
 )
 
@@ -49,20 +53,21 @@ private[privyspark] object ReviewFindingBuilder {
     val accumulators = mutable.Map.empty[ReviewFindingGroupKey, ReviewFindingAccumulator]
 
     results.foreach { result =>
-      val groupKey = ReviewFindingGroupKey(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)
+      val tableKey = tableKeyForResult(result)
+      val groupKey = ReviewFindingGroupKey(result.dataset_path, tableKey, result.column_name, result.pii_type)
       val accumulator = accumulators.getOrElseUpdate(groupKey, new ReviewFindingAccumulator(groupKey, sampleLimit))
       accumulator.add(result)
     }
 
     accumulators.values.map(_.toFinding).toSeq
-      .sortBy(finding => (finding.scanPath, finding.fileIdentifier, finding.columnName, finding.piiType))
+      .sortBy(finding => (finding.scanPath, finding.hiveTableFqn, finding.fileIdentifier, finding.columnName, finding.piiType))
   }
 
   def scanResultsFingerprint(findings: Seq[ReviewFinding]): String =
     sha256(findings.map(finding => s"${finding.findingKey}|${finding.findingHash}").sorted.mkString("|"))
 
   def findingKeyForResult(result: ScanResult): String = {
-    findingKeyForFields(result.dataset_path, result.file_identifier, result.column_name, result.pii_type)
+    findingKeyForFields(result.dataset_path, tableKeyForResult(result), result.column_name, result.pii_type)
   }
 
   def evidenceFromScanResult(result: ScanResult): Seq[ReviewEvidence] =
@@ -119,13 +124,12 @@ private[privyspark] object ReviewFindingBuilder {
 
   private final case class ReviewFindingGroupKey(
     scanPath: String,
-    fileIdentifier: String,
+    tableKey: String,
     columnName: String,
     piiType: String
   )
 
   private final class ReviewFindingAccumulator(groupKey: ReviewFindingGroupKey, sampleLimit: Int) {
-    private val evidenceSamples = mutable.ArrayBuffer.empty[ReviewEvidence]
     private val evidenceDigest = MessageDigest.getInstance("SHA-256")
     private var hiveTableFqn = ""
     private var hiveDatabase = ""
@@ -137,22 +141,37 @@ private[privyspark] object ReviewFindingBuilder {
     private var confidence = 0.0
     private var fingerprintComplete = true
     private var firstFileIdentifier: Option[String] = None
+    private var displayFileIdentifier: Option[String] = None
     private var hasMultipleFileEvidence = false
+    private val resultFileIdentifiers = mutable.LinkedHashSet.empty[String]
+    private val partitionIdentifiers = mutable.LinkedHashSet.empty[String]
+    private val evidenceSamplesByFile = mutable.LinkedHashMap.empty[String, mutable.ArrayBuffer[ReviewEvidence]]
 
     private val findingKey = findingKeyForFields(
       groupKey.scanPath,
-      groupKey.fileIdentifier,
+      groupKey.tableKey,
       groupKey.columnName,
       groupKey.piiType
     )
 
     def add(result: ScanResult): Unit = {
       val resultHiveTableFqn = Option(result.hive_table_fqn).map(_.trim).getOrElse("")
+      val hiveMapped = resultHiveTableFqn.nonEmpty
       if (hiveTableFqn.trim.isEmpty && resultHiveTableFqn.nonEmpty) {
         hiveTableFqn = resultHiveTableFqn
         val split = splitHiveTableFqn(hiveTableFqn)
         hiveDatabase = split._1
         hiveTable = split._2
+      }
+      resultFileIdentifiers += result.file_identifier
+      if (hiveMapped) {
+        partitionIdentifierFor(result.file_identifier).foreach(partitionIdentifiers += _)
+      }
+      if (displayFileIdentifier.isEmpty) {
+        displayFileIdentifier = Some(
+          if (hiveMapped) PathIdentifiers.stripTrailingHivePartitionSegments(result.file_identifier)
+          else result.file_identifier
+        )
       }
       matchCount += result.match_count
       sampledRowCount += result.sampled_row_count
@@ -172,17 +191,23 @@ private[privyspark] object ReviewFindingBuilder {
             firstFileIdentifier = Some(evidence.fileIdentifier)
           case _ =>
         }
-        if (evidenceSamples.size < sampleLimit) {
-          evidenceSamples += evidence
+        if (sampleLimit > 0) {
+          val samplesForFile = evidenceSamplesByFile.getOrElseUpdate(evidence.fileIdentifier, mutable.ArrayBuffer.empty[ReviewEvidence])
+          if (samplesForFile.size < sampleLimit) {
+            samplesForFile += evidence
+          }
         }
       }
     }
 
     def toFinding: ReviewFinding = {
+      val selectedEvidence = balancedEvidenceSamples()
+      val aggregatedFileCount = math.max(1, resultFileIdentifiers.size)
+      val aggregatedPartitionCount = if (hiveTableFqn.trim.nonEmpty) partitionIdentifiers.size else 0
       val findingHash = sha256(s"$findingKey|${bytesToHex(evidenceDigest.digest())}")
       ReviewFinding(
         scanPath = groupKey.scanPath,
-        fileIdentifier = groupKey.fileIdentifier,
+        fileIdentifier = displayFileIdentifier.getOrElse(groupKey.tableKey),
         hiveDatabase = hiveDatabase,
         hiveTable = hiveTable,
         hiveTableFqn = hiveTableFqn,
@@ -197,8 +222,51 @@ private[privyspark] object ReviewFindingBuilder {
         findingHash = findingHash,
         fingerprintComplete = fingerprintComplete,
         hasMultipleFileEvidence = hasMultipleFileEvidence,
-        evidence = evidenceSamples.toSeq.sortBy(e => (e.fileIdentifier, e.fileChecksum))
+        aggregatedFileCount = aggregatedFileCount,
+        aggregatedPartitionCount = aggregatedPartitionCount,
+        aggregated = hiveTableFqn.trim.nonEmpty && (aggregatedFileCount > 1 || aggregatedPartitionCount > 1),
+        evidence = selectedEvidence
       )
+    }
+
+    private def balancedEvidenceSamples(): Seq[ReviewEvidence] = {
+      if (sampleLimit <= 0) {
+        Seq.empty
+      } else {
+        val sortedSamplesByFile = evidenceSamplesByFile.toSeq
+          .sortBy(_._1)
+          .map { case (fileIdentifier, samples) =>
+            fileIdentifier -> samples.toSeq.sortBy(evidence => (evidence.fileIdentifier, evidence.fileChecksum))
+          }
+        val selected = mutable.ArrayBuffer.empty[ReviewEvidence]
+        var offset = 0
+        while (selected.size < sampleLimit && sortedSamplesByFile.exists { case (_, samples) => offset < samples.size }) {
+          sortedSamplesByFile.foreach { case (_, samples) =>
+            if (selected.size < sampleLimit && offset < samples.size) {
+              selected += samples(offset)
+            }
+          }
+          offset += 1
+        }
+        selected.toSeq.sortBy(e => (e.fileIdentifier, e.fileChecksum))
+      }
+    }
+  }
+
+  private def tableKeyForResult(result: ScanResult): String = {
+    val hiveTableFqn = Option(result.hive_table_fqn).map(_.trim).getOrElse("")
+    if (hiveTableFqn.nonEmpty) hiveTableFqn else result.file_identifier
+  }
+
+  private def partitionIdentifierFor(fileIdentifier: String): Option[String] = {
+    val normalized = Option(fileIdentifier).getOrElse("").replace('\\', '/').replaceAll("/+$", "")
+    val slashIndex = normalized.lastIndexOf('/')
+    if (slashIndex <= 0) {
+      None
+    } else {
+      val parent = normalized.substring(0, slashIndex)
+      val split = PathIdentifiers.splitHiveLayoutIdentifier(parent)
+      if (split.partitionDepth > 0) Some(parent) else None
     }
   }
 

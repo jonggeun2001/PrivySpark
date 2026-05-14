@@ -15,6 +15,9 @@ import scala.collection.JavaConverters._
 class ReviewHtmlWriterSpec extends AnyFunSuite {
   private val MaxReviewHtmlBytes = 2L * 1024L * 1024L
 
+  private def occurrences(value: String, needle: String): Int =
+    value.sliding(needle.length).count(_ == needle)
+
   test("renderer preserves placeholder-looking text inside review data JSON") {
     val scanPath = "/data/${REVIEW_APP_SCRIPT}/project"
 
@@ -207,6 +210,10 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("mart"))
     assert(html.contains("customers"))
     assert(html.contains("email"))
+    assert(html.contains(""""aggregated":false"""))
+    assert(html.contains(""""aggregated_file_count":1"""))
+    assert(html.contains(""""aggregated_partition_count":0"""))
+    assert(!html.contains(""""aggregated":true"""))
     assert(html.contains("finding_key"))
     assert(html.contains("responses"))
     assert(html.contains("id=\"responderField\""))
@@ -286,6 +293,7 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(html.contains("""<th scope="col" data-sort-key="action_plan" aria-sort="none"><button type="button" class="sort-button">정탐 조치 계획 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<th scope="col" data-sort-key="action_due_date" aria-sort="none"><button type="button" class="sort-button">조치 예정일 <span class="sort-indicator" aria-hidden="true"></span></button></th>"""))
     assert(html.contains("""<span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span>"""))
+    assert(html.contains("""<td>${escapeHtml(finding.file_identifier)}${renderAggregateBadge(finding)}<span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span></td>"""))
     assert(html.contains("""<td colspan="13" class="placeholder-cell">"""))
     assert(html.contains(".placeholder-summary { display: block; max-height: 120px; overflow: hidden; }"))
     assert(html.contains("""<td class="metric-cell">${escapeHtml(finding.sampled_row_count)}</td>"""))
@@ -436,6 +444,100 @@ class ReviewHtmlWriterSpec extends AnyFunSuite {
     assert(!html.contains("여러 파일 증거가 있는 pattern 오탐은 경로 패턴이 필요합니다."))
     assert(!html.contains("alice@example.com"))
     assert(html.contains("a***e@example.com"))
+  }
+
+  test("write aggregates Hive partition files into one table finding") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-html-hive-aggregate-")
+    val baseResult = ScanResult(
+      dataset_path = "/data/project",
+      scan_timestamp = "2026-04-27T10:00:00Z",
+      file_identifier = "customers/dt=2026-05-01/part-000.parquet",
+      column_name = "email",
+      pii_type = "email",
+      match_count = 1L,
+      sampled_row_count = 10L,
+      match_ratio = 0.1,
+      non_empty_match_ratio = 0.1,
+      confidence = 0.1,
+      sample_raw_value = "owner=alice@example.com",
+      sample_matched_fragment = "alice@example.com",
+      file_size = 128L,
+      file_mtime_epoch_ms = 1710000000000L,
+      hive_table_fqn = "mart.customers"
+    )
+    val results = Seq(
+      baseResult,
+      baseResult.copy(
+        file_identifier = "customers/dt=2026-05-01/part-001.parquet",
+        match_count = 2L,
+        sampled_row_count = 20L,
+        sample_raw_value = "owner=bob@example.com",
+        sample_matched_fragment = "bob@example.com"
+      ),
+      baseResult.copy(
+        file_identifier = "customers/dt=2026-05-02/part-000.parquet",
+        match_count = 3L,
+        sampled_row_count = 30L,
+        sample_raw_value = "owner=carol@example.com",
+        sample_matched_fragment = "carol@example.com"
+      )
+    )
+
+    ReviewHtmlWriter.write(
+      new Configuration(),
+      outputRoot.toString,
+      "/data/project",
+      results,
+      sampleMode = "masked"
+    )
+
+    val htmlPath = outputRoot.resolve("review").resolve("review.html")
+    val html = new String(Files.readAllBytes(htmlPath), StandardCharsets.UTF_8)
+
+    assert(occurrences(html, """"finding_key":"""") == 1)
+    assert(occurrences(html, """"hive_table_fqn":"mart.customers"""") == 1)
+    assert(html.contains(""""file_identifier":"customers""""))
+    assert(html.contains(""""aggregated":true"""))
+    assert(html.contains(""""aggregated_file_count":3"""))
+    assert(html.contains(""""aggregated_partition_count":2"""))
+    assert(html.contains("function renderAggregateBadge(finding)"))
+    assert(html.contains("""+${escapeHtml(finding.aggregated_partition_count)} partitions · +${escapeHtml(finding.aggregated_file_count)} files"""))
+  }
+
+  test("write keeps non-Hive findings separated by file identifier") {
+    val outputRoot = Files.createTempDirectory("privyspark-review-html-non-hive-separate-")
+    val baseResult = ScanResult(
+      dataset_path = "/data/project",
+      scan_timestamp = "2026-04-27T10:00:00Z",
+      file_identifier = "customers/part-000.parquet",
+      column_name = "email",
+      pii_type = "email",
+      match_count = 1L,
+      sampled_row_count = 10L,
+      match_ratio = 0.1,
+      non_empty_match_ratio = 0.1,
+      confidence = 0.1,
+      sample_raw_value = "owner=alice@example.com",
+      sample_matched_fragment = "alice@example.com",
+      file_size = 128L,
+      file_mtime_epoch_ms = 1710000000000L
+    )
+
+    ReviewHtmlWriter.write(
+      new Configuration(),
+      outputRoot.toString,
+      "/data/project",
+      Seq(baseResult, baseResult.copy(file_identifier = "customers/part-001.parquet")),
+      sampleMode = "masked"
+    )
+
+    val htmlPath = outputRoot.resolve("review").resolve("review.html")
+    val html = new String(Files.readAllBytes(htmlPath), StandardCharsets.UTF_8)
+
+    assert(occurrences(html, """"finding_key":"""") == 2)
+    assert(html.contains(""""file_identifier":"customers/part-000.parquet""""))
+    assert(html.contains(""""file_identifier":"customers/part-001.parquet""""))
+    assert(!html.contains(""""aggregated":true"""))
   }
 
   test("write splits large review HTML into files no larger than 2MB") {

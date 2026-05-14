@@ -519,7 +519,24 @@
         finding.column_name,
         displayPiiType(finding.pii_type)
       ].filter(Boolean).join(' / ');
-      return `<td colspan="13" class="placeholder-cell"><span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">${escapeHtml(summary)}</span></td>`;
+      return `<td colspan="13" class="placeholder-cell"><span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span><span class="placeholder-summary">${escapeHtml(summary)}${renderAggregateBadge(finding)}</span></td>`;
+    }
+    function renderAggregateBadge(finding) {
+      if (!finding.aggregated) {
+        return '';
+      }
+      const partitionCount = Number(finding.aggregated_partition_count) || 0;
+      const fileCount = Number(finding.aggregated_file_count) || 0;
+      if (partitionCount > 1 && fileCount > 1) {
+        return `<span class="aggregate-badge">+${escapeHtml(finding.aggregated_partition_count)} partitions · +${escapeHtml(finding.aggregated_file_count)} files</span>`;
+      }
+      if (partitionCount > 1) {
+        return `<span class="aggregate-badge">+${escapeHtml(finding.aggregated_partition_count)} partitions</span>`;
+      }
+      if (fileCount > 1) {
+        return `<span class="aggregate-badge">+${escapeHtml(finding.aggregated_file_count)} files</span>`;
+      }
+      return '';
     }
     function renderSampleCell(finding) {
       const samples = finding.evidence_samples.map(sample =>
@@ -758,7 +775,7 @@
     }
     function renderFindingCells(finding, index) {
       return `
-        <td>${escapeHtml(finding.file_identifier)}<span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span></td>
+        <td>${escapeHtml(finding.file_identifier)}${renderAggregateBadge(finding)}<span hidden data-finding-key="${escapeHtml(finding.finding_key)}">${escapeHtml(finding.finding_key)}</span></td>
         <td>${escapeHtml(finding.hive_table_fqn)}</td>
         <td>${escapeHtml(finding.column_name)}</td>
         <td>${escapeHtml(displayPiiType(finding.pii_type))}</td>
