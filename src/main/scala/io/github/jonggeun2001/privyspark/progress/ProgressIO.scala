@@ -8,7 +8,7 @@ import org.apache.spark.SparkConf
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, Encoders, Row, SparkSession}
-import org.apache.spark.sql.functions.{coalesce, col}
+import org.apache.spark.sql.functions.{coalesce, col, lit, round, when}
 
 import java.io.{BufferedReader, BufferedWriter, InputStreamReader, OutputStreamWriter}
 import java.nio.charset.StandardCharsets
@@ -108,6 +108,17 @@ private[privyspark] object ProgressIO {
         "non_empty_match_ratio",
         coalesce(col("non_empty_match_ratio"), col("non_null_match_ratio"))
       )
+      .withColumn(
+        "non_empty_value_count",
+        coalesce(
+          col("non_empty_value_count"),
+          when(col("non_empty_match_ratio") > lit(0.0), round(col("match_count") / col("non_empty_match_ratio")).cast("long"))
+            .otherwise(col("sampled_row_count"))
+        )
+      )
+      .withColumn("aggregated", coalesce(col("aggregated"), lit(false)))
+      .withColumn("aggregated_file_count", coalesce(col("aggregated_file_count"), lit(1)))
+      .withColumn("aggregated_partition_count", coalesce(col("aggregated_partition_count"), lit(0)))
       .select(resultSchema.fieldNames.map(col): _*)
   }
 

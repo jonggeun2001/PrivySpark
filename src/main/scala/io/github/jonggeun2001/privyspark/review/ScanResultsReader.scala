@@ -101,32 +101,45 @@ private[privyspark] object ScanResultsReader {
   private def valueOf(row: Row, columnName: String): String =
     if (row.isNullAt(row.fieldIndex(columnName))) "" else Option(row.get(row.fieldIndex(columnName))).map(_.toString).getOrElse("")
 
-  private def toScanResult(row: Row, normalizedColumns: Map[String, String]): ScanResult =
+  private def toScanResult(row: Row, normalizedColumns: Map[String, String]): ScanResult = {
+    val matchCount = longValue(row, normalizedColumns("match_count"))
+    val sampledRowCount = longValue(row, normalizedColumns("sampled_row_count"))
+    val nonEmptyMatchRatio = doubleValue(row, normalizedColumns("non_empty_match_ratio"))
     ScanResult(
       dataset_path = valueOf(row, normalizedColumns("dataset_path")),
       scan_timestamp = valueOf(row, normalizedColumns("scan_timestamp")),
       file_identifier = valueOf(row, normalizedColumns("file_identifier")),
       column_name = valueOf(row, normalizedColumns("column_name")),
       pii_type = valueOf(row, normalizedColumns("pii_type")),
-      match_count = longValue(row, normalizedColumns("match_count")),
-      sampled_row_count = longValue(row, normalizedColumns("sampled_row_count")),
+      match_count = matchCount,
+      sampled_row_count = sampledRowCount,
+      non_empty_value_count = optionalLongValue(row, normalizedColumns, "non_empty_value_count")
+        .filter(_ > 0L)
+        .getOrElse(deriveNonEmptyValueCount(matchCount, sampledRowCount, nonEmptyMatchRatio)),
       match_ratio = doubleValue(row, normalizedColumns("match_ratio")),
-      non_empty_match_ratio = doubleValue(row, normalizedColumns("non_empty_match_ratio")),
+      non_empty_match_ratio = nonEmptyMatchRatio,
       confidence = doubleValue(row, normalizedColumns("confidence")),
       sample_raw_value = valueOf(row, normalizedColumns("sample_raw_value")),
       sample_matched_fragment = valueOf(row, normalizedColumns("sample_matched_fragment")),
       file_size = longValue(row, normalizedColumns("file_size")),
       file_mtime_epoch_ms = longValue(row, normalizedColumns("file_mtime_epoch_ms")),
       hive_table_fqn = optionalValue(row, normalizedColumns, "hive_table_fqn"),
+      aggregated = booleanValue(row, normalizedColumns.get("aggregated")),
+      aggregated_file_count = optionalLongValue(row, normalizedColumns, "aggregated_file_count").map(_.toInt).getOrElse(1),
+      aggregated_partition_count = optionalLongValue(row, normalizedColumns, "aggregated_partition_count").map(_.toInt).getOrElse(0),
       review_status = optionalValue(row, normalizedColumns, "review_status", "pending"),
       review_reason = optionalValue(row, normalizedColumns, "review_reason"),
       review_invalidated = booleanValue(row, normalizedColumns.get("review_invalidated")),
       review_scope_file_identifiers = optionalValue(row, normalizedColumns, "review_scope_file_identifiers"),
       review_scope_file_fingerprints = optionalValue(row, normalizedColumns, "review_scope_file_fingerprints")
     )
+  }
 
   private def optionalValue(row: Row, columns: Map[String, String], normalizedColumnName: String, defaultValue: String = ""): String =
     columns.get(normalizedColumnName).map(valueOf(row, _)).getOrElse(defaultValue)
+
+  private def optionalLongValue(row: Row, columns: Map[String, String], normalizedColumnName: String): Option[Long] =
+    columns.get(normalizedColumnName).map(longValue(row, _))
 
   private def longValue(row: Row, columnName: String): Long =
     Try(row.getAs[Long](columnName)).orElse(Try(valueOf(row, columnName).toLong)).getOrElse(0L)
@@ -136,4 +149,8 @@ private[privyspark] object ScanResultsReader {
 
   private def booleanValue(row: Row, columnName: Option[String]): Boolean =
     columnName.exists(name => Try(row.getAs[Boolean](name)).orElse(Try(valueOf(row, name).toBoolean)).getOrElse(false))
+
+  private def deriveNonEmptyValueCount(matchCount: Long, sampledRowCount: Long, nonEmptyMatchRatio: Double): Long =
+    if (nonEmptyMatchRatio > 0.0 && matchCount > 0L) math.round(matchCount.toDouble / nonEmptyMatchRatio)
+    else sampledRowCount
 }

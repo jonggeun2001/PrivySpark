@@ -21,8 +21,8 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - ruleset `suppressions:` 또는 `--suppress`, `--suppression-file`로 특정 `(column, pii_type)` 조합만 결과에서 제외할 수 있습니다.
 - `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 기본 `<output>/review/review.html`을 생성할 수 있습니다. `--review-html-dir`을 지정하면 해당 디렉토리 아래 `review.html`로 출력 위치를 바꿀 수 있습니다. review HTML은 파일별 최대 2MB로 제한되며, 초과 시 `review.html` 인덱스와 `review-part-0001.html` 형식의 part 파일로 분할됩니다. 회수한 response JSON은 다음 `scan --review-state-root` 시작 시 자동 수집되어 누적 allowlist/action plan에 반영됩니다.
 - 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress와 현재 실행 중인 작업의 `in-flight` marker를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다. Spark application이 `FAILED`로 끝나는 미복구 group/file 실패에서는 당시 marker를 보존합니다.
-- `scan_results`에는 집계 지표와 함께 `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
-- Hive Metastore JDBC 옵션을 지정하면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다.
+- `scan_results`에는 집계 지표, `non_empty_value_count`, `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
+- Hive Metastore JDBC 옵션을 지정하면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다. 최종 `scan_results`는 Hive 매핑이 있는 결과를 `hive_table_fqn`, 컬럼, 개인정보 유형 단위로 묶고 `aggregated_*` 필드와 review scope 파일 목록을 함께 기록합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다.
 
 ## 빠른 시작
 빌드:
@@ -107,6 +107,7 @@ bash scripts/verify-worktree.sh
 - 기본 최종 리포트는 `<output>/parquet/scan_results`, `<output>/parquet/scan_errors`에 저장됩니다.
 - `--output-format csv`를 지정하면 `<output>/csv/scan_results`, `<output>/csv/scan_errors`가 추가로 생성됩니다.
 - `--output-format excel`을 지정하면 `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`가 추가로 생성됩니다.
+- Hive 매핑이 있는 최종 `scan_results` row는 테이블 단위로 묶일 수 있으며, 이때 `file_identifier`는 테이블 루트 식별자이고 포함된 파일은 `review_scope_file_identifiers`와 `review_scope_file_fingerprints`에 보존됩니다.
 - 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓이고, 실행 중인 group/file/allowlist 작업은 `in-flight/*.json` marker로 관찰할 수 있습니다.
 - `in-flight` marker 파일명은 파일명에 안전한 UTF-8 문자/숫자를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다.
 - Spark application이 `FAILED`로 종료된 경우 미복구 group/file 실패 marker는 삭제하지 않아 마지막 진행 중 작업을 확인할 수 있습니다.
