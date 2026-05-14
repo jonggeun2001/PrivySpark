@@ -2,7 +2,7 @@ package io.github.jonggeun2001.privyspark.report
 
 import io.github.jonggeun2001.privyspark.PrivySparkSpecFixtures
 import io.github.jonggeun2001.privyspark.model.ScanResult
-import io.github.jonggeun2001.privyspark.review.{RecordedFileFingerprint, ReviewScopeFingerprintCodec}
+import io.github.jonggeun2001.privyspark.review.{RecordedFileFingerprint, ReviewScopeFingerprintCodec, ReviewScopeIdentifierCodec}
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
@@ -71,6 +71,43 @@ class ScanResultReportAggregatorSpec extends AnyFunSuite with PrivySparkSpecFixt
 
     assert(aggregated.map(_.file_identifier).toSet == Set("customers/a.csv", "customers/b.csv"))
     assert(aggregated.forall(!_.aggregated))
+  }
+
+  test("aggregateForReport does not mix representative identifiers into explicit review scope") {
+    import spark.implicits._
+
+    val scopedIdentifiers = Seq(
+      "customers/dt=2026-05-01/part-000.parquet",
+      "customers/dt=2026-05-02/part-000.parquet"
+    )
+    val fingerprints = scopedIdentifiers.zipWithIndex.map { case (identifier, index) =>
+      recordedFingerprint(identifier, 100L + index)
+    }
+    val rawResults = Seq(
+      scanResult(
+        fileIdentifier = "customers",
+        matchCount = 4L,
+        sampledRowCount = 40L,
+        nonEmptyValueCount = 10L,
+        fingerprint = fingerprints.head
+      ).copy(
+        review_scope_file_identifiers = ReviewScopeIdentifierCodec.encode(scopedIdentifiers),
+        review_scope_file_fingerprints = ReviewScopeFingerprintCodec.encode(fingerprints)
+      )
+    ).toDF()
+
+    val aggregated = ScanResultReportAggregator.aggregateForReport(rawResults).as[ScanResult].collect().toSeq
+
+    assert(aggregated.size == 1)
+    val result = aggregated.head
+    val scopeIdentifiers = ReviewScopeIdentifierCodec.decode(result.review_scope_file_identifiers).fold(
+      errorMessage => fail(errorMessage),
+      identity
+    )
+    assert(result.file_identifier == "customers")
+    assert(result.aggregated_file_count == 2)
+    assert(result.aggregated_partition_count == 2)
+    assert(scopeIdentifiers == scopedIdentifiers)
   }
 
   private def scanResult(

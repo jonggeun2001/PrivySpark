@@ -153,11 +153,15 @@ private[privyspark] object ScanResultReportAggregator {
   private def aggregationFileIdentifiers(result: ScanResult): Seq[String] = {
     val scopeIdentifiers = decodedScopeIdentifiers(result)
     val fingerprintIdentifiers = decodedFingerprints(result).map(_.fileIdentifier)
-    val identifiers = ((scopeIdentifiers ++ fingerprintIdentifiers) :+ result.file_identifier)
+    val explicitIdentifiers = (scopeIdentifiers ++ fingerprintIdentifiers)
       .map(normalized)
       .filter(_.nonEmpty)
       .distinct
-    if (identifiers.nonEmpty) identifiers else Seq(result.file_identifier)
+    if (explicitIdentifiers.nonEmpty) {
+      explicitIdentifiers
+    } else {
+      Seq(normalized(result.file_identifier)).filter(_.nonEmpty)
+    }
   }
 
   private def decodedScopeIdentifiers(result: ScanResult): Seq[String] =
