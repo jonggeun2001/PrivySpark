@@ -190,7 +190,11 @@ private[privyspark] object ScanResultReportAggregator {
       candidates
         .find(identifier => PathIdentifiers.splitHiveLayoutIdentifier(identifier).partitionDepth > 0)
         .map(PathIdentifiers.stripTrailingHivePartitionSegments)
-        .getOrElse(PathIdentifiers.stripTrailingHivePartitionSegments(result.file_identifier))
+        .filter(_.nonEmpty)
+        .getOrElse {
+          val strippedResultIdentifier = PathIdentifiers.stripTrailingHivePartitionSegments(result.file_identifier)
+          if (strippedResultIdentifier.nonEmpty) strippedResultIdentifier else result.file_identifier
+        }
     }
   }
 

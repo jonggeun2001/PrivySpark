@@ -140,7 +140,8 @@ private[privyspark] object ScanPipeline {
       readOptions = ScanReadOptions(
         excelMaxRowsInMemory = config.excelMaxRowsInMemory,
         excelByteArrayMaxOverride = Some(byteArrayMaxOverride)
-      )
+      ),
+      hiveLookupIndex = Some(hiveLookupBroadcast.value)
     )
 
     var progressRun: Option[ProgressRun] = None

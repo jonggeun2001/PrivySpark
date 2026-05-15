@@ -109,6 +109,20 @@ class HiveTableLookupSpec extends AnyFunSuite {
     assert(index.lookup("/warehouse/salesforce/part-00000.parquet") == "")
   }
 
+  test("lookupExact only matches a table location root") {
+    val index = HiveTableLookupIndex(
+      Vector(
+        "/warehouse/sales" -> "mart.sales",
+        "/warehouse/sales/orders" -> "mart.orders"
+      )
+    )
+
+    assert(index.lookupExact("/warehouse/sales/orders") == "mart.orders")
+    assert(index.lookupExact("/warehouse/sales/orders/") == "mart.orders")
+    assert(index.lookupExact("/warehouse/sales/orders/dt=2026-05-01/part-00000.parquet") == "")
+    assert(index.lookup("/warehouse/sales/orders/dt=2026-05-01/part-00000.parquet") == "mart.orders")
+  }
+
   test("lookup normalizes uri case, trailing slash, and percent encoded paths") {
     val index = HiveTableLookupIndex(
       Vector("hdfs://namenode.example.com/warehouse/sales data" -> "mart.sales_data")

@@ -9,7 +9,7 @@
 - `detect/`: PII 규칙별 Spark aggregation, non-empty count, sample value 수집.
 - `format/`: 입력 포맷 감지, CSV dialect/header 추론, Excel workbook streaming, 압축 스트림 처리.
 - `fsio/`: Hadoop `FileSystem` 기반 안전한 경로 교체, retry IO helper.
-- `hive/`: Hive Metastore JDBC table location 조회, longest-prefix lookup 인덱스, scan result `hive_table_fqn` 해석.
+- `hive/`: Hive Metastore JDBC table location 조회, longest/exact lookup 인덱스, scan result `hive_table_fqn` 해석.
 - `model/`: scan result/error, ruleset, scan plan, pre-scan/group/report ADT.
 - `progress/`: run marker, progress JSONL, in-flight marker, stale run cleanup.
 - `report/`: scan result/error를 parquet/csv/excel 산출물로 저장.
@@ -27,14 +27,15 @@
 - `cli/CliArgumentValidator.scala`: command path validation L6, absolute path error logging L51.
 - `config/SuppressionParser.scala`: parsed suppression ADT L15, CLI/file suppression parsing L17/L25, unknown pii warning L35.
 - `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L42, schema cache handoff to group scan L179, report merge/review hook L206.
-- `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L23, pre-scan collect/group build L141, schema split/finalization delegate L219, explicit-cache `splitGroupBySchema` L293.
+- `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L60, exact Hive table-location plan L129, pre-scan collect/group build L235, schema split/finalization delegate L284, explicit-cache `splitGroupBySchema` L355.
 - `scan/DeletedFileDetection.scala`: deleted-after-discovery `FileNotFoundException` classification L6.
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
 - `scan/archive/ArchiveStaging.scala`: archive format constants L6, safe staging path resolution L19.
 - `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L13, `discover` L17.
 - `scan/discovery/PreScanExecutor.scala`: skipped outcome helper L31, CSV dialect refinement L54, `runPreScan` L75.
 - `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L24, schema split scheduling L120, file schema task executor L140, `splitGroupBySchemaFast` L152, `splitGroupBySchema` L302.
-- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, route dispatch L225, sampled batch schema gate L323, batch fallback invocation L312, compatibility delegates L367/L405.
+- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, exact Hive table scan dispatch L227, route dispatch L261, sampled batch schema gate L359, batch fallback invocation L348, compatibility delegates L403/L441.
+- `scan/HiveTableScanner.scala`: exact table-location `spark.table` scan path L14.
 - `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L89, file progress record helper L96, group buffer flush L309.
 - `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.
 - `scan/GroupScanFallbackPolicy.scala`: batch failure fallback executor L7.
@@ -70,7 +71,7 @@
 - `report/ReportWriter.scala`: request 기반 `writeReports` L17, 호환용 Seq writer L100, format writer L128.
 - `report/ScanResultReportAggregator.scala`: Hive table 단위 최종 scan result aggregation L11, metric/scope accumulator L31.
 - `model/Models.scala`: `PiiRule` L14, `ScanResult` L32, `ScanError` L55.
-- `model/ScanPlanModels.scala`: `ScanFileEntry` L20, `ScanGroup` L32, `DirectoryScanPlan` L49, `PreScanFileOutcome` L74, `ReportFormatPaths` L108.
+- `model/ScanPlanModels.scala`: `ScanFileEntry` L20, `ScanGroup` L32, `DirectoryScanPlan` L51, `PreScanFileOutcome` L76, `ReportFormatPaths` L110.
 
 ## 호출 트레이스
 
@@ -81,6 +82,7 @@ main
   -> DirectoryScanner.scanDirectoryStructure
   -> ProgressRunManager.prepareProgressRun
   -> GroupScanCoordinator.scanGroups
+  -> HiveTableScanner.scanHiveTable (exact Hive table-location groups)
   -> DetectionAggregator
   -> ProgressRunManager.mergeProgressReports
   -> ScanResultReportAggregator.aggregateForReport
