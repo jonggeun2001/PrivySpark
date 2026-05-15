@@ -46,7 +46,7 @@
 - `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다.
 - 활성화되면 driver가 설정된 JDBC driver class로 Hive Metastore `DBS`/`TBLS`/`SDS` 테이블을 1회 조회하고, table-level `LOCATION`을 정규화 URI prefix 인덱스로 broadcast 합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다. CLI 값이 Spark conf보다 우선합니다.
 - 결과 row의 입력 파일 경로가 등록된 table `LOCATION` 하위에 있으면 `db.table` 형식으로 `hive_table_fqn`을 채웁니다.
-- 입력 `--path`가 등록된 table-level `LOCATION`과 정확히 일치하면 해당 scan group은 `spark.table("db.table")`로 읽히며, raw progress와 최종 결과 모두 테이블 루트 식별자 기준 row를 생성합니다. 이 경우 Spark Catalog에서 같은 `db.table`을 resolve하지 못하면 `scan_errors`에 기록됩니다.
+- 입력 `--path`가 등록된 table-level `LOCATION`과 정확히 일치하고 ignore 매치가 없으면 해당 scan group은 `spark.table("db.table")`로 읽히며, raw progress와 최종 결과 모두 테이블 루트 식별자 기준 row를 생성합니다. ignore 매치가 있으면 기존 물리 파일 스캔 경로를 유지합니다. 이 경우 Spark Catalog에서 같은 `db.table`을 resolve하지 못하면 `scan_errors`에 기록됩니다.
 - 최종 `scan_results`는 `hive_table_fqn`이 있는 결과를 `dataset_path`, `hive_table_fqn`, `column_name`, `pii_type` 단위로 묶습니다. 파티션/파일별 반복 row는 테이블 단위 row 1개가 되고, `match_count`, `sampled_row_count`, `non_empty_value_count`는 합산한 뒤 `match_ratio`, `non_empty_match_ratio`, `confidence`를 다시 계산합니다.
 - 테이블 단위로 묶인 row는 `file_identifier`에 파티션 세그먼트를 제거한 테이블 루트 식별자를 기록하고, `aggregated=true`, `aggregated_file_count`, `aggregated_partition_count`로 묶인 규모를 표시합니다. Hive 매핑이 없는 결과는 기존 파일/디렉토리 식별자 단위를 유지합니다.
 - 여러 table `LOCATION`이 겹치면 정규화된 URI 기준 longest-prefix match를 사용합니다. 같은 길이의 중복 prefix는 deterministic 정렬 결과를 사용합니다.

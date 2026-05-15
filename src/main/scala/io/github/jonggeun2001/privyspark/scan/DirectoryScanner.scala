@@ -128,7 +128,15 @@ private[privyspark] object DirectoryScanner {
 
       val exactHiveTableFqn =
         if (inputPathIsFile) "" else hiveLookupIndex.map(_.lookupExact(inputPath)).getOrElse("")
-      if (exactHiveTableFqn.nonEmpty) {
+      if (exactHiveTableFqn.nonEmpty && ignoredFiles.nonEmpty) {
+        DriverLogger.debug(
+          "scan_directory_hive_table_plan_skipped",
+          "input_path" -> inputPath,
+          "hive_table_fqn" -> exactHiveTableFqn,
+          "reason" -> "ignored_paths_present",
+          "ignored_files" -> ignoredFiles.size
+        )
+      } else if (exactHiveTableFqn.nonEmpty) {
         DriverLogger.debug(
           "scan_directory_hive_table_plan",
           "input_path" -> inputPath,

@@ -132,6 +132,41 @@ class DirectoryScannerSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
+  test("scanDirectoryStructure falls back to physical scan when exact hive table location has ignored paths") {
+    val inputDir = Files.createTempDirectory("privyspark-dir-hive-table-ignore-")
+    val tableDir = Files.createDirectories(inputDir.resolve("warehouse").resolve("finance.db").resolve("cards"))
+    val includedDir = Files.createDirectories(tableDir.resolve("dt=2026-05-01"))
+    val ignoredDir = Files.createDirectories(tableDir.resolve("dt=2026-05-02"))
+
+    try {
+      val includedFile = includedDir.resolve("part-00000.csv")
+      val ignoredFile = ignoredDir.resolve("part-00001.csv")
+      writeText(includedFile,
+        "name,email\n" +
+          "alice,alice@example.com\n")
+      writeText(ignoredFile,
+        "name,email\n" +
+          "bob,bob@example.com\n")
+
+      val plan = DirectoryScanner.scanDirectoryStructure(
+        spark,
+        tableDir.toString,
+        tableDir.toString,
+        Timestamp,
+        ignoreMatcher = IgnoreMatcher.fromSources(Seq("dt=2026-05-02/"), None),
+        hiveLookupIndex = Some(HiveTableLookupIndex(Vector(tableDir.toString -> "finance.cards")))
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.ignoredFiles == 1)
+      assert(plan.groups.nonEmpty)
+      assert(!plan.groups.exists(_.hiveTableScan))
+      assert(!plan.groups.flatMap(_.filePaths).exists(_.contains("dt=2026-05-02")))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
   test("scanDirectoryStructure expands archives and preserves nested logical identifiers") {
     val inputDir = Files.createTempDirectory("privyspark-dir-archive-")
     var stagingPaths = Seq.empty[String]
