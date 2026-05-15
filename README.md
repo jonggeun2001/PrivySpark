@@ -22,7 +22,7 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 - `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 기본 `<output>/review/review.html`을 생성할 수 있습니다. `--review-html-dir`을 지정하면 해당 디렉토리 아래 `review.html`로 출력 위치를 바꿀 수 있습니다. review HTML은 파일별 최대 2MB로 제한되며, 초과 시 `review.html` 인덱스와 `review-part-0001.html` 형식의 part 파일로 분할됩니다. 회수한 response JSON은 다음 `scan --review-state-root` 시작 시 자동 수집되어 누적 allowlist/action plan에 반영됩니다.
 - 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress와 현재 실행 중인 작업의 `in-flight` marker를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다. Spark application이 `FAILED`로 끝나는 미복구 group/file 실패에서는 당시 marker를 보존합니다.
 - `scan_results`에는 집계 지표, `non_empty_value_count`, `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
-- Hive Metastore JDBC 옵션을 지정하면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다. 최종 `scan_results`는 Hive 매핑이 있는 결과를 `hive_table_fqn`, 컬럼, 개인정보 유형 단위로 묶고 `aggregated_*` 필드와 review scope 파일 목록을 함께 기록합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다.
+- Hive Metastore JDBC 옵션을 지정하면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다. 입력 `--path`가 table-level `LOCATION`과 정확히 같고 ignore 매치가 없으면 해당 테이블은 물리 파일별 reader 대신 `spark.table("db.table")`로 읽어 테이블 단위 finding을 생성합니다. 최종 `scan_results`는 Hive 매핑이 있는 결과를 `hive_table_fqn`, 컬럼, 개인정보 유형 단위로 묶고 `aggregated_*` 필드와 review scope 파일 목록을 함께 기록합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다.
 
 ## 빠른 시작
 빌드:
@@ -99,7 +99,7 @@ bash scripts/verify-worktree.sh
 - 스캔 실행 시 `--path`, `--output`은 절대경로 또는 URI만 허용합니다.
 - `--output-format`은 반복 지정 가능하고, 기본값은 `parquet`입니다. 지원값은 `parquet`, `csv`, `excel`입니다.
 - `--suppress`는 반복 지정 가능하며 `column:pii_type` 형식입니다. `--suppression-file`은 같은 형식을 줄 단위로 읽고, ruleset `suppressions:`와 union으로 합쳐집니다.
-- Hive table 매핑은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 기본 JDBC driver class는 `org.mariadb.jdbc.Driver`이고, MySQL 등 다른 driver를 쓰면 `--hive-metastore-jdbc-driver-class <CLASS>` 또는 Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`로 지정합니다. CLI 값이 Spark conf보다 우선합니다. JDBC driver JAR는 fat JAR에 포함하지 않으므로 cluster classpath에 두거나 `PRIVYSPARK_JARS=/path/to/driver.jar`로 함께 제출합니다. driver가 없거나 JDBC 접속/query가 실패하면 warning 후 `hive_table_fqn`은 빈 문자열로 남습니다.
+- Hive table 매핑은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 기본 JDBC driver class는 `org.mariadb.jdbc.Driver`이고, MySQL 등 다른 driver를 쓰면 `--hive-metastore-jdbc-driver-class <CLASS>` 또는 Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`로 지정합니다. CLI 값이 Spark conf보다 우선합니다. JDBC driver JAR는 fat JAR에 포함하지 않으므로 cluster classpath에 두거나 `PRIVYSPARK_JARS=/path/to/driver.jar`로 함께 제출합니다. driver가 없거나 JDBC 접속/query가 실패하면 warning 후 `hive_table_fqn`은 빈 문자열로 남습니다. 입력 경로가 table-level `LOCATION`과 정확히 일치하는 경우 Spark Catalog에서도 같은 `db.table`을 resolve할 수 있어야 `spark.table` 기반 테이블 스캔이 동작합니다.
 - Shadow fat JAR는 `commons-compress`를 앱 내부 패키지로 relocate합니다. 따라서 Spark/Hadoop 런타임의 구버전 `commons-compress`가 먼저 잡혀도 POI 기반 Excel report write 경로가 런타임 `NoSuchMethodError`에 영향을 받지 않습니다.
 - 기본 ruleset은 [config/rules/default.yaml](config/rules/default.yaml)에 있습니다.
 

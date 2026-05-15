@@ -55,6 +55,14 @@ final case class HiveTableLookupIndex(entries: Vector[(String, String)]) extends
       }
     }.getOrElse("")
   }
+
+  def lookupExact(rawPath: String): String = {
+    HiveTableLookup.normalizePathForLookup(rawPath).flatMap { normalizedPath =>
+      normalizedEntries.collectFirst {
+        case (location, tableFqn) if normalizedPath == location => tableFqn
+      }
+    }.getOrElse("")
+  }
 }
 
 object HiveTableLookupIndex {

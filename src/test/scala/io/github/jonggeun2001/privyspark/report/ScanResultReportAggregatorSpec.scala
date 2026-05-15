@@ -110,6 +110,27 @@ class ScanResultReportAggregatorSpec extends AnyFunSuite with PrivySparkSpecFixt
     assert(scopeIdentifiers == scopedIdentifiers)
   }
 
+  test("aggregateForReport keeps table-root identifier when partition-relative scope strips to empty") {
+    import spark.implicits._
+
+    val rawResults = Seq(
+      scanResult(
+        fileIdentifier = ".",
+        matchCount = 4L,
+        sampledRowCount = 40L,
+        nonEmptyValueCount = 10L
+      ).copy(
+        review_scope_file_identifiers = ReviewScopeIdentifierCodec.encode(Seq("dt=2026-05-01/part-000.parquet")),
+        review_scope_file_fingerprints = ""
+      )
+    ).toDF()
+
+    val aggregated = ScanResultReportAggregator.aggregateForReport(rawResults).as[ScanResult].collect().toSeq
+
+    assert(aggregated.size == 1)
+    assert(aggregated.head.file_identifier == ".")
+  }
+
   private def scanResult(
     fileIdentifier: String,
     matchCount: Long,

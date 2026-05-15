@@ -48,7 +48,7 @@
 - suppression은 `DetectionAggregator.buildMetrics`에서 metric plan 생성 전에 적용해 제외된 `(column, pii_type)` 조합이 결과 row 자체를 만들지 않게 합니다.
 - 디렉터리 discovery는 BFS 순회로 진행하고, 각 레벨의 `listStatus`는 safety ceiling `64` 안에서 병렬 실행합니다.
 - discovery 이후 pre-scan 병렬도 최종 적용값은 발견된 파일 수와 safety ceiling `64` 기준으로 축소합니다.
-- Hive lookup은 Spark Catalog/`enableHiveSupport()`를 사용하지 않고 설정된 JDBC driver class로 table-level `LOCATION`만 열거합니다. CLI `--hive-metastore-jdbc-driver-class`가 Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`보다 우선하고, 둘 다 없으면 기본 driver class `org.mariadb.jdbc.Driver`를 사용합니다. 옵션 미지정 또는 조회 실패 시 빈 매핑으로 진행합니다. 결과 비교용 review snapshot payload에는 `hive_table_fqn`을 포함하지 않습니다.
+- Hive lookup 인덱스 생성은 Spark Catalog/`enableHiveSupport()`를 사용하지 않고 설정된 JDBC driver class로 table-level `LOCATION`만 열거합니다. CLI `--hive-metastore-jdbc-driver-class`가 Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`보다 우선하고, 둘 다 없으면 기본 driver class `org.mariadb.jdbc.Driver`를 사용합니다. 옵션 미지정 또는 조회 실패 시 빈 매핑으로 진행합니다. 단, 입력 path가 table-level `LOCATION`과 정확히 일치하고 ignore 매치가 없는 scan group은 Spark Catalog의 `spark.table(db.table)`로 읽습니다. 결과 비교용 review snapshot payload에는 `hive_table_fqn`을 포함하지 않습니다.
 - `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 계획합니다. sheet body row/cell 읽기는 executor-side StAX scan 단계로 넘깁니다.
 - batch scan을 지원하지 않는 `xlsx` file-level scan 경로도 `scanGroupByFile`을 통해 CLI `--file-parallelism` 또는 `spark.privyspark.fileParallelism` 설정을 사용합니다.
 - `--file-sample-ratio`는 batch scan과 file fallback scan에서 적용하고, 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 `ceil(fileCount * ratio)` 수만큼 최소 1개 파일을 안정적인 해시 순위로 선택합니다.
