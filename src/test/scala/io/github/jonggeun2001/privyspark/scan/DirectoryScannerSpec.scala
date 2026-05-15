@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark.scan
 import io.github.jonggeun2001.privyspark.PrivySparkSpecFixtures
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths
+import io.github.jonggeun2001.privyspark.hive.HiveTableLookupIndex
 import io.github.jonggeun2001.privyspark.model.ScanGroup
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
@@ -88,6 +89,44 @@ class DirectoryScannerSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(plan.ignoredFiles == 2)
       assert(plan.groups.size == 1)
       assert(plan.groups.head.filePaths.map(path => new File(path).getName) == Seq("customers.csv"))
+    } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanDirectoryStructure plans a hive table scan for an exact table location") {
+    val inputDir = Files.createTempDirectory("privyspark-dir-hive-table-")
+    val tableDir = Files.createDirectories(inputDir.resolve("warehouse").resolve("finance.db").resolve("cards"))
+    val dailyDir = Files.createDirectories(tableDir.resolve("dt=2026-05-01"))
+    val monthlyDir = Files.createDirectories(tableDir.resolve("dt=2026-05-02"))
+
+    try {
+      val dailyFile = dailyDir.resolve("part-00000.parquet")
+      val monthlyFile = monthlyDir.resolve("part-00001.parquet")
+      writeText(dailyFile, "placeholder parquet bytes")
+      writeText(monthlyFile, "placeholder parquet bytes")
+
+      val plan = DirectoryScanner.scanDirectoryStructure(
+        spark,
+        tableDir.toString,
+        tableDir.toString,
+        Timestamp,
+        hiveLookupIndex = Some(HiveTableLookupIndex(Vector(tableDir.toString -> "finance.cards")))
+      )
+
+      assert(plan.errors.isEmpty)
+      assert(plan.totalFiles == 2)
+      assert(plan.directoryCount == 1)
+      assert(plan.groups.size == 1)
+
+      val group = plan.groups.head
+      assert(group.hiveTableScan)
+      assert(group.hiveTableFqn == "finance.cards")
+      assert(group.format == "hive_table")
+      assert(group.directoryPath == tableDir.toString)
+      assert(group.filePaths.toSet == Set(dailyFile.toString, monthlyFile.toString))
+      assert(group.useDirectoryIdentifier)
+      assert(group.directoryIdentifierEligible)
     } finally {
       deleteRecursively(inputDir)
     }

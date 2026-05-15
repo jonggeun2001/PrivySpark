@@ -43,7 +43,9 @@ private[privyspark] final case class ScanGroup(
   fileSizesByKey: Map[String, Long] = Map.empty,
   fileMtimesByKey: Map[String, Long] = Map.empty,
   readOptionsByKey: Map[String, ScanReadOptions] = Map.empty,
-  allowDirectoryIdentifier: Boolean = true
+  allowDirectoryIdentifier: Boolean = true,
+  hiveTableFqn: String = "",
+  hiveTableScan: Boolean = false
 )
 
 private[privyspark] final case class DirectoryScanPlan(

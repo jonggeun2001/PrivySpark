@@ -179,7 +179,9 @@ private[privyspark] object GroupScanCoordinator {
       "file_sample_min_files" -> fileSampleMinFiles,
       "use_directory_identifier" -> group.useDirectoryIdentifier,
       "schema_sampled" -> group.schemaSampled,
-      "csv_has_header" -> group.csvHasHeader
+      "csv_has_header" -> group.csvHasHeader,
+      "hive_table_scan" -> group.hiveTableScan,
+      "hive_table_fqn" -> group.hiveTableFqn
     )
     def rescanSampledGroupWithExactSplit(mode: String): (Seq[ScanResult], Seq[ScanError]) =
       AllowlistApplier.rescanSampledGroupWithExactSplit(
@@ -221,6 +223,40 @@ private[privyspark] object GroupScanCoordinator {
         selectedSourceKeys = Some(selectedKeys),
         hiveLookup = hiveLookup
       )
+
+    if (group.hiveTableScan) {
+      val tableScanResult = HiveTableScanner.scanHiveTable(
+        spark,
+        datasetPath,
+        group,
+        rules,
+        sampleRatio,
+        timestamp,
+        suppressions,
+        allowlistMatcher,
+        allowlistInputRoot
+      )
+      progressRun.foreach { run =>
+        persistProgressRecords(
+          spark.sparkContext.hadoopConfiguration,
+          run,
+          "group",
+          group.directoryPath,
+          tableScanResult._1,
+          tableScanResult._2
+        )
+      }
+      DriverLogger.debug(
+        "group_scan_complete",
+        "directory" -> group.directoryPath,
+        "format" -> group.format,
+        "schema" -> group.schemaSignature,
+        "result_rows" -> tableScanResult._1.size,
+        "error_rows" -> tableScanResult._2.size,
+        "mode" -> "hive_table_scan"
+      )
+      return tableScanResult
+    }
 
     GroupScanRouter.routeOf(group) match {
       case SampledExact =>

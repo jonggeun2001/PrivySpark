@@ -3,9 +3,11 @@ package io.github.jonggeun2001.privyspark.scan
 import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging.ArchiveFormats
 import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
 import io.github.jonggeun2001.privyspark.fsio.ManagedPaths.cleanupStagingPaths
+import io.github.jonggeun2001.privyspark.hive.HiveTableLookupIndex
 import io.github.jonggeun2001.privyspark.scan.discovery.{DirectoryDiscovery, DiscoveredFile, PreScanExecutor, SchemaGroupSplitter}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig._
 import io.github.jonggeun2001.privyspark.util.{DriverLogger, RpcGate}
+import io.github.jonggeun2001.privyspark.util.PathIdentifiers.resolveRelativeIdentifier
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
 import io.github.jonggeun2001.privyspark.model.{DirectoryScanPlan, ScanError, ScanFileEntry, ScanGroup, ScanReadOptions}
 import org.apache.hadoop.fs.Path
@@ -16,8 +18,43 @@ import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
 private[privyspark] object DirectoryScanner {
+  val HiveTableFormat = "hive_table"
+
   private def elapsedMillis(startNanos: Long): Long = {
     (System.nanoTime() - startNanos) / 1000000L
+  }
+
+  private def hiveTableScanPlan(
+    inputPath: String,
+    datasetPath: String,
+    tableFqn: String,
+    files: Seq[DiscoveredFile],
+    ignoredFiles: Seq[(String, String)]
+  ): DirectoryScanPlan = {
+    val sortedFiles = files.sortBy(_.path)
+    val filePaths = sortedFiles.map(_.path)
+    val group = ScanGroup(
+      directoryPath = inputPath,
+      format = HiveTableFormat,
+      schemaSignature = tableFqn,
+      filePaths = filePaths,
+      useDirectoryIdentifier = true,
+      directoryIdentifierEligible = true,
+      physicalPathsByKey = sortedFiles.map(file => file.path -> file.path).toMap,
+      logicalIdentifiersByKey = sortedFiles.map(file => file.path -> resolveRelativeIdentifier(datasetPath, file.path)).toMap,
+      fileSizesByKey = sortedFiles.map(file => file.path -> file.size).toMap,
+      fileMtimesByKey = sortedFiles.map(file => file.path -> file.mtimeEpochMs).toMap,
+      hiveTableFqn = tableFqn,
+      hiveTableScan = true
+    )
+
+    DirectoryScanPlan(
+      groups = Seq(group),
+      errors = Seq.empty,
+      totalFiles = sortedFiles.size,
+      directoryCount = 1,
+      ignoredFiles = ignoredFiles.size
+    )
   }
 
   def scanDirectoryStructure(
@@ -30,7 +67,8 @@ private[privyspark] object DirectoryScanner {
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
     parseOkCache: ParseOkCache = new ParseOkCache(),
-    readOptions: ScanReadOptions = ScanReadOptions()
+    readOptions: ScanReadOptions = ScanReadOptions(),
+    hiveLookupIndex: Option[HiveTableLookupIndex] = None
   ): DirectoryScanPlan = {
     DriverLogger.debug("scan_directory_structure_start", "input_path" -> inputPath, "dataset_path" -> datasetPath)
     val conf = spark.sparkContext.hadoopConfiguration
@@ -87,6 +125,30 @@ private[privyspark] object DirectoryScanner {
         "ignored_files" -> ignoredFiles.size,
         "duration_ms" -> elapsedMillis(fileDiscoveryStartedAt)
       )
+
+      val exactHiveTableFqn =
+        if (inputPathIsFile) "" else hiveLookupIndex.map(_.lookupExact(inputPath)).getOrElse("")
+      if (exactHiveTableFqn.nonEmpty) {
+        DriverLogger.debug(
+          "scan_directory_hive_table_plan",
+          "input_path" -> inputPath,
+          "hive_table_fqn" -> exactHiveTableFqn,
+          "files" -> files.size,
+          "ignored_files" -> ignoredFiles.size
+        )
+        val plan = hiveTableScanPlan(inputPath, datasetPath, exactHiveTableFqn, files, ignoredFiles)
+        DriverLogger.debug(
+          "scan_directory_structure_complete",
+          "input_path" -> inputPath,
+          "total_files" -> plan.totalFiles,
+          "ignored_files" -> plan.ignoredFiles,
+          "supported_files" -> files.size,
+          "groups" -> plan.groups.size,
+          "errors" -> plan.errors.size,
+          "directories" -> plan.directoryCount
+        )
+        return plan
+      }
 
       val supportedFiles = ArrayBuffer.empty[ScanFileEntry]
       val errors = ArrayBuffer.empty[ScanError]

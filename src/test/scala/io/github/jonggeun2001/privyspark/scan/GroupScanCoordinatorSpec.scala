@@ -3,6 +3,7 @@ package io.github.jonggeun2001.privyspark.scan
 import io.github.jonggeun2001.privyspark.PrivySparkSpecFixtures
 import io.github.jonggeun2001.privyspark.detect.testing.DetectionFaultInjectors
 import io.github.jonggeun2001.privyspark.model.{CachedSchemaSignature, PiiRule, ScanGroup}
+import io.github.jonggeun2001.privyspark.review.ReviewScopeIdentifierCodec
 import org.junit.runner.RunWith
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.junit.JUnitRunner
@@ -127,6 +128,73 @@ class GroupScanCoordinatorSpec extends AnyFunSuite with PrivySparkSpecFixtures {
         ))
       assert(!results.exists(_.file_identifier == "users"))
     } finally {
+      deleteRecursively(inputDir)
+    }
+  }
+
+  test("scanGroup reads hive table scan groups through spark.table and returns table-level findings") {
+    val inputDir = Files.createTempDirectory("privyspark-coordinator-hive-table-")
+    val tableDir = Files.createDirectories(inputDir.resolve("warehouse").resolve("finance.db").resolve("cards"))
+    val firstPartition = Files.createDirectories(tableDir.resolve("dt=2026-05-01"))
+    val secondPartition = Files.createDirectories(tableDir.resolve("dt=2026-05-02"))
+    val viewName = s"privyspark_hive_table_${System.nanoTime()}"
+
+    try {
+      import spark.implicits._
+
+      Seq(
+        ("alice@example.com", "2026-05-01"),
+        ("bob@example.com", "2026-05-02")
+      ).toDF("email", "dt").createOrReplaceTempView(viewName)
+
+      val firstFile = firstPartition.resolve("part-00000.parquet").toString
+      val secondFile = secondPartition.resolve("part-00001.parquet").toString
+      val group = ScanGroup(
+        directoryPath = tableDir.toString,
+        format = "hive_table",
+        schemaSignature = viewName,
+        filePaths = Seq(firstFile, secondFile),
+        useDirectoryIdentifier = true,
+        directoryIdentifierEligible = true,
+        hiveTableFqn = viewName,
+        hiveTableScan = true,
+        fileSizesByKey = Map(firstFile -> 100L, secondFile -> 200L),
+        fileMtimesByKey = Map(firstFile -> 11L, secondFile -> 22L)
+      )
+
+      val (results, errors) = GroupScanCoordinator.scanGroup(
+        spark,
+        inputDir.toString,
+        group,
+        Seq(EmailRule),
+        sampleRatio = 1.0,
+        timestamp = Timestamp
+      )
+
+      assert(errors.isEmpty)
+      assert(results.size == 1)
+
+      val result = results.head
+      assert(result.file_identifier == "warehouse/finance.db/cards")
+      assert(result.column_name == "email")
+      assert(result.match_count == 2L)
+      assert(result.sampled_row_count == 2L)
+      assert(result.non_empty_value_count == 2L)
+      assert(result.hive_table_fqn == viewName)
+      assert(result.file_size == 300L)
+      assert(result.file_mtime_epoch_ms == 22L)
+      assert(!result.file_identifier.contains("dt="))
+      val reviewScopeIdentifiers =
+        ReviewScopeIdentifierCodec
+          .decode(result.review_scope_file_identifiers)
+          .fold(error => fail(error), identifiers => identifiers)
+      assert(reviewScopeIdentifiers.toSet ==
+        Set(
+          "warehouse/finance.db/cards/dt=2026-05-01/part-00000.parquet",
+          "warehouse/finance.db/cards/dt=2026-05-02/part-00001.parquet"
+        ))
+    } finally {
+      spark.catalog.dropTempView(viewName)
       deleteRecursively(inputDir)
     }
   }
