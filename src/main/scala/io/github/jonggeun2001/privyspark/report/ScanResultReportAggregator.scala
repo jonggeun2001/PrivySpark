@@ -21,7 +21,7 @@ private[privyspark] object ScanResultReportAggregator {
       .toDF()
   }
 
-  private final case class ScanResultGroupKey(
+  private[privyspark] final case class ScanResultGroupKey(
     datasetPath: String,
     tableKey: String,
     columnName: String,
