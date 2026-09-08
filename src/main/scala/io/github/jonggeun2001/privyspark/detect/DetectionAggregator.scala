@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.detect
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
-import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType, SampleValue}
+import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, SampleValue}
 import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.spark.sql.{Column, DataFrame}
 
@@ -112,29 +112,6 @@ object DetectionAggregator {
     config: AggregationConfig = AggregationConfig()
   ): Map[(String, String), SampleValue] = {
     DetectionAggregationApi.sampleMatchesByFile(sampledDf, fileIdentifierColumn, rules, matchCounts, suppressions, config)
-  }
-
-  private def buildMetrics(
-    columns: Seq[String],
-    rules: Seq[PiiRule],
-    suppressions: SuppressionSet
-  ): Seq[Metric] = {
-    DetectionMetrics.buildMetrics(columns, rules, suppressions)
-  }
-
-  private def collectSampleRawValuesSafely(
-    sampledDf: DataFrame,
-    metrics: Seq[Metric]
-  ): Map[String, String] = {
-    DetectionSampling.collectSampleRawValuesSafely(sampledDf, metrics)
-  }
-
-  private def collectSampleRawValuesByFileSafely(
-    sampledDf: DataFrame,
-    fileIdentifierColumn: String,
-    metrics: Seq[Metric]
-  ): Map[(String, String), String] = {
-    DetectionSampling.collectSampleRawValuesByFileSafely(sampledDf, fileIdentifierColumn, metrics)
   }
 
   private[privyspark] def executeThresholdFallback[T](

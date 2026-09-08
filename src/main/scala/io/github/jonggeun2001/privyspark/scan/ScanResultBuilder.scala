@@ -1,7 +1,7 @@
 package io.github.jonggeun2001.privyspark.scan
 
-import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, SampleValue, ScanResult}
-import io.github.jonggeun2001.privyspark.review.{ReviewScopeFingerprintCodec, ReviewScopeIdentifierCodec}
+import io.github.jonggeun2001.privyspark.model.{MatchCount, SampleValue, ScanResult}
+import io.github.jonggeun2001.privyspark.review.ReviewScopeIdentifierCodec
 import io.github.jonggeun2001.privyspark.util.DetectionMetricMath
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.functions.{coalesce, col, lit, pmod, xxhash64}
@@ -10,10 +10,6 @@ import java.time.Instant
 
 private[privyspark] object ScanResultBuilder {
   private val DeterministicSampleBuckets = 1000000L
-
-  def effectiveRulesForFormat(format: String, rules: Seq[PiiRule]): Seq[PiiRule] = {
-    rules
-  }
 
   def buildScanResults(
     datasetPath: String,

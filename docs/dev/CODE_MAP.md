@@ -5,7 +5,7 @@
 ## 패키지 요약
 
 - `cli/`: scopt 기반 CLI 파싱, 경로 validation, 실행 옵션 모델.
-- `config/`: ruleset, suppression, ignore matcher 설정 로딩과 검증.
+- `config/`: ruleset, suppression, ignore matcher 설정 로딩과 검증, ignore/suppression 파일의 공통 로컬 경로 탐색.
 - `detect/`: PII 규칙별 Spark aggregation, non-empty count, sample value 수집.
 - `format/`: 입력 포맷 감지, CSV dialect/header 추론, Excel workbook streaming, 압축 스트림 처리.
 - `fsio/`: Hadoop `FileSystem` 기반 안전한 경로 교체, retry IO helper.
@@ -25,8 +25,9 @@
 
 - `PrivySparkApp.scala`: `main` L13, `runMain` L17, scan auto collect dispatch L49, default scan dispatch L79, Excel compatibility warning L92.
 - `cli/CliArgumentValidator.scala`: command path validation L6, absolute path error logging L51.
-- `config/SuppressionParser.scala`: parsed suppression ADT L15, CLI/file suppression parsing L17/L25, unknown pii warning L35.
-- `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L42, schema cache handoff to group scan L179, report merge/review hook L206.
+- `config/SuppressionParser.scala`: parsed suppression ADT L14, CLI/file suppression parsing L16/L24, unknown pii warning L34.
+- `config/LocalConfigFileResolver.scala`: ignore/suppression에서 공유하는 SparkFiles/working-directory 경로 탐색 L9. allowlist의 별도 경로 처리는 `review/AllowlistMatcher.scala`에서 확인합니다.
+- `scan/ScanPipeline.scala`: summary/hooks ADT L22/L36, `run` orchestration L42, schema cache handoff to group scan L180, report merge/review hook L205.
 - `scan/DirectoryScanner.scala`: `scanDirectoryStructure` L60, exact Hive table-location plan L129, pre-scan collect/group build L235, schema split/finalization delegate L284, explicit-cache `splitGroupBySchema` L355.
 - `scan/DeletedFileDetection.scala`: deleted-after-discovery `FileNotFoundException` classification L6.
 - `scan/archive/ArchiveExpanders.scala`: archive format dispatch L36, unsupported/read failure handling L60.
@@ -34,9 +35,9 @@
 - `scan/discovery/DirectoryDiscovery.scala`: `resolvePreScanProgressInterval` L13, `discover` L17.
 - `scan/discovery/PreScanExecutor.scala`: skipped outcome helper L31, CSV dialect refinement L54, `runPreScan` L75.
 - `scan/discovery/SchemaGroupSplitter.scala`: `splitAndFinalize` L24, schema split scheduling L120, file schema task executor L140, `splitGroupBySchemaFast` L152, `splitGroupBySchema` L302.
-- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, exact Hive table scan dispatch L227, route dispatch L261, sampled batch schema gate L359, batch fallback invocation L348, compatibility delegates L403/L441.
+- `scan/GroupScanCoordinator.scala`: `scanGroups` L17, exact Hive table scan dispatch L223, route dispatch L255, sampled batch schema gate L352, batch fallback invocation L341, compatibility delegates L396/L432.
 - `scan/HiveTableScanner.scala`: exact table-location `spark.table` scan path L14.
-- `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L89, file progress record helper L96, group buffer flush L309.
+- `scan/GroupFileScanner.scala`: `scanGroupByFile` L25, file progress buffer setup L88, file progress record helper L95, group buffer flush L305.
 - `scan/GroupScanRouter.scala`: group route ADT L6, `routeOf` L15.
 - `scan/GroupScanFallbackPolicy.scala`: batch failure fallback executor L7.
 - `scan/FileSampling.scala`: deterministic file sampling L6.
@@ -54,13 +55,14 @@
 - `review/collect/ReviewStateWriter.scala`: action plan load L20, state write L47, atomic replace L60.
 - `review/ReviewHtmlWriter.scala`: `normalizeSampleMode`, public `write` overloads, 2MB review HTML split, `writeFindings`.
 - `review/ReviewHtmlRenderer.scala`: resource template/script loading, review part metadata rendering, split index rendering.
-- `review/ReviewSampleMasker.scala`: finding JSON rendering L6, sample masking L17.
+- `review/ReviewSampleMasker.scala`: finding JSON rendering L6, sample masking L28.
 - `review/ReviewActionPlanStatus.scala`: action plan state load/match L21/L26, UI status label L91.
 - `src/main/resources/review/review.html.template`: offline review HTML/CSS shell and `${REVIEW_DATA_JSON}` placeholder.
 - `src/main/resources/review/review.js`: offline review browser state, sorting, validation, and response download logic.
-- `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, metric planning L117.
+- `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, threshold fallback delegate L117.
+- `detect/DetectionMetrics.scala`: metric planning L12. 내부 집계 테스트는 `src/test/scala/io/github/jonggeun2001/privyspark/detect/DetectionAggregatorSpec.scala`에서 이 구현과 `DetectionSampling`을 직접 호출합니다.
 - `fsio/RetryIO.scala`: file read retry 정책, exponential backoff/jitter, retry 전 Spark catalog refresh 대상 제어.
-- `progress/ProgressIO.scala`: flush mode 설정 L19-L44, progress JSONL write L46/L108.
+- `progress/ProgressIO.scala`: flush mode 설정 L18-L49, progress JSONL write L51/L124.
 - `progress/ProgressBuffer.scala`: group 단위 progress buffering L11, enqueue L23, flush L30.
 - `progress/ProgressRunManager.scala`: progress run prepare L21, merge L88-L101, active heartbeat L154-L181.
 - `format/CsvInference.scala`: CSV/header schema inference와 `read_schema_source_tcp_snapshot` schema-read TCP 진단 로그.

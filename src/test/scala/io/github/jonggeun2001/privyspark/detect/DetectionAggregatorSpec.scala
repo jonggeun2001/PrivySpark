@@ -1,7 +1,6 @@
-package io.github.jonggeun2001.privyspark
+package io.github.jonggeun2001.privyspark.detect
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
-import io.github.jonggeun2001.privyspark.detect.DetectionAggregator
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator.{AggregationConfig, FileMatchCount}
 import io.github.jonggeun2001.privyspark.detect.testing.DetectionFaultInjectors
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType, Suppression}
@@ -10,7 +9,7 @@ import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
 import org.apache.spark.sql.functions.{col, trim, when}
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.sql.catalyst.trees.TreeNode
+import org.apache.spark.sql.catalyst.expressions.Expression
 import org.junit.runner.RunWith
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
@@ -399,7 +398,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val (rawValues, jobCount) = captureJobCount {
-      invokeDatasetSafeRawCollector(df, rules)
+      collectDatasetRawValuesSafely(df, rules)
     }
 
     assert(jobCount == 1, s"expected one Spark job for batched dataset safe sample collection, found $jobCount")
@@ -760,7 +759,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     )
 
     val (rawValues, jobCount) = captureJobCount {
-      invokeFileSafeRawCollector(df, "file_id", rules)
+      collectFileRawValuesSafely(df, "file_id", rules)
     }
 
     assert(jobCount == 2, s"expected two Spark jobs for batched file safe sample collection, found $jobCount")
@@ -843,15 +842,15 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
       )
     )
 
-    val metrics = invokeBuildMetrics(df.columns.toSeq, rules)
-    val predicate = extractMetricPredicate(metrics.head)
+    val metrics = DetectionMetrics.buildMetrics(df.columns.toSeq, rules, SuppressionSet.empty)
+    val predicate = metrics.head.predicate
     val expressionClassNames = df
       .filter(predicate)
       .queryExecution
       .analyzed
       .expressions
       .toSeq
-      .flatMap(expression => treeNodeClassNames(expression.asInstanceOf[TreeNode[_]]))
+      .flatMap(expressionNodeClassNames)
 
     assert(!expressionClassNames.contains("ScalaUDF"), expressionClassNames.mkString(","))
   }
@@ -992,47 +991,23 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  private def invokeDatasetSafeRawCollector(df: DataFrame, rules: Seq[PiiRule]): Map[String, String] = {
-    val metrics = invokeDetectionAggregatorPrivateMethod(
-      "buildMetrics",
-      df.columns.toSeq,
-      rules,
-      SuppressionSet.empty
-    )
-
-    invokeDetectionAggregatorPrivateMethod(
-      "collectSampleRawValuesSafely",
-      df,
-      metrics
-    ).asInstanceOf[Map[String, String]]
+  private def collectDatasetRawValuesSafely(df: DataFrame, rules: Seq[PiiRule]): Map[String, String] = {
+    val metrics = DetectionMetrics.buildMetrics(df.columns.toSeq, rules, SuppressionSet.empty)
+    DetectionSampling.collectSampleRawValuesSafely(df, metrics)
   }
 
-  private def invokeFileSafeRawCollector(
+  private def collectFileRawValuesSafely(
     df: DataFrame,
     fileIdentifierColumn: String,
     rules: Seq[PiiRule]
   ): Map[(String, String), String] = {
-    val metrics = invokeDetectionAggregatorPrivateMethod(
-      "buildMetrics",
+    val metrics = DetectionMetrics.buildMetrics(
       df.columns.toSeq.filterNot(_ == fileIdentifierColumn),
       rules,
       SuppressionSet.empty
     )
 
-    invokeDetectionAggregatorPrivateMethod(
-      "collectSampleRawValuesByFileSafely",
-      df,
-      fileIdentifierColumn,
-      metrics
-    ).asInstanceOf[Map[(String, String), String]]
-  }
-
-  private def invokeDetectionAggregatorPrivateMethod(methodName: String, args: AnyRef*): AnyRef = {
-    val method = DetectionAggregator.getClass.getDeclaredMethods
-      .find(candidate => candidate.getName == methodName && candidate.getParameterCount == args.size)
-      .getOrElse(fail(s"unable to find DetectionAggregator private method: $methodName/${args.size}"))
-    method.setAccessible(true)
-    method.invoke(DetectionAggregator, args: _*)
+    DetectionSampling.collectSampleRawValuesByFileSafely(df, fileIdentifierColumn, metrics)
   }
 
   private def legacyCounts(df: DataFrame, rules: Seq[PiiRule]): Seq[MatchCount] = {
@@ -1127,17 +1102,7 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     }
   }
 
-  private def invokeBuildMetrics(columns: Seq[String], rules: Seq[PiiRule]): Seq[AnyRef] = {
-    val method = DetectionAggregator.getClass.getDeclaredMethods.find(_.getName == "buildMetrics").get
-    method.setAccessible(true)
-    method.invoke(DetectionAggregator, columns, rules, SuppressionSet.empty).asInstanceOf[Seq[AnyRef]]
-  }
-
-  private def extractMetricPredicate(metric: AnyRef): org.apache.spark.sql.Column = {
-    metric.getClass.getMethod("predicate").invoke(metric).asInstanceOf[org.apache.spark.sql.Column]
-  }
-
-  private def treeNodeClassNames(node: TreeNode[_]): Seq[String] = {
-    node.getClass.getSimpleName +: node.children.toSeq.flatMap(child => treeNodeClassNames(child.asInstanceOf[TreeNode[_]]))
+  private def expressionNodeClassNames(expression: Expression): Seq[String] = {
+    expression.getClass.getSimpleName +: expression.children.flatMap(expressionNodeClassNames)
   }
 }

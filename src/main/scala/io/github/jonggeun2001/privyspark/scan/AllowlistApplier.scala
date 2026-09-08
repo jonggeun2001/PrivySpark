@@ -2,13 +2,13 @@ package io.github.jonggeun2001.privyspark.scan
 
 import io.github.jonggeun2001.privyspark.config.SuppressionSet
 import io.github.jonggeun2001.privyspark.hive.{HiveTableFqnResolver, HiveTableLookupIndex}
-import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
+import io.github.jonggeun2001.privyspark.model.{PiiRule, ProgressRun, ScanError, ScanGroup, ScanResult}
 import io.github.jonggeun2001.privyspark.progress.InFlightMarker
 import io.github.jonggeun2001.privyspark.progress.ProgressIO.persistProgressRecords
-import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher, ReviewScopeFingerprintCodec}
+import io.github.jonggeun2001.privyspark.review.{AllowlistEvaluation, AllowlistMatcher}
 import io.github.jonggeun2001.privyspark.util.{DriverLogger, RpcGate}
 import io.github.jonggeun2001.privyspark.util.ParallelismConfig.{executeInParallel, resolveFileParallelism}
-import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveDirectoryIdentifier, resolveLogicalIdentifier, resolvePhysicalPath}
+import io.github.jonggeun2001.privyspark.util.PathIdentifiers.{resolveLogicalIdentifier, resolvePhysicalPath}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 
@@ -107,10 +107,7 @@ private[privyspark] object AllowlistApplier {
   }
 
   def applyAllowlist(
-    conf: org.apache.hadoop.conf.Configuration,
-    datasetPath: String,
     allowlistMatcher: AllowlistMatcher,
-    allowlistInputRoot: Option[String],
     results: Seq[ScanResult]
   ): Seq[ScanResult] = {
     if (results.isEmpty || allowlistMatcher.isEmpty) {
@@ -203,7 +200,6 @@ private[privyspark] object AllowlistApplier {
     fileSampleMinFiles: Int,
     suppressions: SuppressionSet,
     allowlistMatcher: AllowlistMatcher,
-    allowlistInputRoot: Option[String],
     progressRun: Option[ProgressRun],
     csvHeadCache: CsvHeadCache,
     schemaSigCache: SchemaSignatureCache,
@@ -254,7 +250,6 @@ private[privyspark] object AllowlistApplier {
         fileSampleMinFiles,
         suppressions,
         allowlistMatcher,
-        allowlistInputRoot,
         progressRun,
         csvHeadCache,
         schemaSigCache,

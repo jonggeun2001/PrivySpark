@@ -239,9 +239,9 @@ private[privyspark] object SchemaGroupSplitter {
     datasetPath: String,
     timestamp: String,
     group: ScanGroup,
-    parseOkCache: ParseOkCache = new ParseOkCache(),
-    schemaSplitParallelism: Int = 1,
-    rpcGate: Option[RpcGate] = None
+    parseOkCache: ParseOkCache,
+    schemaSplitParallelism: Int,
+    rpcGate: Option[RpcGate]
   ): (Seq[String], Seq[ScanError]) = {
     val validFilePaths = ArrayBuffer.empty[String]
     val errors = ArrayBuffer.empty[ScanError]

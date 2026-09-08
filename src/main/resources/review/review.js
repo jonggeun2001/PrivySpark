@@ -159,15 +159,12 @@
     function isBlank(value) {
       return String(value ?? '').trim() === '';
     }
-    function formValuesSnapshot() {
+    function collectFormValues() {
       const values = {};
       formState.forEach((state, index) => {
         values[index] = Object.assign({}, state);
       });
       return values;
-    }
-    function collectFormValues() {
-      return formValuesSnapshot();
     }
     function sampleSortText(finding) {
       return finding.evidence_samples.map(sample => [
@@ -286,9 +283,6 @@
       row.querySelectorAll('[data-decision-section]').forEach(section => {
         section.hidden = section.getAttribute('data-decision-section') !== decision;
       });
-    }
-    function applyScopeVisibility(row) {
-      return row;
     }
     function validationTarget(row, field) {
       return field === 'decision'
@@ -828,7 +822,6 @@
       row.setAttribute('data-hydrated', 'true');
       setFieldValues(row, index);
       applyDecisionVisibility(row);
-      applyScopeVisibility(row);
       applyValidationState(row, index);
       hydratedRows.set(index, row);
     }
@@ -846,7 +839,6 @@
       if (row) {
         setFieldValues(row, index);
         applyDecisionVisibility(row);
-        applyScopeVisibility(row);
         applyValidationState(row, index);
       }
     }
@@ -914,7 +906,6 @@
       const row = button.closest('tr');
       updateDecisionButtons(row, index);
       applyDecisionVisibility(row);
-      applyScopeVisibility(row);
       applyValidationState(row, index);
     }
     function handleFormEvent(event) {
