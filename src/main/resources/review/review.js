@@ -403,10 +403,16 @@
       }
     }
     function firstValidationErrorInDisplayOrder(errors) {
-      const rows = Array.from(tbody.querySelectorAll('tr[data-index]'));
+      const firstErrorByIndex = new Map();
+      errors.forEach(error => {
+        if (!firstErrorByIndex.has(error.index)) {
+          firstErrorByIndex.set(error.index, error);
+        }
+      });
+      const rows = tbody.querySelectorAll('tr[data-index]');
       for (const row of rows) {
         const index = Number(row.getAttribute('data-index'));
-        const error = errors.find(candidate => candidate.index === index);
+        const error = firstErrorByIndex.get(index);
         if (error) {
           return error;
         }
