@@ -12,6 +12,7 @@
 /.idea/
 *.iml
 /.agents/
+/skills/
 /.serena/
 /.playwright-mcp/
 docs/superpowers/
