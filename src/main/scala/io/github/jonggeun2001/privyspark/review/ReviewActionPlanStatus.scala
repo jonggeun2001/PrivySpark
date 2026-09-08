@@ -5,6 +5,7 @@ import io.github.jonggeun2001.privyspark.review.collect.ReviewStateWriter
 import org.apache.hadoop.conf.Configuration
 
 import java.time.LocalDate
+import scala.collection.mutable
 import scala.util.Try
 
 private[privyspark] final case class ReviewActionPlanStatus(
@@ -25,29 +26,42 @@ private[privyspark] object ReviewActionPlanStatus {
   def matchFindings(
     findings: Seq[ReviewFinding],
     actionPlans: Seq[ActionPlan]
-  ): Map[String, ReviewActionPlanStatus] =
-    findings.flatMap { finding =>
-      latestMatchingPlan(finding, actionPlans).map(plan => finding.findingKey -> fromActionPlan(plan))
-    }.toMap
+  ): Map[String, ReviewActionPlanStatus] = {
+    if (findings.isEmpty || actionPlans.isEmpty) return Map.empty
 
-  private def latestMatchingPlan(finding: ReviewFinding, actionPlans: Seq[ActionPlan]): Option[ActionPlan] =
-    actionPlans
-      .filter(plan => matches(finding, plan))
-      .sortBy(plan => (plan.respondedAt, plan.findingKey))
-      .lastOption
-
-  private def matches(finding: ReviewFinding, plan: ActionPlan): Boolean = {
-    val sameScanAndType =
-      ReviewPathNormalizer.normalizeScanPath(plan.scanPath) == ReviewPathNormalizer.normalizeScanPath(finding.scanPath) &&
-        plan.columnName == finding.columnName &&
-        plan.piiType == finding.piiType
-    if (!sameScanAndType) {
-      false
-    } else if (plan.hiveTableFqn.trim.nonEmpty || finding.hiveTableFqn.trim.nonEmpty) {
-      plan.hiveTableFqn == finding.hiveTableFqn
-    } else {
-      plan.fileIdentifier == finding.fileIdentifier
+    val latestPlans = mutable.Map.empty[MatchKey, ActionPlan]
+    val ordering = implicitly[Ordering[(String, String)]]
+    actionPlans.foreach { plan =>
+      val key = matchingKey(plan.scanPath, plan.columnName, plan.piiType, plan.hiveTableFqn, plan.fileIdentifier)
+      val isLatest = latestPlans.get(key).forall { previous =>
+        ordering.gteq((plan.respondedAt, plan.findingKey), (previous.respondedAt, previous.findingKey))
+      }
+      if (isLatest) latestPlans.update(key, plan)
     }
+    findings.flatMap { finding =>
+      val key = matchingKey(finding.scanPath, finding.columnName, finding.piiType, finding.hiveTableFqn, finding.fileIdentifier)
+      latestPlans.get(key).map(plan => finding.findingKey -> fromActionPlan(plan))
+    }.toMap
+  }
+
+  private final case class MatchKey(
+    scanPath: String,
+    columnName: String,
+    piiType: String,
+    hiveTable: Boolean,
+    identifier: String
+  )
+
+  private def matchingKey(
+    scanPath: String,
+    columnName: String,
+    piiType: String,
+    hiveTableFqn: String,
+    fileIdentifier: String
+  ): MatchKey = {
+    val hiveTable = hiveTableFqn.trim.nonEmpty
+    MatchKey(ReviewPathNormalizer.normalizeScanPath(scanPath), columnName, piiType, hiveTable,
+      if (hiveTable) hiveTableFqn else fileIdentifier)
   }
 
   private def fromActionPlan(plan: ActionPlan): ReviewActionPlanStatus = {

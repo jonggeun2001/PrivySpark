@@ -14,7 +14,8 @@ private[privyspark] object DetectionCounts {
   ): Map[String, Long] = {
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
 
-    val targetColumns = columns.distinct.filter(sampledDf.columns.contains)
+    lazy val availableColumns = sampledDf.columns.toSet
+    val targetColumns = columns.distinct.filter(availableColumns.contains)
     if (targetColumns.isEmpty) {
       Map.empty
     } else {
@@ -44,7 +45,8 @@ private[privyspark] object DetectionCounts {
     require(fileIdentifierColumn.nonEmpty, "fileIdentifierColumn must not be empty")
     require(config.maxExpressionsPerAgg > 0, "maxExpressionsPerAgg must be > 0")
 
-    val targetColumns = columns.distinct.filter(columnName => columnName != fileIdentifierColumn && sampledDf.columns.contains(columnName))
+    lazy val availableColumns = sampledDf.columns.toSet
+    val targetColumns = columns.distinct.filter(columnName => columnName != fileIdentifierColumn && availableColumns.contains(columnName))
     if (targetColumns.isEmpty) {
       Map.empty
     } else {

@@ -5,16 +5,23 @@ import io.github.jonggeun2001.privyspark.model.{PiiRule, PiiRuleMatchType}
 import org.apache.spark.sql.functions.{col, trim}
 import org.apache.spark.sql.types.StringType
 
+import java.util.regex.Pattern
+import scala.collection.mutable
+
 private[privyspark] object DetectionMetrics {
   def buildMetrics(
     columns: Seq[String],
     rules: Seq[PiiRule],
     suppressions: SuppressionSet
   ): Seq[DetectionAggregator.Metric] = {
+    val indexedRules = rules.zipWithIndex
+    val patterns = mutable.Map.empty[(String, String), Pattern]
     columns.zipWithIndex.flatMap {
       case (columnName, columnIndex) =>
         val normalizedColumnName = SuppressionSet.normalizeColumnName(columnName)
-        rules.zipWithIndex.flatMap {
+        lazy val valueColumn = col(columnName).cast(StringType)
+        lazy val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
+        indexedRules.flatMap {
           case (rule, ruleIndex) =>
             val passesHint =
               rule.columnHints.isEmpty || rule.columnHints.exists(hint => normalizedColumnName.contains(SuppressionSet.normalizeColumnName(hint)))
@@ -23,9 +30,10 @@ private[privyspark] object DetectionMetrics {
 
             if (shouldTestColumn) {
               val alias = s"m_${columnIndex}_${ruleIndex}"
-              val valueColumn = col(columnName).cast(StringType)
-              val presentValuePredicate = valueColumn.isNotNull && trim(valueColumn) =!= ""
-              val pattern = DetectionExpressions.compiledPattern(rule.regex, rule.matchType)
+              val pattern = patterns.getOrElseUpdate(
+                (rule.regex, rule.matchType),
+                DetectionExpressions.compiledPattern(rule.regex, rule.matchType)
+              )
               val matchPredicate = rule.matchType match {
                 case PiiRuleMatchType.FullColumn => valueColumn.rlike(DetectionExpressions.fullMatchRegex(rule.regex))
                 case _ => valueColumn.rlike(rule.regex)

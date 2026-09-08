@@ -13,6 +13,7 @@ private[privyspark] object ReviewHtmlRenderer {
 
   private val Template = loadResource(TemplateResource)
   private val Script = loadResource(ScriptResource).stripSuffix("\n")
+  private lazy val TemplateWithScript = replaceRequired(Template, ScriptPlaceholder, Script)
 
   def render(
     scanPath: String,
@@ -30,7 +31,7 @@ private[privyspark] object ReviewHtmlRenderer {
       s"""{"schema_version":1,"scan_path":${jsonString(scanPath)},"scan_results_fingerprint":${jsonString(scanResultsFingerprint)},"findings":$findingJson$partJson}"""
     val safeReviewData = reviewData.replace("</", "<\\/")
     replaceRequired(
-      replaceRequired(Template, ScriptPlaceholder, Script),
+      TemplateWithScript,
       ReviewDataPlaceholder,
       safeReviewData
     )
