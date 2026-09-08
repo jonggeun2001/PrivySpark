@@ -50,8 +50,7 @@ class AllowlistScanSpec extends AnyFunSuite {
         Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")),
         sampleRatio = 1.0,
         timestamp = "2026-04-20T00:00:00Z",
-        allowlistMatcher = matcher,
-        allowlistInputRoot = Some(inputRoot.toString)
+        allowlistMatcher = matcher
       )
 
       assert(scanned.flatMap(_._2).isEmpty)
@@ -96,8 +95,7 @@ class AllowlistScanSpec extends AnyFunSuite {
         Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")),
         sampleRatio = 1.0,
         timestamp = "2026-04-20T00:00:00Z",
-        allowlistMatcher = matcher,
-        allowlistInputRoot = Some(inputRoot.toString)
+        allowlistMatcher = matcher
       )
 
       val results = scanned.flatMap(_._2)
@@ -143,8 +141,7 @@ class AllowlistScanSpec extends AnyFunSuite {
         Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")),
         sampleRatio = 1.0,
         timestamp = "2026-04-20T00:00:00Z",
-        allowlistMatcher = matcher,
-        allowlistInputRoot = Some(inputRoot.toString)
+        allowlistMatcher = matcher
       )
 
       assert(scanned.flatMap(_._2).isEmpty)
@@ -186,8 +183,7 @@ class AllowlistScanSpec extends AnyFunSuite {
         Seq(PiiRule("email", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")),
         sampleRatio = 1.0,
         timestamp = "2026-04-20T00:00:00Z",
-        allowlistMatcher = matcher,
-        allowlistInputRoot = Some(inputRoot.toString)
+        allowlistMatcher = matcher
       )
 
       val results = scanned.flatMap(_._2)

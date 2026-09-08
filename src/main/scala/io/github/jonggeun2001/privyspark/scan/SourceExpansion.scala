@@ -3,13 +3,10 @@ package io.github.jonggeun2001.privyspark.scan
 import io.github.jonggeun2001.privyspark.scan.archive.ArchiveExpanders
 import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging._
 import io.github.jonggeun2001.privyspark.format.ByteProbe._
-import io.github.jonggeun2001.privyspark.format.FormatDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
 import io.github.jonggeun2001.privyspark.format.WorkbookHelpers.listVisibleWorkbookSheets
 import io.github.jonggeun2001.privyspark.config.IgnoreMatcher
-import io.github.jonggeun2001.privyspark.model.{PiiRule, ScanError, ScanFileEntry, ScanGroup, ScanReadOptions}
-import io.github.jonggeun2001.privyspark.util.{DriverLogger, PathIdentifiers}
-import org.apache.hadoop.fs.Path
+import io.github.jonggeun2001.privyspark.model.{ScanError, ScanFileEntry, ScanGroup, ScanReadOptions}
 
 import java.io.FileNotFoundException
 import scala.collection.mutable.ArrayBuffer

@@ -190,7 +190,6 @@ private[privyspark] object ScanPipeline {
         config.fileSampleMinFiles,
         suppressions,
         allowlistMatcher,
-        Some(config.inputPath),
         Some(preparedProgressRun),
         retainPayloads = false,
         csvHeadCache = csvHeadCache,

@@ -92,13 +92,6 @@ object HiveTableLookupIndex {
       if (normalizedLocation.startsWith("file:/")) Some(normalizedLocation.stripPrefix("file:")) else None
     (Vector(normalizedLocation) ++ filePathVariant).distinct
   }
-
-  private[hive] def matchesPrefix(path: String, prefix: String): Boolean = {
-    path == prefix ||
-      (prefix == "/" && path.startsWith("/")) ||
-      (prefix.endsWith("/") && path.startsWith(prefix)) ||
-      path.startsWith(prefix + "/")
-  }
 }
 
 object HiveTableLookup {

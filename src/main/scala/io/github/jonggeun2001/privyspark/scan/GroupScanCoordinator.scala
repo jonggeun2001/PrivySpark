@@ -27,7 +27,6 @@ private[privyspark] object GroupScanCoordinator {
     fileSampleMinFiles: Int = 10,
     suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
-    allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     retainPayloads: Boolean = true,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
@@ -93,7 +92,6 @@ private[privyspark] object GroupScanCoordinator {
             fileSampleMinFiles,
             suppressions,
             allowlistMatcher,
-            allowlistInputRoot,
             progressRun,
             csvHeadCache,
             schemaSigCache,
@@ -161,7 +159,6 @@ private[privyspark] object GroupScanCoordinator {
     fileSampleMinFiles: Int = 10,
     suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
-    allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     schemaSigCache: SchemaSignatureCache = new SchemaSignatureCache(),
@@ -197,7 +194,6 @@ private[privyspark] object GroupScanCoordinator {
         fileSampleMinFiles,
         suppressions,
         allowlistMatcher,
-        allowlistInputRoot,
         progressRun,
         csvHeadCache,
         schemaSigCache,
@@ -215,7 +211,6 @@ private[privyspark] object GroupScanCoordinator {
         fileParallelism,
         suppressions,
         allowlistMatcher,
-        allowlistInputRoot,
         progressRun,
         csvHeadCache,
         fileSampleRatio,
@@ -233,8 +228,7 @@ private[privyspark] object GroupScanCoordinator {
         sampleRatio,
         timestamp,
         suppressions,
-        allowlistMatcher,
-        allowlistInputRoot
+        allowlistMatcher
       )
       progressRun.foreach { run =>
         persistProgressRecords(
@@ -318,7 +312,6 @@ private[privyspark] object GroupScanCoordinator {
                 fileSampleMinFiles,
                 suppressions,
                 allowlistMatcher,
-                allowlistInputRoot,
                 selectedSourceKeys = Some(effectiveSelectedSourceKeys),
                 progressRun = progressRun,
                 hiveLookup = hiveLookup
@@ -410,7 +403,6 @@ private[privyspark] object GroupScanCoordinator {
     fileParallelism: Int = -1,
     suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
-    allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     fileSampleRatio: Option[Double] = None,
@@ -428,7 +420,6 @@ private[privyspark] object GroupScanCoordinator {
       fileParallelism,
       suppressions,
       allowlistMatcher,
-      allowlistInputRoot,
       progressRun,
       csvHeadCache,
       fileSampleRatio,
@@ -449,7 +440,6 @@ private[privyspark] object GroupScanCoordinator {
     fileSampleMinFiles: Int = 10,
     suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
-    allowlistInputRoot: Option[String] = None,
     selectedSourceKeys: Option[Seq[String]] = None,
     progressRun: Option[ProgressRun] = None,
     hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
@@ -465,7 +455,6 @@ private[privyspark] object GroupScanCoordinator {
       fileSampleMinFiles,
       suppressions,
       allowlistMatcher,
-      allowlistInputRoot,
       selectedSourceKeys,
       progressRun,
       hiveLookup

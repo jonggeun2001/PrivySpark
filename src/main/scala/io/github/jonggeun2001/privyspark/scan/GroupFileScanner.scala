@@ -32,7 +32,6 @@ private[privyspark] object GroupFileScanner {
     fileParallelism: Int = -1,
     suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
-    allowlistInputRoot: Option[String] = None,
     progressRun: Option[ProgressRun] = None,
     csvHeadCache: CsvHeadCache = new CsvHeadCache(),
     fileSampleRatio: Option[Double] = None,
@@ -238,10 +237,7 @@ private[privyspark] object GroupFileScanner {
             fileMetrics => {
               if (!group.useDirectoryIdentifier) {
                 val fileResults = AllowlistApplier.applyAllowlist(
-                  spark.sparkContext.hadoopConfiguration,
-                  datasetPath,
                   allowlistMatcher,
-                  allowlistInputRoot,
                   ScanResultBuilder.buildScanResults(
                     datasetPath,
                     fileMetrics.scanTimestamp,
@@ -390,10 +386,7 @@ private[privyspark] object GroupFileScanner {
       }
     }
     val filteredFallbackResults = AllowlistApplier.applyAllowlist(
-      spark.sparkContext.hadoopConfiguration,
-      datasetPath,
       allowlistMatcher,
-      allowlistInputRoot,
       fallbackResults
     )
     progressRun.foreach { run =>

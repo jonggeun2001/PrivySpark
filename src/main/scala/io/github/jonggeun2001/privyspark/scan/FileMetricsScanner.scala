@@ -6,7 +6,7 @@ import io.github.jonggeun2001.privyspark.format.ByteProbe.detectPhysicalFormatWi
 import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference.{detectCsvHasHeader, readSource}
 import io.github.jonggeun2001.privyspark.fsio.RetryIO.withFileReadRetry
-import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, PiiRule, ScanError, ScanGroup, ScanReadOptions, ScanResult}
+import io.github.jonggeun2001.privyspark.model.{FileScanMetrics, PiiRule, ScanError, ScanGroup, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.util.{DriverLogger, DriverTcpConnectionLogger}
 import io.github.jonggeun2001.privyspark.util.PathIdentifiers.resolveRelativeIdentifier
 import org.apache.hadoop.fs.Path
@@ -119,7 +119,6 @@ private[privyspark] object FileMetricsScanner {
           detectedReadOptions,
           csvHeadCache
         )
-        val effectiveRules = ScanResultBuilder.effectiveRulesForFormat(format, rules)
 
         val csvHasHeader = if (format == "csv") {
           csvHasHeaderOverride.getOrElse(detectCsvHasHeader(spark, physicalPath, csvHeadCache, effectiveReadOptions))
@@ -174,7 +173,7 @@ private[privyspark] object FileMetricsScanner {
             "action" -> "aggregate_matches",
             "dataframe_cached" -> false
           )
-          val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules, suppressions = suppressions)
+          val matchCounts = DetectionAggregator.aggregate(sampledDf, rules, suppressions = suppressions)
           logTcpSnapshot(
             "file_spark_action_complete",
             "action" -> "aggregate_matches",
@@ -190,7 +189,7 @@ private[privyspark] object FileMetricsScanner {
           )
           val nonEmptyValueCounts = DetectionAggregator.countNonEmpty(
             sampledDf,
-            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules, suppressions)
+            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, rules, suppressions)
           )
           logTcpSnapshot(
             "file_spark_action_complete",
@@ -205,7 +204,7 @@ private[privyspark] object FileMetricsScanner {
             "action" -> "sample_matches",
             "dataframe_cached" -> false
           )
-          val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts, suppressions = suppressions)
+          val sampleValues = DetectionAggregator.sampleMatches(sampledDf, rules, matchCounts, suppressions = suppressions)
           logTcpSnapshot(
             "file_spark_action_complete",
             "action" -> "sample_matches",
@@ -237,30 +236,6 @@ private[privyspark] object FileMetricsScanner {
         val errorMessage = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
         DriverLogger.debug("scan_file_error", "file" -> physicalPath, "file_identifier" -> fileIdentifier, "reason" -> errorMessage)
         Left(ScanError(datasetPath, timestamp, fileIdentifier, errorMessage))
-    }
-  }
-
-  def scanFile(
-    spark: SparkSession,
-    datasetPath: String,
-    filePath: String,
-    rules: Seq[PiiRule],
-    sampleRatio: Double,
-    timestamp: String,
-    suppressions: SuppressionSet = SuppressionSet.empty
-  ): Either[ScanError, Seq[ScanResult]] = {
-    scanFileMetrics(spark, datasetPath, filePath, rules, sampleRatio, timestamp, suppressions = suppressions).map { fileMetrics =>
-      ScanResultBuilder.buildScanResults(
-        datasetPath,
-        fileMetrics.scanTimestamp,
-        fileMetrics.fileIdentifier,
-        fileMetrics.sampledRowCount,
-        fileMetrics.nonEmptyValueCounts,
-        fileMetrics.matchCounts,
-        fileMetrics.sampleValues,
-        fileMetrics.fileSize,
-        fileMetrics.fileMtimeEpochMs
-      )
     }
   }
 

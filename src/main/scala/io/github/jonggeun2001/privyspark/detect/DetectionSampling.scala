@@ -1,7 +1,6 @@
 package io.github.jonggeun2001.privyspark.detect
 
 import io.github.jonggeun2001.privyspark.model.{PiiRuleMatchType, SampleValue}
-import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.DataFrame
 
@@ -182,13 +181,5 @@ private[privyspark] object DetectionSampling {
     } else {
       rawValue.substring(snippetStart, snippetEnd)
     }
-  }
-
-  private def logSampleConflict(scope: String, keys: Seq[String]): Unit = {
-    DriverLogger.warn(
-      "detection_sample_conflict",
-      "scope" -> scope,
-      "keys" -> keys.mkString(",")
-    )
   }
 }

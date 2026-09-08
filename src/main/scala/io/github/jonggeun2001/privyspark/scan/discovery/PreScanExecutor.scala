@@ -5,7 +5,7 @@ import io.github.jonggeun2001.privyspark.format.ByteProbe.shouldProbeForFormat
 import io.github.jonggeun2001.privyspark.format.CsvDialectDetector
 import io.github.jonggeun2001.privyspark.format.CsvInference.XlsxFormat
 import io.github.jonggeun2001.privyspark.format.FormatDetector
-import io.github.jonggeun2001.privyspark.model.{PreScanFileOutcome, ScanError, ScanFileEntry, ScanReadOptions}
+import io.github.jonggeun2001.privyspark.model.{PreScanFileOutcome, ScanFileEntry, ScanReadOptions}
 import io.github.jonggeun2001.privyspark.scan.DeletedFileDetection
 import io.github.jonggeun2001.privyspark.scan.SourceExpansion.expandPhysicalSource
 import io.github.jonggeun2001.privyspark.scan.archive.ArchiveStaging.ArchiveFormats
