@@ -434,6 +434,58 @@ class RulesetLoaderSpec extends AnyFunSuite {
     }
   }
 
+  Seq(
+    "empty document" -> "",
+    "missing rules" -> "suppressions: []",
+    "null rules" -> "rules: null",
+    "empty rules" -> "rules: []",
+    "missing pii type" -> "rules:\n  - regex: abc",
+    "missing regex" -> "rules:\n  - pii_type: email",
+    "blank pii type" -> "rules:\n  - pii_type: '  '\n    regex: abc",
+    "null regex" -> "rules:\n  - pii_type: email\n    regex: null"
+  ).foreach { case (name, yaml) =>
+    test(s"rejects $name before producing a ruleset") {
+      withRuleset(yaml) { path => assertThrows[IllegalArgumentException](RulesetLoader.loadBundle(path)) }
+    }
+  }
+
+  test("rejects malformed YAML syntax without producing a partial ruleset") {
+    withRuleset("rules: [\n") { path =>
+      assertThrows[org.yaml.snakeyaml.error.YAMLException](RulesetLoader.loadBundle(path))
+    }
+  }
+
+  test("normalizes scalar hints and blank match type while preserving rule order") {
+    withRuleset("rules:\n  - pii_type: ' email '\n    regex: ' abc '\n    column_hints: ' MAIL '\n    match_type: '  '\n  - pii_type: phone\n    regex: '[0-9]+'") { path =>
+      val rules = RulesetLoader.load(path)
+      assert(rules.map(_.piiType) == Seq("email", "phone"))
+      assert(rules.head.regex == "abc")
+      assert(rules.head.columnHints == Seq("MAIL"))
+      assert(rules.head.matchType == "value")
+    }
+  }
+
+  test("explicit suppression columns take precedence over the legacy column field") {
+    val yaml = "rules:\n  - pii_type: email\n    regex: abc\nsuppressions:\n  - column: ignored\n    columns: [' email ', null, ' ']\n    pii_type: ' email '"
+    withRuleset(yaml) { path =>
+      assert(RulesetLoader.loadBundle(path).suppressions == Seq(Suppression("email", "email")))
+    }
+  }
+
+  test("rejects suppressions containing only blank columns") {
+    withRuleset("rules:\n  - pii_type: email\n    regex: abc\nsuppressions:\n  - columns: [null, ' ']\n    pii_type: email") { path =>
+      assertThrows[IllegalArgumentException](RulesetLoader.loadBundle(path))
+    }
+  }
+
+  private def withRuleset(yaml: String)(body: String => Unit): Unit = {
+    val path = Files.createTempFile("privyspark-ruleset-boundary-", ".yaml")
+    try {
+      Files.write(path, yaml.getBytes(StandardCharsets.UTF_8))
+      body(path.toString)
+    } finally Files.deleteIfExists(path)
+  }
+
   private def captureStderr[A](block: => A): String = {
     val output = new ByteArrayOutputStream()
     val originalErr = System.err

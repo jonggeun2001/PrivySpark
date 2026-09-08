@@ -19,8 +19,10 @@ The main artifact is `build/libs/*-all.jar`.
 ## Test
 
 ```bash
-./gradlew test
+bash scripts/verify-worktree.sh
 ```
+
+This runs the Scala/Spark tests and browser review logic tests. JavaScript tests require Node.js 18 or later and no additional npm packages. Use `./gradlew test` for Scala only, or `node --test src/test/js/*.test.cjs` for JavaScript only. Node.js is not required to run the scanner.
 
 To regenerate the bundled sample datasets:
 

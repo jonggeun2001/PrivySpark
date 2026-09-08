@@ -46,6 +46,40 @@ class ResponseValidatorSpec extends AnyFunSuite {
     ))
   }
 
+  Seq[(String, ResponseItem => ResponseItem)](
+    "finding key" -> (_.copy(findingKey = " ")),
+    "column" -> (_.copy(columnName = " ")),
+    "PII type" -> (_.copy(piiType = " ")),
+    "decision" -> (_.copy(decision = "")),
+    "unknown decision" -> (_.copy(decision = "approve")),
+    "reason" -> (_.copy(falsePositiveReason = " ")),
+    "expiry" -> (_.copy(expiresAt = " ")),
+    "invalid expiry date" -> (_.copy(expiresAt = "2026-02-30")),
+    "unsupported scope" -> (_.copy(allowlistScope = "exact")),
+    "wildcard PII type" -> (_.copy(piiType = "EMAIL*"))
+  ).foreach { case (name, modify) =>
+    test(s"rejects an invalid false-positive $name") {
+      assert(ResponseValidator.validateItem(modify(validFalsePositiveItem())).nonEmpty)
+    }
+  }
+
+  test("true positives require a plan and a valid calendar date") {
+    val valid = validFalsePositiveItem().copy(decision = ReviewStatus.TruePositive, actionPlan = "mask", actionDueDate = "2024-02-29")
+    assert(ResponseValidator.validateItem(valid).isEmpty)
+    Seq(valid.copy(actionPlan = " "), valid.copy(actionDueDate = ""), valid.copy(actionDueDate = "2025-02-29"))
+      .foreach(item => assert(ResponseValidator.validateItem(item).nonEmpty))
+    // Collection accepts historical dates; the browser's 30-day entry window is separate.
+    assert(ResponseValidator.validateItem(valid.copy(actionDueDate = "2000-01-01")).isEmpty)
+  }
+
+  test("Hive table scope can omit file paths and legacy file identifiers remain usable") {
+    val valid = validFalsePositiveItem()
+    assert(ResponseValidator.validateItem(valid.copy(hiveTableFqn = "mart.contacts", fileIdentifier = "")).isEmpty)
+    assert(ResponseValidator.validateItem(valid.copy(fileIdentifierPattern = "   ")).isEmpty)
+    assert(ResponseValidator.recurringFileIdentifierPattern(valid.copy(fileIdentifierPattern = "folder/*")) == "folder/*")
+    assert(ResponseValidator.validateItem(valid.copy(allowlistScope = "")).isEmpty)
+  }
+
   private def validFalsePositiveItem(): ResponseItem =
     ResponseItem(
       findingKey = "finding-1",

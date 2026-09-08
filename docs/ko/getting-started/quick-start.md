@@ -19,8 +19,10 @@ PrivySpark는 클러스터 제공 Spark 런타임을 전제로 하고, 애플리
 ## 테스트
 
 ```bash
-./gradlew test
+bash scripts/verify-worktree.sh
 ```
+
+Scala/Spark 테스트와 브라우저 리뷰 로직 테스트를 함께 실행합니다. JavaScript 테스트에는 Node.js 18 이상이 필요하며 추가 npm 패키지는 사용하지 않습니다. Scala 테스트만 실행하려면 `./gradlew test`, JavaScript 테스트만 실행하려면 `node --test src/test/js/*.test.cjs`를 사용합니다. Node.js는 스캐너 실행에는 필요하지 않습니다.
 
 샘플 데이터셋을 다시 만들려면 아래 명령을 사용합니다.
 

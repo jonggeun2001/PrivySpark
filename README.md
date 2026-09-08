@@ -34,8 +34,10 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 테스트:
 
 ```bash
-./gradlew test
+bash scripts/verify-worktree.sh
 ```
+
+전체 검증은 Scala/Spark 테스트와 브라우저 리뷰 로직 테스트를 실행합니다. JavaScript 테스트에는 Node.js 18 이상이 필요하며, 스캐너 실행에는 필요하지 않습니다.
 
 YARN cluster 실행:
 
@@ -88,8 +90,11 @@ bin/privyspark-submit \
 # 저장소 기준 표준 검증
 bash scripts/verify-worktree.sh
 
-# 전체 테스트
+# Scala/Spark 테스트만 실행
 ./gradlew test
+
+# 브라우저 리뷰 로직 테스트만 실행 (Node.js 18 이상, 추가 패키지 없음)
+node --test src/test/js/*.test.cjs
 
 # fat JAR 재생성
 ./gradlew clean shadowJar
@@ -129,9 +134,11 @@ bash scripts/verify-worktree.sh
   - ruleset, suppression, 결과, 오류 모델
 - `src/test/scala/io/github/jonggeun2001/privyspark`
   - 기능별 ScalaTest 스펙
+- `src/test/js/review.test.cjs`
+  - 실제 `review.js`의 CSV/TSV 파싱, 판정/기한 검증, 정렬, 입력 상태 테스트
 
 ### 수정 흐름 추천
-1. 현재 상태를 `./gradlew test` 또는 `bash scripts/verify-worktree.sh`로 먼저 확인합니다.
+1. 현재 상태를 `bash scripts/verify-worktree.sh`로 먼저 확인합니다.
 2. ruleset 변경이면 [config/rules/default.yaml](config/rules/default.yaml)과 관련 문서를 함께 수정합니다.
 3. 입력 포맷 처리 변경이면 `format/FormatDetector.scala`, `scan/DirectoryScanner.scala`, `PrivySparkApp.scala`, 입력 포맷 문서를 같이 봅니다.
 4. 집계나 출력 스키마 변경이면 `detect/DetectionAggregator.scala`, `model/Models.scala`, `report/ReportWriter.scala`, 관련 테스트를 같이 봅니다.
