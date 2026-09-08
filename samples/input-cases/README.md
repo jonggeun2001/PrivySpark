@@ -11,6 +11,8 @@
   - `files/`: 실제 스캔 대상 파일/디렉토리
   - `build/distributions/privyspark-sample-datasets.zip`: 현재 `samples/input-cases` 트리를 그대로 묶은 release 배포용 zip
 
+YARN cluster의 driver/executor는 client 로컬 `samples/` 경로를 자동으로 공유하지 않습니다. 아래 예시는 입력을 HDFS에 올리고 ruleset은 `--files` alias로 배포합니다. 이미 공유 스토리지에 배치했다면 해당 URI를 그대로 사용합니다.
+
 `files/` 아래 binary 파일은 생성기로 다시 만들어지는 산출물이므로 수동 편집하지 않습니다.
 
 GitHub Release에는 같은 내용을 담은 `privyspark-<tag>-sample-datasets.zip` 자산이 추가됩니다. 압축을 해제하면 `input-cases/` 루트 아래에 이 디렉토리 구조가 그대로 풀립니다.
@@ -22,14 +24,19 @@ GitHub Release에는 같은 내용을 담은 `privyspark-<tag>-sample-datasets.z
 예시:
 
 ```bash
-ROOT="$(pwd)/samples/input-cases"
-CASE_PATH="$ROOT/files/flat/csv/customers.csv"
+SAMPLE_ROOT="$(pwd)/samples/input-cases"
+SAMPLE_URI="hdfs:///tmp/privyspark-input-cases"
 
+# YARN driver/executor가 읽을 공유 위치에 입력 케이스를 한 번 업로드
+hdfs dfs -mkdir -p "$SAMPLE_URI"
+hdfs dfs -put "$SAMPLE_ROOT/files" "$SAMPLE_URI/"
+
+PRIVYSPARK_SPARK_FILES="$SAMPLE_ROOT/sample-rules.yaml#sample-rules.yaml" \
 bin/privyspark-submit \
   scan \
-  --path "$CASE_PATH" \
-  --output /abs/output \
-  --ruleset "$ROOT/sample-rules.yaml" \
+  --path "$SAMPLE_URI/files/flat/csv/customers.csv" \
+  --output hdfs:///tmp/privyspark-sample-output \
+  --ruleset sample-rules.yaml \
   --sample-ratio 1.0
 ```
 

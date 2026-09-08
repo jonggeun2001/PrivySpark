@@ -1,13 +1,15 @@
 # Rulesets and Detection
 
 ## Detection Model
-- PrivySpark uses ruleset regexes directly for both aggregation and sample extraction.
+
+- PrivySpark uses ruleset regexes directly for both aggregation and sample extraction. It does not run additional type-specific strict validators or checksum checks, and a `validator` field is rejected during loading.
 - Results are aggregated at column level or file level.
 - Invalid regexes fail immediately during ruleset loading.
 
 Rulesets are validated before scanning so long-running jobs do not fail late because of a malformed regex. In practice, a start-up failure is safer and easier to operate than a delayed runtime failure.
 
 ## Default Ruleset
+
 - Default file: `config/rules/default.yaml`
 - Built-in default PII types:
   - phone number
@@ -22,13 +24,15 @@ Rulesets are validated before scanning so long-running jobs do not fail late bec
   - IP address
 
 ## Custom Ruleset Contract
-- Each rule must include `pii_type` and `regex`.
-- `column_hints` is optional and limits the rule to matching column names.
+
+- The top-level `rules` list must contain at least one rule; every rule requires non-empty `pii_type` and `regex` values.
+- `column_hints` is optional. Column names and hints are trimmed and lowercased; a rule applies when at least one hint is a substring of the normalized column name.
 - `match_type` is optional and defaults to `value`.
 - Top-level `suppressions` is optional and removes specific `(column, pii_type)` result pairs. Each entry may use one `column` or multiple `columns`.
 - Supported `match_type` values are `value` and `full_column`.
 
 ## Suppressing False Positives
+
 When one column repeatedly produces noise for only one PII type, you can keep the rule enabled and suppress just that result pair. Suppression matches on case-insensitive exact column name plus exact `pii_type`.
 
 ### Ruleset YAML
@@ -48,6 +52,7 @@ suppressions:
 `column` also accepts a YAML array, but `columns` is preferred when one suppression entry expands to multiple columns.
 
 ### CLI Overrides
+
 - `--suppress <column:pii_type>` is repeatable.
 - `--suppression-file <path>` reads UTF-8 lines in `column:pii_type` format and ignores blank lines plus `#` comments.
 - CLI/file parsing uses the last `:` as the delimiter, so column names may themselves contain `:`.
@@ -57,6 +62,7 @@ suppressions:
 Example:
 
 ```bash
+PRIVYSPARK_SPARK_FILES=/abs/path/scan.suppressions#scan.suppressions,config/rules/default.yaml#default-rules.yaml \
 bin/privyspark-submit \
   scan \
   --path /abs/input \
@@ -67,6 +73,7 @@ bin/privyspark-submit \
 ```
 
 ### Matching Semantics
+
 - Column names are trimmed, lowercased, and matched by exact equality.
 - `pii_type` is trimmed and matched by exact equality.
 - Ruleset YAML `column`/`columns` arrays are expanded into one `(column, pii_type)` suppression per column.
@@ -74,24 +81,28 @@ bin/privyspark-submit \
 - Other `pii_type` matches on the same column still remain visible.
 
 ### Scope and Non-goals
+
 - Suppressions that reference an undefined `pii_type` only emit a warning so the same suppression file can be reused across rulesets.
 - Suppressions do not support value-based exceptions or glob/regex column matching.
 - After changing suppressions, rerun the scan instead of reusing old outputs.
 
 ## Unsupported Rule Shapes
+
 - `pii_type: name`
 - `validator` field
 - `__KOREAN_NAME_RULE_REGEX__` placeholders
 
 ## `match_type`
-- `value`: counts values that match the regex.
+
+- `value`: counts non-empty values with a regex substring match. Multiple matches in one cell still count as one matching row/column value.
 - `full_column`: evaluates each non-empty value as a full regex match.
 - The internal `text` fallback format also treats each line as a single value and applies `full_column` as a full-line match.
 
 `full_column` exists because exact-value formats such as resident registration numbers behave very differently from substring detection inside free-form text. Mixing both behaviors under one mode would increase false positives.
 
 ## Type-Specific Constraints
-- `phone_number`: supports domestic `010`/`011`/`016`/`017`/`018`/`019` patterns and `+82 10...`-style international forms.
+
+- `phone_number`: supports domestic `010`/`011`/`016`/`017`/`018`/`019` patterns and `+82-10-...` or compact `+8210...` international forms. The default regex does not accept spaces inside a number.
 - `email`: adds token boundaries and requires a final alphabetic TLD of at least two characters to reduce suffix-style and malformed-domain false positives.
 - `resident_registration_number`: supports hyphenated and compact forms, including a 1-digit gender/century short form.
 - `resident_registration_number`: the default ruleset only constrains month `01`-`12` and day `01`-`31`, and rejects matches inside longer numeric tokens.
@@ -106,7 +117,8 @@ bin/privyspark-submit \
 The default-ruleset tightening strategy is intentionally asymmetric. Korean identifiers with a stable public format are constrained more aggressively, while high-variation types are tightened mainly at token boundaries. The goal is to reduce false positives without turning normal field variations into widespread false negatives.
 
 ## Aggregation Strategy
-- The primary path uses batched aggregation with `agg`.
+
+- The primary path uses batched aggregation with `agg`, with up to `400` expressions per batch by default.
 - When expression count exceeds the threshold (`50,000`), PrivySpark falls back to smaller aggregation batches.
 - If aggregation still fails, it switches to a safe legacy fallback.
 - File-level aggregation uses an internal dynamic file-identifier column to avoid collisions with user columns.

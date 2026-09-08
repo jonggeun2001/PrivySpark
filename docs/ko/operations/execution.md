@@ -1,13 +1,31 @@
 # 실행과 운영
 
 ## 실행 모델
-- 공개 명령은 `privyspark scan`, `privyspark review apply`, `privyspark review collect`입니다.
+
+- 공개 명령은 `bin/privyspark-submit scan`, `bin/privyspark-submit review apply`, `bin/privyspark-submit review collect`입니다.
 - 입력/출력 경로는 절대경로 또는 URI만 허용합니다.
 - 입력 파일명에 공백과 Spark glob 특수문자(`*`, `?`, `[`, `]`, `{`, `}`)가 포함되어도 실제 파일명으로 처리합니다. glob 문법은 `--ignore`, `--ignore-file` 패턴에만 적용됩니다.
 - Spark on YARN cluster 실행을 기본 전제로 합니다.
 - 빌드 산출물은 Shadow fat JAR(`*-all.jar`)입니다.
 
+## 제출 스크립트와 설정 파일
+
+`bin/privyspark-submit`은 저장소 루트에서 실행하는 Bash 스크립트로, `spark-submit --master yarn --deploy-mode cluster`를 호출합니다. 앱 옵션은 JAR 뒤에 전달하므로 Spark 자체의 `--conf`, `--files` 등을 앱 옵션 뒤에 붙이지 않습니다. 스크립트에서 제공하지 않는 Spark 옵션이 필요하면 [빠른 시작의 직접 spark-submit 예제](../getting-started/quick-start.md#커스텀-ruleset-배포)를 사용합니다.
+
+| 환경 변수 | 동작과 기본값 |
+| --- | --- |
+| `PRIVYSPARK_APP_JAR` | 제출할 fat JAR. 미지정 시 `build/libs/privyspark-*-all.jar` 중 첫 파일 |
+| `PRIVYSPARK_SPARK_FILES` | Spark `--files`로 배포할 쉼표 구분 파일/alias 목록. 기본 `config/rules/default.yaml#default-rules.yaml`; 지정하면 기본 목록을 대체 |
+| `PRIVYSPARK_JARS` | Spark `--jars`에 전달할 추가 JAR 목록. 기본 비어 있음 |
+| `PRIVYSPARK_PACKAGES` | Spark `--packages`에 전달할 Maven 좌표. 기본 비어 있어 오프라인 제출에 package resolution 불필요 |
+| `PRIVYSPARK_DEBUG` | 설정하면 `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG`로 driver에 전달 |
+
+`--ruleset default`는 driver에서 존재하는 첫 파일을 `PRIVYSPARK_DEFAULT_RULESET` → `default-rules.yaml` → `config/rules/default.yaml` 순서로 선택합니다. 사용자 ruleset은 driver 로컬 파일로 읽으므로 `--files`로 배포하고 상대 alias를 넘깁니다. `--ignore-file`과 `--suppression-file`은 배포된 로컬 파일 및 Hadoop URI를 지원합니다. `--allowlist`, `--review-state-root`, `--review-html-dir`, `--hive-metastore-password-file`은 입력/출력과 마찬가지로 절대경로 또는 URI여야 합니다.
+
+`PRIVYSPARK_DEFAULT_RULESET`과 timestamp 환경 변수는 driver에서 읽습니다. YARN cluster에 전달하려면 직접 `spark-submit --conf spark.yarn.appMasterEnv.<변수명>=<값>`으로 지정합니다. 스크립트가 자동 전달하는 환경 변수는 `PRIVYSPARK_DEBUG`입니다.
+
 ## `scan` CLI 인자
+
 - `--path <ABS_PATH_OR_URI>`: 입력 경로
 - `--output <ABS_PATH_OR_URI>`: 출력 경로
 - `--output-format <parquet|csv|excel>`: 반복 지정 가능한 최종 출력 포맷, 기본 `parquet`
@@ -22,8 +40,8 @@
 - `--excel-byte-array-max-override <INT>`: Apache POI byte array allocation 상한 override, 기본 `300000000`, `> 0`
 - `--ignore <PATTERN>`: 반복 지정 가능한 gitignore 스타일 glob ignore 패턴
 - `--ignore-file <PATH>`: 줄 단위 ignore 패턴 파일 경로, `#` 주석과 빈 줄 무시
-- `--allowlist <ABS_PATH_OR_URI>`: false positive suppression allowlist JSONL 경로
-- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. 스캔 시작 전 `<review-state-root>/inbox/*.json`을 자동 수집해 `<review-state-root>/current`를 갱신한 뒤, `<review-state-root>/current/allowlist.jsonl`을 적용하고 기본 `<output>/review/review.html`을 생성. review HTML은 파일별 최대 2MB이며, 초과 시 `review.html` 인덱스와 `review-part-0001.html` 형식의 part 파일로 분할
+- `--allowlist <ABS_PATH_OR_URI>`: recurring false positive suppression allowlist JSONL 경로. `--review-state-root`를 함께 지정하면 해당 state의 allowlist와 합쳐 적용하며, legacy exact entry는 suppress하지 않음
+- `--review-state-root <ABS_PATH_OR_URI>`: 누적 오프라인 리뷰 state root. 스캔 시작 전 `<review-state-root>/inbox/*.json`을 자동 수집해 `<review-state-root>/current`를 갱신한 뒤, `<review-state-root>/current/allowlist.jsonl`을 적용하고 기본 `<output>/review/review.html`을 생성. review HTML은 파일별 최대 2MiB이며, 초과 시 `review.html` 인덱스와 `review-part-0001.html` 형식의 part 파일로 분할
 - `--review-html-dir <ABS_PATH_OR_URI>`: 오프라인 리뷰 HTML 출력 디렉토리. 미지정 시 `<output>/review`, 기본 진입 파일명은 `review.html` 고정
 - `--review-sample-mode <raw|masked|none>`: `review.html` 검출 샘플 표시 방식, 기본 `masked`
 - `--suppress <column:pii_type>`: 반복 지정 가능한 오탐 제외 규칙
@@ -33,7 +51,12 @@
 - `--hive-metastore-password-file <ABS_PATH_OR_URI>`: password 첫 줄을 읽을 파일. `hdfs://`, `s3a://`, `file://`, 절대경로를 지원
 - `--hive-metastore-jdbc-driver-class <CLASS>`: Hive Metastore JDBC driver class. CLI 값을 생략하면 `spark.privyspark.hiveMetastore.jdbcDriverClass` Spark conf를 사용하고, 이 conf도 없으면 기본값 `org.mariadb.jdbc.Driver`를 적용
 
+`--output-format`을 지정하면 지정한 포맷만 생성합니다. 예를 들어 `--output-format csv`는 CSV만, `--output-format parquet --output-format csv`는 두 형식을 생성합니다.
+
+`--review-html-dir`과 `--review-sample-mode`는 `--review-state-root`로 HTML 생성을 켠 경우에 사용합니다. `--review-html-dir`에는 디렉토리를 지정해야 하며 `.html`, `.htm`, `.xlsm`, `.xlsx` 파일 경로는 거부합니다.
+
 ## `review apply` CLI 인자
+
 - `--scan-results <ABS_PATH_OR_URI>`: 담당자가 편집한 `scan_results` 입력 경로. `csv`, `parquet`, `xlsx(scan_results sheet)`를 지원합니다.
 - `--input-root <ABS_PATH_OR_URI>`: 원본 스캔 대상 루트 경로
 - `--allowlist <ABS_PATH_OR_URI>`: 생성 또는 갱신할 allowlist JSONL 경로
@@ -41,13 +64,18 @@
 - `--dry-run`: 실제 파일 기록 없이 반영 예정 엔트리 수만 계산
 
 ## `review collect` CLI 인자
-- `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
 
-`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 담당자는 `review.html`에서 직접 JSON을 생성하거나, HTML이 2MB 단위로 분할된 경우 각 `review-part-*.html`에서 JSON을 각각 생성합니다. Hive 매핑이 있는 리뷰 행은 같은 `hive_table_fqn`, 컬럼, 개인정보 유형이면 파티션/파일별 행을 하나로 묶고, 응답도 그 테이블 단위 finding에 대해 1개만 생성합니다. Excel 편집이 필요하면 CSV를 내려받아 편집한 뒤 암호화 해제한 CSV를 다시 불러오거나 Excel에서 전체 복사한 TSV 클립보드 내용을 붙여넣은 다음 JSON을 생성합니다. CSV 업로드는 따옴표로 감싼 쉼표와 줄바꿈을 셀 내용으로 유지하고, TSV 붙여넣기는 탭과 줄바꿈을 기준으로 반영합니다. Excel이 줄바꿈 포함 셀을 큰따옴표로 감싼 경우 줄바꿈은 셀 내용으로 유지됩니다. `--scan-results`는 더 이상 필요하지 않습니다. 같은 `--review-state-root`를 지정한 다음 스캔은 본 스캔 전에 이 collect를 자동 실행합니다. invalid response가 하나라도 있으면 current를 갱신하지 않고 명령을 실패 처리하며, `<review-state-root>/.collect.lock`이 이미 있으면 동시 갱신을 막기 위해 실패합니다. collect가 끝나면 lock 파일은 삭제됩니다.
+- `--review-state-root <ABS_PATH_OR_URI>`: response JSON을 읽고 누적 state를 갱신할 root 경로
+- `--scan-results <ABS_PATH_OR_URI>`: deprecated 호환 옵션. 생략 가능하며 수집 판단에는 사용하지 않지만, 지정하면 절대경로/URI 검증은 수행
+
+`review collect`는 `<review-state-root>/inbox/*.json`만 읽어 `<review-state-root>/current` 아래의 `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, `response_ledger.jsonl`을 갱신합니다. 담당자는 `review.html`에서 직접 JSON을 생성하거나, HTML이 2MiB 단위로 분할된 경우 각 `review-part-*.html`에서 JSON을 각각 생성합니다. Hive 매핑이 있는 리뷰 행은 같은 `hive_table_fqn`, 컬럼, 개인정보 유형이면 파티션/파일별 행을 하나로 묶고, 응답도 그 테이블 단위 finding에 대해 1개만 생성합니다. Excel 편집이 필요하면 CSV를 내려받아 편집한 뒤 암호화 해제한 CSV를 다시 불러오거나 Excel에서 전체 복사한 TSV 클립보드 내용을 붙여넣은 다음 JSON을 생성합니다. CSV 업로드는 따옴표로 감싼 쉼표와 줄바꿈을 셀 내용으로 유지하고, TSV 붙여넣기는 탭과 줄바꿈을 기준으로 반영합니다. Excel이 줄바꿈 포함 셀을 큰따옴표로 감싼 경우 줄바꿈은 셀 내용으로 유지됩니다. `--scan-results`는 더 이상 필요하지 않습니다. 같은 `--review-state-root`를 지정한 다음 스캔은 본 스캔 전에 이 collect를 자동 실행합니다. invalid response가 하나라도 있으면 current를 갱신하지 않고 명령을 실패 처리하며, `<review-state-root>/.collect.lock`이 이미 있으면 동시 갱신을 막기 위해 실패합니다. collect가 끝나면 lock 파일은 삭제됩니다.
 
 오프라인 리뷰 identity와 allowlist 매칭에서는 HDFS URI path의 중복 slash를 정규화합니다. 예를 들어 `hdfs:///user/name`과 `hdfs:////user/name`은 같은 스캔 경로로 취급됩니다.
 
+inbox 재수집, 감사 원문 보관, lock 복구와 파일별 state 교체의 한계는 [오프라인 리뷰 collector](../reference/offline-review-collector.md)에 정리합니다.
+
 ## Ignore 패턴
+
 - `/`가 없는 패턴은 basename 기준으로 매칭합니다. 예: `_SUCCESS`, `*.crc`
 - `/`가 있는 패턴은 입력 루트 기준 상대 경로로 매칭합니다. 예: `backup/**`, `logs/2025/*.gz`
 - 선행 `/`는 입력 루트 anchor로 해석합니다. 예: `/backup/**`, `/logs/`
@@ -61,16 +89,18 @@ ignore 필터를 pre-scan 전에 적용하는 이유는 `_SUCCESS`, `.crc`, 로�
 allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 자체를 제외하고, allowlist는 탐지 이후 Hive 매핑이 있으면 `(scan_path, hive_table_fqn, column_name, pii_type)`, Hive 매핑이 없으면 `(scan_path, file_identifier_pattern, column_name, pii_type)` 단위 recurring false positive만 suppress합니다. 신규 recurring 응답의 `column_name`, `pii_type`은 exact 값만 허용하며 `*` wildcard는 거부합니다.
 
 ## Suppression
+
 - suppression은 특정 `(column, pii_type)` 결과만 제외합니다. 컬럼명은 대소문자를 무시하고 exact match 합니다.
 - `--suppress`는 `column:pii_type` 형식만 허용합니다.
 - `--suppression-file`은 Hadoop `FileSystem`으로 읽습니다. YARN cluster에서 client 로컬 파일을 쓰려면 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 먼저 배포한 뒤 alias 경로를 `--suppression-file`에 넘겨야 합니다.
 - CLI suppression은 ruleset YAML의 `suppressions:`와 union으로 합쳐집니다.
 
 ## Hive table lookup
+
 - Hive table lookup은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 셋 중 1~2개만 지정하면 CLI 오류로 종료하고, 모두 생략하면 `hive_lookup_inactive` 로그 후 `hive_table_fqn`은 모두 `""`입니다.
 - 활성화되면 실행 초기에 driver가 설정된 JDBC driver class로 Hive Metastore `DBS`/`TBLS`/`SDS`를 1회 조회하고 table-level `LOCATION` prefix 인덱스를 broadcast 합니다. 결과 row의 물리 입력 경로가 해당 prefix 하위이면 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다. 최종 `scan_results`는 같은 `hive_table_fqn`, 컬럼, 개인정보 유형의 파티션/파일 row를 테이블 단위로 묶고, `non_empty_value_count`까지 합산해 비율을 재계산합니다.
 - 입력 `--path`가 table-level `LOCATION`과 정확히 같고 discovery 중 `--ignore` 매치가 없으면 해당 테이블은 pre-scan schema/file batch reader 대신 `spark.table("db.table")`로 읽고, raw progress와 최종 parquet/csv/excel 결과 모두 테이블 루트 식별자 기준 finding을 생성합니다. 파티션 하위 경로를 직접 입력했거나 ignore 매치가 있으면 기존 물리 파일 스캔 경로를 사용합니다. 이 경로는 Spark Catalog에서도 같은 `db.table`을 resolve할 수 있어야 하며, resolve 실패는 해당 테이블 scan error로 기록됩니다.
-- password 파일은 Hadoop `FileSystem`으로 읽습니다. `hdfs://` 같은 공유 URI를 쓰면 YARN cluster에서 별도 `--files` 배포가 필요 없습니다. client 로컬 파일을 쓰려면 다른 로컬 설정 파일과 마찬가지로 `--files` 또는 `PRIVYSPARK_SPARK_FILES`로 배포한 alias를 지정해야 합니다.
+- password 파일은 Hadoop `FileSystem`으로 읽습니다. `hdfs://` 같은 공유 URI를 쓰면 YARN cluster에서 별도 `--files` 배포가 필요 없습니다. `--hive-metastore-password-file`에는 단순 상대 alias를 지정할 수 없습니다. client 로컬 경로는 cluster driver에서 자동으로 공유되지 않으므로 공유 HDFS/object-store URI 또는 driver가 실제로 읽을 수 있는 절대경로/`file:///` URI를 사용합니다.
 - JDBC driver JAR는 Shadow JAR에 포함하지 않습니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이고, 다른 driver를 쓰면 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass` Spark conf로 class name을 지정합니다. CLI 값이 Spark conf보다 우선합니다. Hive table lookup을 쓰려면 cluster 공통 classpath에 driver를 설치하거나, 제출 시 `PRIVYSPARK_JARS=/path/to/driver.jar`처럼 driver JAR를 Spark `--jars`로 함께 전달합니다. Maven package resolution을 허용하는 환경에서는 `PRIVYSPARK_PACKAGES=org.mariadb.jdbc:mariadb-java-client:3.4.1`도 사용할 수 있습니다.
 - MariaDB/MySQL 계열 driver 또는 JDBC URL에서는 URL에 timeout이 없으면 기본 `connectTimeout=5000`, `socketTimeout=30000`을 적용합니다. 그 외 driver는 driver별 timeout parameter를 JDBC URL에 직접 지정합니다.
 - JDBC 접속, password 파일 읽기, metastore query가 실패하면 `hive_lookup_disabled` warning을 남기고 빈 매핑으로 계속 진행합니다. 정상 인덱스 준비 시 `hive_lookup_ready size=<N>` info 로그가 남습니다.
@@ -78,6 +108,7 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - partition별 `LOCATION` override는 현재 지원하지 않습니다. table-level `LOCATION`만 사용합니다.
 
 ## 병렬도
+
 - CLI 값을 주면 해당 값이 앱 로직에 직접 전달됩니다.
 - CLI 값을 생략하면 `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism` 또는 앱 기본값(`32`, `16`, `8`)을 사용합니다.
 - pre-scan 병렬도는 디렉터리 discovery, 파일 단위 입력 확장, 포맷 판별, 그룹별 schema split 경로에 적용됩니다.
@@ -89,11 +120,13 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 여기서 중요한 점은 앱 레벨 병렬도가 곧 executor 수를 직접 보장하는 것은 아니라는 점입니다. 실제 executor 분산은 입력 파티션 수, Spark scheduler, dynamic allocation backlog에 함께 영향을 받습니다.
 
 ## Retry와 HDFS refresh
+
 - 파일 read retry는 최대 3회 시도하며, 200ms 기준 exponential backoff와 jitter를 적용해 여러 driver thread가 동시에 재시도하는 상황을 줄입니다.
 - retry 전에 Spark catalog refresh를 수행할 때 기본적으로 원본 file path만 refresh합니다. parent directory refresh는 NameNode `listStatus` 부하를 크게 키울 수 있으므로 기본 off입니다.
 - 기존 동작이 필요한 환경에서는 `spark.privyspark.retry.refreshParent=true`로 parent directory refresh를 다시 켤 수 있습니다.
 
 ## Excel reader 설정
+
 - `xlsx` pre-scan은 드라이버에서 workbook metadata와 header row XML만 경량 파싱해 visible sheet 목록과 schema signature를 만들고, sheet body row/cell 내용은 Spark executor task의 StAX 스트리머에서 처리합니다.
 - `--excel-max-rows-in-memory`는 이전 spark-excel scan reader와의 CLI 호환을 위해 유지합니다. 값을 지정하면 `excel_max_rows_in_memory_unused` warning 로그를 남기고 scan 동작에는 사용하지 않습니다.
 - `spark.privyspark.excel.maxRowsInMemory` Spark conf도 현재 executor-side `xlsx` scan에는 영향을 주지 않습니다.
@@ -104,7 +137,8 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 - Shadow fat JAR는 `commons-compress`를 앱 내부 패키지로 relocate합니다. 이 설정은 Spark/Hadoop 런타임의 구버전 `commons-compress`가 먼저 잡히는 환경에서도 POI 기반 Excel report write 경로가 자체 포함된 호환 버전을 사용하게 합니다.
 
 ## 샘플링
-- `--sample-ratio`는 비결정적 row sampling입니다.
+
+- `--sample-ratio`는 모든 컬럼을 문자열로 변환한 행 값의 `xxhash64` 버킷을 이용하는 결정적 row sampling입니다. 같은 값과 컬럼 순서에서는 같은 행이 선택되며, 동일 값의 중복 행은 함께 선택되거나 제외됩니다. 비율은 목표 비율이며 정확한 행 수를 보장하지 않습니다.
 - `sampleRatio >= 1.0`이면 row sampling 없이 전체 행을 사용합니다.
 - `--file-sample-ratio`는 batch scan 경로와 file fallback scan 경로에서 그룹 내부 파일을 안정적인 해시 순위 subset으로 선택합니다.
 - file sampling은 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용합니다. 임계값 이하 그룹은 전체 파일을 그대로 스캔합니다.
@@ -114,7 +148,24 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 
 안정적인 해시 순위 파일 샘플링은 같은 그룹/파일 집합에서 같은 subset을 유지하므로 데이터가 바뀌지 않았는데 review scope가 실행마다 흔들리는 문제를 막습니다. 다만 파일 크기 가중치는 쓰지 않습니다. 특정 데이터가 한 파일에 몰려 있을 가능성을 파일 단위로 보존해야 하며, 파일 크기 가중치 방식은 큰 파일을 더 자주 뽑아 concentration risk를 강화할 수 있습니다.
 
+Hive exact table-root 스캔은 `spark.table`에 row sampling을 적용하며, `--file-sample-ratio`와 `--file-sample-min-files`를 사용하지 않습니다. 물리 파일 batch/file 경로에 대한 파일 샘플링 설명과 구분합니다.
+
+## 드라이버 종료 코드
+
+아래 표는 `PrivySparkApp` 드라이버 프로세스의 종료 코드입니다.
+
+| 코드 | 의미 |
+| --- | --- |
+| `0` | 드라이버 정상 종료. 처리 가능한 파일/그룹 오류가 `scan_errors`에 남을 수 있으므로 오류 리포트도 확인 |
+| `2` | CLI 파싱 또는 절대경로/URI 검증 실패. SparkSession 생성 전 종료 |
+| `1` | 미복구 실행 오류, collector 검증/lock 실패 등 |
+
+탐지 finding이 존재한다는 이유만으로 실패 코드를 반환하지 않습니다. `--review-state-root` 자동 수집이 실패하면 스캔 본 작업을 시작하지 않습니다.
+
+`bin/privyspark-submit`은 YARN cluster 모드로 원격 드라이버를 실행하므로 제출 명령의 셸 종료 코드가 이 표와 같다고 가정하면 안 됩니다. Spark 제출 클라이언트는 YARN application의 실패 상태를 예외로 처리합니다. 인자 오류와 실행 오류를 구분할 때는 셸 코드 `2`만 확인하지 말고 YARN final status·diagnostics와 드라이버 로그의 `cli_argument_invalid`, `scan_failed` 이벤트를 확인합니다. [Spark YARN 제출 클라이언트 소스](https://github.com/apache/spark/blob/v3.5.3/resource-managers/yarn/src/main/scala/org/apache/spark/deploy/yarn/Client.scala#L1190-L1222)
+
 ## Driver 로그
+
 - `PRIVYSPARK_DEBUG`, `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG`, `-Dprivyspark.debug`로 driver 로그 레벨을 설정할 수 있습니다.
 - 지원값은 `error`, `warn`, `info`, `debug`, `off`입니다.
 - 기본값은 `warn`입니다.
@@ -133,11 +184,12 @@ pre-scan에서 만든 schema signature cache는 group scan의 sampled batch vali
 
 ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped reason=ignored` 같은 이벤트와 함께 `ignored_files` 집계가 `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, `scan_complete`에 포함됩니다.
 
-directory listing 이후 pre-scan probe 전에 파일이 삭제되면 해당 파일은 `scan_directory_file_skipped reason=not_found`로 기록하고 건너뜁니다. 이 건은 `scan_errors`가 아니라 `scan_directory_pre_scan_execute_complete`의 `skipped_files` 집계에 포함됩니다.
+pre-scan에서 파일 삭제를 확인해 건너뛴 경우 `scan_directory_file_skipped reason=not_found`로 기록합니다. 이 건은 `scan_errors`가 아니라 `scan_directory_pre_scan_execute_complete`의 `skipped_files` 집계에 포함됩니다. 확장자로 포맷을 판별하는 파일은 discovery 메타데이터를 재사용해 pre-scan을 통과할 수 있으므로, 이후 스키마 검사나 읽기 단계에서 삭제가 확인되면 오류 행이 남을 수 있습니다.
 
 ## `_progress` 경로 운영
+
 - 진행 중 shard는 `<output>/_progress/<run_id>/results`, `errors`, `meta/completions` 아래 JSONL로 기록됩니다.
-- file fallback scan의 기본 progress flush 단위는 group입니다. 이 모드에서는 group이 끝나기 전까지 file별 완료 row가 `_progress`에 나타나지 않을 수 있으며, driver가 실패하면 해당 group은 다음 실행에서 group 단위로 재실행됩니다.
+- file fallback scan의 기본 progress flush 단위는 group입니다. 이 모드에서는 group이 끝나기 전까지 file별 완료 row가 `_progress`에 나타나지 않을 수 있으며, driver가 실패하면 아직 flush하지 않은 해당 group의 진행 결과는 유실될 수 있습니다. 다음 실행은 stale progress를 정리하고 새 스캔을 수행하며, 이전 완료 group만 건너뛰는 checkpoint resume 기능은 없습니다.
 - 실행 중인 group, allowlist snapshot 작업은 `<output>/_progress/<run_id>/in-flight` 아래 임시 JSON marker를 생성합니다. file 단위 marker는 small-file scan에서 HDFS create/delete 부하를 줄이기 위해 기본 off이며, 이전 수준의 file-level 관측이 필요하면 `spark.privyspark.progress.fileMarker.enabled=true`로 켤 수 있습니다.
 - 각 in-flight marker에는 `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`와 가능한 경우 `format`, `schemaSignature` 같은 스캔 메타데이터가 들어갑니다.
 - in-flight marker 파일명은 파일명에 안전한 UTF-8 문자/숫자와 `.`, `_`, `-`를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다. 원본 `identifier`는 JSON 본문에 유지됩니다.
@@ -151,6 +203,7 @@ directory listing 이후 pre-scan probe 전에 파일이 삭제되면 해당 파
 이 구조를 택한 이유는 긴 스캔의 중간 결과를 바로 확인하게 하면서도, 최종 리포트 소비자가 부분 결과를 완성본으로 오해하지 않게 하기 위해서입니다.
 
 ## 릴리즈
+
 - GitHub Release는 `v*` 또는 bare semver 태그 푸시로 트리거됩니다.
 - Release workflow는 `./gradlew clean shadowJar packageSampleDatasets`를 실행합니다.
 - 릴리즈 자산은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html`입니다.
