@@ -134,6 +134,39 @@ class ReportWriterSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     }
   }
 
+  test("empty reports retain readable result and error schemas in every output format") {
+    val outputDir = Files.createTempDirectory("privyspark-report-empty-")
+    try {
+      ReportWriter.writeReports(spark, outputDir.toString, Seq.empty[ScanResult], Seq.empty[ScanError], Seq("parquet", "csv", "excel"))
+      val (expectedResults, expectedErrors) = reportDataFrames(Seq.empty, Seq.empty)
+      Seq("scan_results" -> expectedResults, "scan_errors" -> expectedErrors).foreach { case (name, expected) =>
+        val parquet = spark.read.parquet(s"$outputDir/parquet/$name")
+        val csv = spark.read.option("header", "true").csv(s"$outputDir/csv/$name")
+        assert(parquet.count() == 0L)
+        assert(parquet.schema.fields.map(field => field.name -> field.dataType).toSeq ==
+          expected.schema.fields.map(field => field.name -> field.dataType).toSeq)
+        assert(csv.count() == 0L)
+        assert(csv.columns.toSeq == expected.columns.toSeq)
+        assert(readWorkbookRows(outputDir.resolve(s"excel/$name.xlsx"), name) == Seq(expected.columns.toSeq))
+      }
+      assert(!Files.exists(outputDir.resolve("_report_staging")))
+    } finally deleteRecursively(outputDir)
+  }
+
+  test("invalid output formats fail before replacing existing report files") {
+    val outputDir = Files.createTempDirectory("privyspark-report-invalid-")
+    try {
+      val previous = outputDir.resolve("parquet/scan_results/sentinel")
+      Files.createDirectories(previous.getParent)
+      writeText(previous, "preserve")
+      intercept[IllegalArgumentException] {
+        ReportWriter.writeReports(spark, outputDir.toString, Seq.empty[ScanResult], Seq.empty[ScanError], Seq("parquet", "invalid"))
+      }
+      assert(new String(Files.readAllBytes(previous), java.nio.charset.StandardCharsets.UTF_8) == "preserve")
+      assert(!Files.exists(outputDir.resolve("_report_staging")))
+    } finally deleteRecursively(outputDir)
+  }
+
   private def reportDataFrames(results: Seq[ScanResult], errors: Seq[ScanError]): (DataFrame, DataFrame) = {
     import spark.implicits._
     (spark.createDataset(results).toDF(), spark.createDataset(errors).toDF())

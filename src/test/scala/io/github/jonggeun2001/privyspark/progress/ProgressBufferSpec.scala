@@ -41,10 +41,7 @@ class ProgressBufferSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(countFilesWithExtension(outputDir.resolve("run-1/results"), ".jsonl") == 1L)
       assert(countFilesWithExtension(outputDir.resolve("run-1/errors"), ".jsonl") == 1L)
       assert(countFilesWithExtension(outputDir.resolve("run-1/meta/completions"), ".jsonl") == 1L)
-      val completionJson = Files.walk(outputDir.resolve("run-1/meta/completions")).iterator().asScala
-        .find(path => path.toString.endsWith(".jsonl"))
-        .map(path => new String(Files.readAllBytes(path), java.nio.charset.StandardCharsets.UTF_8))
-        .getOrElse("")
+      val completionJson = jsonLines(outputDir.resolve("run-1/meta/completions")).mkString
       assert(completionJson.contains("\"scope\":\"group\""))
       assert(completionJson.contains("\"identifier\":\"/input/group-a\""))
       assert(completionJson.contains("\"result_count\":1"))
@@ -52,6 +49,67 @@ class ProgressBufferSpec extends AnyFunSuite with PrivySparkSpecFixtures {
     } finally {
       deleteRecursively(outputDir)
     }
+  }
+
+  test("empty flush writes one zero-count completion and repeated flushes are idempotent") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-empty-")
+    try {
+      val run = progressRunFor(outputDir.toString)
+      val buffer = new ProgressBuffer(new Configuration(), run, "file", "empty.csv")
+      buffer.enqueue(Seq.empty, Seq.empty)
+      buffer.flush()
+      buffer.flush()
+      val completions = jsonLines(outputDir.resolve("run-1/meta/completions"))
+      assert(completions.size == 1)
+      assert(completions.head.contains("\"result_count\":0"))
+      assert(completions.head.contains("\"error_count\":0"))
+      assert(jsonLines(outputDir.resolve("run-1/results")).isEmpty)
+      assert(jsonLines(outputDir.resolve("run-1/errors")).isEmpty)
+    } finally deleteRecursively(outputDir)
+  }
+
+  test("multiple batches and repeated flushes preserve each record exactly once") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-batches-")
+    try {
+      val buffer = new ProgressBuffer(new Configuration(), progressRunFor(outputDir.toString), "group", "/input")
+      buffer.enqueue(Seq(scanResult("first.csv"), scanResult("second.csv")), Seq.empty)
+      buffer.enqueue(Seq(scanResult("third.csv")), Seq(ScanError("/input", "timestamp", "broken.csv", "failure")))
+      buffer.flush()
+      buffer.flush()
+      val results = jsonLines(outputDir.resolve("run-1/results"))
+      assert(results.size == 3)
+      Seq("first.csv", "second.csv", "third.csv").foreach { name =>
+        assert(results.count(_.contains(s""""file_identifier":"$name"""")) == 1)
+      }
+      assert(jsonLines(outputDir.resolve("run-1/errors")).size == 1)
+      val completions = jsonLines(outputDir.resolve("run-1/meta/completions"))
+      assert(completions.size == 1)
+      assert(completions.head.contains("\"result_count\":3"))
+      assert(completions.head.contains("\"error_count\":1"))
+    } finally deleteRecursively(outputDir)
+  }
+
+  test("a blocked results directory propagates the write failure without recording completion") {
+    val outputDir = Files.createTempDirectory("privyspark-progress-write-failure-")
+    try {
+      val run = progressRunFor(outputDir.toString)
+      val blocked = outputDir.resolve("run-1/results")
+      Files.createDirectories(blocked.getParent)
+      writeText(blocked, "existing file")
+      val buffer = new ProgressBuffer(new Configuration(), run, "group", "/input")
+      buffer.enqueue(Seq(scanResult("first.csv")), Seq.empty)
+      intercept[java.io.IOException](buffer.flush())
+      assert(new String(Files.readAllBytes(blocked), java.nio.charset.StandardCharsets.UTF_8) == "existing file")
+      assert(jsonLines(outputDir.resolve("run-1/meta/completions")).isEmpty)
+    } finally deleteRecursively(outputDir)
+  }
+
+  private def jsonLines(directory: java.nio.file.Path): Vector[String] = {
+    if (!Files.exists(directory)) return Vector.empty
+    val paths = Files.walk(directory)
+    try paths.iterator().asScala.filter(_.toString.endsWith(".jsonl"))
+      .flatMap(path => Files.readAllLines(path, java.nio.charset.StandardCharsets.UTF_8).asScala).toVector
+    finally paths.close()
   }
 
   private def progressRunFor(outputRoot: String): ProgressRun =

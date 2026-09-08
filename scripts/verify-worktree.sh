@@ -6,10 +6,11 @@ set -euo pipefail
 # Update it if test verification needs repository-specific behavior.
 # ecosystem: gradle
 # source: gradle-wrapper
-# command: ./gradlew test
+# commands: ./gradlew test; node --test src/test/js/*.test.cjs
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 ./gradlew test
+node --test src/test/js/*.test.cjs
