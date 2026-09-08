@@ -3,17 +3,19 @@
 PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서 잠재적 개인정보를 탐지하고 집계된 결과 리포트와 오류 리포트를 생성합니다.
 
 ## 지원 범위
-- 공개 명령은 `privyspark scan`, `privyspark review apply`, `privyspark review collect`입니다.
+
+- 공개 명령은 `bin/privyspark-submit scan`, `bin/privyspark-submit review apply`, `bin/privyspark-submit review collect`입니다.
 - 입력 경로는 절대경로 또는 URI만 허용합니다.
 - 지원 포맷은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`와 archive 계열 `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`입니다.
 - `gzip`, `bzip2`로 감싼 direct text-style data file(`csv`, `json/jsonl/ndjson`)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
 - CSV 계열 입력은 구분자와 헤더 유무를 자동 감지합니다. 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 검사하고, UTF-8 CSV처럼 보이면 내부 `csv` 포맷으로 승격하며, 그 외 UTF-8 또는 EUC-KR 텍스트처럼 보이면 내부 `text` 포맷으로 정규화해 스캔합니다.
-- 바이너리처럼 보이는 미지원 입력만 `Unsupported file format` 오류로 기록합니다.
+- probe 대상에서 제외하는 비데이터 확장자와 magic-byte/CSV/text fallback으로 처리할 수 없는 입력은 `Unsupported file format` 오류로 기록합니다.
 - `--ignore`, `--ignore-file`은 파일명 또는 입력 루트 기준 상대 경로로 스캔 제외 대상을 정의합니다.
 - `suppressions:` 또는 `--suppress`, `--suppression-file`은 특정 `(column, pii_type)` 결과만 제외합니다.
-- `--review-state-root`를 지정하면 스캔 시작 전 `inbox/*.json`을 자동 수집해 누적 오프라인 리뷰 state를 갱신하고, state의 allowlist를 적용한 뒤 기본 `<output>/review/review.html`을 생성합니다. review HTML은 파일별 최대 2MB이며, 초과 시 `review.html` 인덱스와 `review-part-*.html` part 파일로 분할됩니다. `--review-html-dir`로 리뷰 파일 출력 디렉토리를 별도 지정할 수 있습니다. HDFS scan path의 중복 slash 표기는 오프라인 리뷰 identity와 allowlist 매칭에서 같은 경로로 정규화합니다.
+- `--review-state-root`를 지정하면 스캔 시작 전 `inbox/*.json`을 자동 수집해 누적 오프라인 리뷰 state를 갱신하고, state의 allowlist를 적용한 뒤 기본 `<output>/review/review.html`을 생성합니다. review HTML은 파일별 최대 2MiB이며, 초과 시 `review.html` 인덱스와 `review-part-*.html` part 파일로 분할됩니다. `--review-html-dir`로 리뷰 파일 출력 디렉토리를 별도 지정할 수 있습니다. HDFS scan path의 중복 slash 표기는 오프라인 리뷰 identity와 allowlist 매칭에서 같은 경로로 정규화합니다.
 
 ## 탐지 모델
+
 - 탐지는 ruleset 기반 regex 결과를 그대로 사용합니다.
 - suppression은 규칙을 끄지 않고 특정 컬럼-타입 조합만 오탐에서 제외합니다.
 - invalid regex는 ruleset 로드 단계에서 즉시 거부합니다.
@@ -21,23 +23,27 @@ PrivySpark는 Spark 기반 배치 스캐너로, 지정한 데이터 경로에서
 - `sample_raw_value`는 매치가 발생한 셀의 전체 원문이 아니라, 매치 조각 기준 앞뒤 최대 50자 문맥만 저장합니다.
 
 ## 샘플링과 스캔 단위
-- `--sample-ratio`는 row sampling입니다.
+
+- `--sample-ratio`는 행 전체 값의 해시를 이용한 결정적 row sampling입니다. 같은 값/컬럼 순서에서는 같은 행이 선택되며 정확한 행 수를 보장하지 않습니다.
 - `--file-sample-ratio`는 batch scan과 file fallback scan에서 그룹 내 파일을 안정적인 해시 순위 subset으로 선택합니다.
-- file sampling은 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용합니다.
+- file sampling은 그룹 파일 수가 `--file-sample-min-files`보다 클 때만 적용합니다. Hive exact table-root 스캔에는 적용하지 않고 row sampling만 사용합니다.
 - file sampling을 별도 옵션으로 분리한 이유는 row sampling 의미를 유지하면서도 작은 파일이 많은 입력에서 읽는 파일 수를 줄이고, 특정 데이터가 한 파일에 몰릴 수 있다는 운영 우려를 파일 단위로 반영하기 위해서입니다. file-sampled group의 review fingerprint는 실제 sampled file scope만 대상으로 합니다.
 
 ## 결과물
+
 - 결과 리포트: `scan_results`
 - 오류 리포트: `scan_errors`
-- 출력 형식: Parquet + CSV
-- 오프라인 리뷰를 켠 경우: 기본 `<output>/review/review.html`, 또는 `--review-html-dir`로 지정한 디렉토리의 `review.html`. 2MB를 넘는 리뷰는 같은 디렉토리에 `review-part-*.html`을 함께 생성
+- 출력 형식: Parquet, CSV, Excel 중 선택. 미지정 시 Parquet만 생성하고 `--output-format`을 반복 지정하면 선택한 형식을 함께 생성
+- 오프라인 리뷰를 켠 경우: 기본 `<output>/review/review.html`, 또는 `--review-html-dir`로 지정한 디렉토리의 `review.html`. 2MiB를 넘는 리뷰는 같은 디렉토리에 `review-part-*.html`을 함께 생성
 - 긴 스캔에서는 `<output>/_progress/<run_id>` 아래에 중간 JSONL shard가 기록될 수 있지만, 최종 소비 경로는 아닙니다.
 
 ## 샘플 데이터셋
+
 - 입력 처리 케이스 번들은 [../../../samples/input-cases/README.md](../../../samples/input-cases/README.md)에 있습니다.
 - 재생성 명령은 `./gradlew generateSampleDatasets`입니다.
 
 ## 다음 문서
+
 - 입력 포맷과 그룹화: [input-formats.md](input-formats.md)
 - ruleset과 탐지 제약: [rules-and-detection.md](rules-and-detection.md)
 - 결과/오류 리포트: [reports-and-errors.md](reports-and-errors.md)

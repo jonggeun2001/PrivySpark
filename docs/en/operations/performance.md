@@ -1,6 +1,7 @@
 # Performance Guide
 
 ## Runtime Characteristics
+
 PrivySpark performance usually breaks down into four stages:
 
 1. file discovery and pre-scan
@@ -11,12 +12,13 @@ PrivySpark performance usually breaks down into four stages:
 The actual bottleneck depends on input distribution. Small-file-heavy inputs tend to amplify pre-scan and partition fan-out cost, while wide schemas amplify detection expression cost.
 
 ## Optimizations Already Implemented
-- Pre-scan parallelism is reused for breadth-first directory discovery, format probing, and group schema split.
+
+- Pre-scan parallelism is reused for breadth-first directory discovery, format probing, and group schema split. Discovery size/mtime and per-run CSV/schema/parse caches are passed to later stages to avoid repeated metadata and schema lookups.
 - Actual `xlsx` scans use an executor-side StAX streamer instead of the spark-excel/POI DataFrame reader, so the driver no longer retains workbook bodies or POI workbook objects.
 - CSV body reads run with `inferSchema=false`.
 - Internal `text` fallback schema signatures are fixed to the single `value` column without opening a Spark text reader during schema split.
 - CSV dialect detection samples only the first non-blank lines. Groups with non-default per-file dialects use exact split/file-scan paths so read options stay attached to the right file.
-- `DetectionAggregator` uses batched aggregation instead of one Spark job per metric.
+- `DetectionAggregator` uses batched aggregation instead of one Spark job per metric. A metric plan reuses compiled patterns for identical regex/match-type pairs and expressions for each column; suppressed or hint-excluded combinations are not planned.
 - `driver_license_number` now uses the same regex-based predicate path as other rules, so aggregation and sampling stay on Catalyst/codegen-friendly expressions without a per-type Scala UDF or extra validation pass.
 - The legacy fallback threshold is raised to `50,000` expressions, and the fallback still uses smaller aggregation batches rather than per-metric counts.
 - Sample raw-value fallback is also batched: dataset-level fallback projects `when(...)` columns in chunks, and file-level fallback groups `first(when(...))` per file in chunks instead of launching one Spark job per metric.
@@ -24,7 +26,10 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 - Sampled scan paths and final report writes do not use Spark storage caching. This is an intentional trade-off so dynamic allocation can release cached executors more aggressively on YARN.
 - Default driver-side parallelism now starts at `--pre-scan-parallelism 32`, `--group-parallelism 16`, and `--file-parallelism 8` for I/O-bound scan orchestration. The `pre-scan` safety cap remains `64`.
 
+The offline review page keeps form state outside the DOM and renders rows near the viewport. It reuses finding samples and caches display strings/numbers used for sorting to reduce repeated DOM construction and computation. HTML files are split at 2MiB per file.
+
 ## Small-File-Heavy Inputs
+
 - `--pre-scan-parallelism` is the first lever for directory discovery, probe, and schema-split latency.
 - `--group-parallelism` and `--file-parallelism` increase driver-side concurrent submissions, but they do not directly guarantee executor distribution.
 - `spark.privyspark.driverRpcConcurrency` prevents small-file group scans from flooding the NameNode with driver-side RPC work by capping scan concurrency at `48` by default. Lower values favor stability over latency; `0` disables the gate.
@@ -37,6 +42,7 @@ The actual bottleneck depends on input distribution. Small-file-heavy inputs ten
 Stable hash-ranked file sampling is not only a performance feature. It keeps the sampled scope repeatable for the same group and file set while preserving file-level concentration risk better than size-weighted sampling, which would over-bias large files.
 
 ## When `scan_directory_structure_start` Is Slow
+
 This phase is usually driver-side work:
 
 - recursive file listing
@@ -46,7 +52,7 @@ This phase is usually driver-side work:
 
 When `scan_directory_files_discovered` to `scan_directory_initial_groups_ready` is slow, the likely cost centers are:
 
-- per-file `getFileStatus`
+- extra `getFileStatus` calls when discovery metadata cannot be reused, plus file opens
 - probing unknown or extensionless inputs
 - CSV dialect probing
 - `xlsx` visible-sheet/schema expansion from workbook metadata and header row XML
@@ -54,6 +60,7 @@ When `scan_directory_files_discovered` to `scan_directory_initial_groups_ready` 
 - grouping and sorting by `(directory, format)`
 
 ## When Detection Aggregation Is Slow
+
 `DetectionAggregator` runs a global aggregate across the sampled DataFrame. Even though the result may be a single row, it still scans all sampled partitions.
 
 - More input partitions means more aggregate tasks.
@@ -61,6 +68,7 @@ When `scan_directory_files_discovered` to `scan_directory_initial_groups_ready` 
 - `column_hints` can reduce metric count by limiting rules to relevant columns.
 
 ## Spark/YARN Operating Notes
+
 - With dynamic allocation enabled, short jobs may not create enough backlog to scale executors out.
 - The opposite problem also happens: cached blocks can delay executor scale-in. PrivySpark avoids this in sampled scan and report-write paths by removing storage cache from those flows.
 - Increasing application-level parallelism alone may still lead to limited executor fan-out if the scheduler stays FIFO or backlog remains small.
@@ -68,6 +76,7 @@ When `scan_directory_files_discovered` to `scan_directory_initial_groups_ready` 
 - Enable `info` or `debug` driver logs to separate pre-scan, grouping, and progress-merge bottlenecks.
 
 ## Tuning Priority
+
 1. For small-file-heavy inputs, start with `spark.privyspark.driverRpcConcurrency`, `--file-sample-ratio`, and Spark file partition settings.
 2. If group count is high, tune `--group-parallelism`.
 3. If fallback file scans are common, tune `--file-parallelism`.

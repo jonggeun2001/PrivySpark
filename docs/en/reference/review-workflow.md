@@ -1,13 +1,13 @@
 # Legacy Review Apply Workflow
 
-`privyspark review apply` is the legacy workflow where an operator edits `scan_results` directly and generates a fingerprint-based exact allowlist JSONL file.
+`bin/privyspark-submit review apply` is the legacy workflow where an operator edits `scan_results` directly and generates a fingerprint-based exact allowlist JSONL file.
 
-The default offline review workflow is now the recurring review state described in the Korean reference [offline-review-collector.md](../../ko/reference/offline-review-collector.md). Scans that use `--review-state-root` apply only `entry_type=recurring` false-positive state. Legacy exact entries are not used for suppression.
+The default offline review workflow is now the recurring review state described in [offline-review-collector.md](offline-review-collector.md). Scans that use `--review-state-root` apply only `entry_type=recurring` false-positive state. Legacy exact entries are not used for suppression.
 
 ## Legacy Command
 
 ```bash
-privyspark review apply \
+bin/privyspark-submit review apply \
   --scan-results /abs/output/excel/scan_results.xlsx \
   --input-root /abs/input \
   --allowlist /abs/review/allowlist.jsonl \
@@ -19,10 +19,12 @@ This command still writes exact entries for backward file-generation compatibili
 ## Recommended Workflow
 
 ```bash
-privyspark scan \
+bin/privyspark-submit scan \
   --path /abs/input \
   --output /abs/output \
   --review-state-root /abs/review-state
 ```
 
-Upload returned response JSON files into `/abs/review-state/inbox/*.json`. The next `scan --review-state-root /abs/review-state` automatically collects them before scanning. If any response is invalid or another collect holds `/abs/review-state/.collect.lock`, the scan fails before the scan work starts. When Hive mapping is available, review rows with the same `hive_table_fqn`, column, and PII type are grouped into one table-level finding and show the grouped partition/file count next to the path. When detections make the review larger than 2MB, `review.html` becomes an index and `review-part-*.html` files are generated; reviewers create one response JSON from each part file and upload all of them to the inbox. Response JSON includes collector fields plus sample and extracted-value helper fields so the release `review-response-viewer.html` can sort by target or detection ratio and show the sample context. For Excel editing, reviewers can download the CSV from the review file, import the decrypted CSV file, or paste the TSV clipboard text copied from Excel. CSV upload preserves quoted commas and embedded line breaks; TSV paste uses tabs and row breaks, preserving embedded line breaks when Excel wraps the cell in double quotes.
+Upload returned response JSON files into `/abs/review-state/inbox/*.json`. The next `scan --review-state-root /abs/review-state` automatically collects them before scanning. If any response is invalid or another collect holds `/abs/review-state/.collect.lock`, the scan fails before the scan work starts. When Hive mapping is available, review rows with the same `hive_table_fqn`, column, and PII type are grouped into one table-level finding and show the grouped partition/file count next to the path. When detections make the review larger than 2MiB, `review.html` becomes an index and `review-part-*.html` files are generated; reviewers create one response JSON from each part file and upload all of them to the inbox. Response JSON includes collector fields plus sample and extracted-value helper fields so the release `review-response-viewer.html` can sort by target or detection ratio and show the sample context. For Excel editing, reviewers can download the CSV from the review file, import the decrypted CSV file, or paste the TSV clipboard text copied from Excel. CSV upload preserves quoted commas and embedded line breaks; TSV paste uses tabs and row breaks, preserving embedded line breaks when Excel wraps the cell in double quotes.
+
+Existing legacy pattern entries are converted to recurring entries on read; this does not re-enable exact-fingerprint suppression. See the collector guide for retention and validation rules.
