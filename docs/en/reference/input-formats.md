@@ -10,7 +10,7 @@
 - UTF-8 text that uses ASCII information separators (`0x1C`-`0x1F`, for example RS-delimited files) can be treated as CSV when the separator is stable across rows; remaining text that does not yield a CSV dialect stays in text fallback.
 - Non-data extensions excluded from probing and inputs that fail magic-byte/CSV/text fallback are recorded as `Unsupported file format`.
 - Zero-byte physical files are skipped during pre-scan.
-- Physical files discovered at listing time but deleted before pre-scan probing are skipped without `scan_errors`.
+- Physical files whose deletion is detected during pre-scan are skipped without `scan_errors`. Files whose format is inferred from their extension can pass pre-scan and produce errors if deletion is detected during later schema inspection or reading.
 - Physical files matching `--ignore` or `--ignore-file` patterns are excluded before pre-scan.
 - Directory discovery reuses listed file length and modification time during pre-scan, so small-file-heavy inputs do not issue another file-status RPC for every discovered file before format expansion. Long pre-scans also emit progress logs on a time throttle in addition to the file-count interval.
 

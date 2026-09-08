@@ -148,15 +148,19 @@ Stable hash-ranked file sampling keeps the same subset for the same group and fi
 
 Hive exact table-root scans apply row sampling to `spark.table` and do not use `--file-sample-ratio` or `--file-sample-min-files`. File sampling applies to the physical batch/file scan paths described above.
 
-## Exit Codes
+## Driver Exit Codes
+
+The following table describes the exit codes of the `PrivySparkApp` driver process.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Command completed. Recoverable file/group failures can still appear in `scan_errors`; inspect the error report as well |
+| `0` | Driver completed. Recoverable file/group failures can still appear in `scan_errors`; inspect the error report as well |
 | `2` | CLI parsing or absolute-path/URI validation failed before SparkSession creation |
 | `1` | Unrecovered runtime error, collector validation failure, or collect-lock conflict |
 
 Findings alone do not cause a failure exit code. Failed automatic collection with `--review-state-root` prevents the scan work from starting.
+
+`bin/privyspark-submit` runs the remote driver in YARN cluster mode, so its shell exit code is not guaranteed to match this table. The Spark submission client handles a failed YARN application status by throwing an exception. To distinguish argument errors from runtime failures, inspect the YARN final status and diagnostics together with the driver log events `cli_argument_invalid` and `scan_failed`; do not rely on shell code `2` alone. [Spark YARN submission client source](https://github.com/apache/spark/blob/v3.5.3/resource-managers/yarn/src/main/scala/org/apache/spark/deploy/yarn/Client.scala#L1190-L1222)
 
 ## Driver Logging
 
@@ -178,7 +182,7 @@ The schema-signature cache created for pre-scan is reused by group-scan sampled 
 
 When ignore rules apply, events such as `scan_directory_file_ignored` and `archive_entry_skipped reason=ignored` are emitted, and `ignored_files` is included in `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, and `scan_complete`.
 
-If a file is discovered and then deleted before pre-scan probing, the file is skipped and logged as `scan_directory_file_skipped reason=not_found`. It is included in `skipped_files` for `scan_directory_pre_scan_execute_complete`, not in `scan_errors`.
+When pre-scan detects that a file was deleted and skips it, the event is logged as `scan_directory_file_skipped reason=not_found`. It is included in `skipped_files` for `scan_directory_pre_scan_execute_complete`, not in `scan_errors`. Files whose format is inferred from their extension can pass pre-scan using cached discovery metadata; deletion detected during later schema inspection or reading can still produce an error row.
 
 ## `_progress` Handling
 

@@ -109,7 +109,7 @@ Parquet/CSV 경로는 Spark의 `part-*` 파일을 포함하는 디렉토리입�
 - 파일 교체/삭제로 인한 읽기 오류는 재시도 후 실패 시 기록합니다.
 - 손상 JSON, nested archive, unsafe archive path, password-protected archive, multi-volume RAR, RAR5 archive, probe 제외 확장자 또는 magic-byte/CSV/text fallback까지 실패한 입력 등은 명시적 오류로 기록합니다.
 
-`scan_errors` 필드는 `dataset_path`, `scan_timestamp`, `file_identifier`, `error_message`입니다. 0바이트 입력과 discovery 이후 pre-scan 전에 삭제된 파일은 오류 행을 생성하지 않습니다.
+`scan_errors` 필드는 `dataset_path`, `scan_timestamp`, `file_identifier`, `error_message`입니다. pre-scan에서 0바이트 입력 또는 파일 삭제를 확인해 건너뛴 경우 오류 행을 생성하지 않습니다. `.parquet`처럼 확장자로 포맷을 판별하는 파일은 discovery 메타데이터를 재사용해 pre-scan을 통과할 수 있으며, 이후 삭제가 확인되면 `Schema detection failed` 등의 오류가 기록될 수 있습니다.
 
 ## 진행 중 progress 경로
 

@@ -109,7 +109,7 @@ Directory-level promotion is intentionally strict so the semantic unit of a resu
 - Read errors caused by file replacement or deletion are retried before being recorded.
 - Corrupt JSON, nested archives, unsafe archive paths, password-protected archives, multi-volume RAR archives, RAR5 archives, extensions excluded from probing, and inputs that fail magic-byte/CSV/text fallback are recorded as explicit errors.
 
-The `scan_errors` fields are `dataset_path`, `scan_timestamp`, `file_identifier`, and `error_message`. Zero-byte inputs and files deleted between discovery and pre-scan do not create error rows.
+The `scan_errors` fields are `dataset_path`, `scan_timestamp`, `file_identifier`, and `error_message`. Inputs skipped after pre-scan detects a zero-byte file or a deleted file do not create error rows. Files with a recognized extension such as `.parquet` can pass pre-scan using cached discovery metadata; deletion detected later can produce errors such as `Schema detection failed`.
 
 ## In-Progress `_progress` Path
 

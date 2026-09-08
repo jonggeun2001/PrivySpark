@@ -150,15 +150,19 @@ allowlist는 ignore와 역할이 다릅니다. ignore는 pre-scan 전에 파일 
 
 Hive exact table-root 스캔은 `spark.table`에 row sampling을 적용하며, `--file-sample-ratio`와 `--file-sample-min-files`를 사용하지 않습니다. 물리 파일 batch/file 경로에 대한 파일 샘플링 설명과 구분합니다.
 
-## 종료 코드
+## 드라이버 종료 코드
+
+아래 표는 `PrivySparkApp` 드라이버 프로세스의 종료 코드입니다.
 
 | 코드 | 의미 |
 | --- | --- |
-| `0` | 명령 정상 종료. 처리 가능한 파일/그룹 오류가 `scan_errors`에 남을 수 있으므로 오류 리포트도 확인 |
+| `0` | 드라이버 정상 종료. 처리 가능한 파일/그룹 오류가 `scan_errors`에 남을 수 있으므로 오류 리포트도 확인 |
 | `2` | CLI 파싱 또는 절대경로/URI 검증 실패. SparkSession 생성 전 종료 |
 | `1` | 미복구 실행 오류, collector 검증/lock 실패 등 |
 
 탐지 finding이 존재한다는 이유만으로 실패 코드를 반환하지 않습니다. `--review-state-root` 자동 수집이 실패하면 스캔 본 작업을 시작하지 않습니다.
+
+`bin/privyspark-submit`은 YARN cluster 모드로 원격 드라이버를 실행하므로 제출 명령의 셸 종료 코드가 이 표와 같다고 가정하면 안 됩니다. Spark 제출 클라이언트는 YARN application의 실패 상태를 예외로 처리합니다. 인자 오류와 실행 오류를 구분할 때는 셸 코드 `2`만 확인하지 말고 YARN final status·diagnostics와 드라이버 로그의 `cli_argument_invalid`, `scan_failed` 이벤트를 확인합니다. [Spark YARN 제출 클라이언트 소스](https://github.com/apache/spark/blob/v3.5.3/resource-managers/yarn/src/main/scala/org/apache/spark/deploy/yarn/Client.scala#L1190-L1222)
 
 ## Driver 로그
 
@@ -180,7 +184,7 @@ pre-scan에서 만든 schema signature cache는 group scan의 sampled batch vali
 
 ignore가 적용되면 `scan_directory_file_ignored`, `archive_entry_skipped reason=ignored` 같은 이벤트와 함께 `ignored_files` 집계가 `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, `scan_complete`에 포함됩니다.
 
-directory listing 이후 pre-scan probe 전에 파일이 삭제되면 해당 파일은 `scan_directory_file_skipped reason=not_found`로 기록하고 건너뜁니다. 이 건은 `scan_errors`가 아니라 `scan_directory_pre_scan_execute_complete`의 `skipped_files` 집계에 포함됩니다.
+pre-scan에서 파일 삭제를 확인해 건너뛴 경우 `scan_directory_file_skipped reason=not_found`로 기록합니다. 이 건은 `scan_errors`가 아니라 `scan_directory_pre_scan_execute_complete`의 `skipped_files` 집계에 포함됩니다. 확장자로 포맷을 판별하는 파일은 discovery 메타데이터를 재사용해 pre-scan을 통과할 수 있으므로, 이후 스키마 검사나 읽기 단계에서 삭제가 확인되면 오류 행이 남을 수 있습니다.
 
 ## `_progress` 경로 운영
 
