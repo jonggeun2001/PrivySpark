@@ -1,6 +1,7 @@
 # 성능 가이드
 
 ## 현재 성능 특성
+
 PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 
 1. 파일 발견과 pre-scan
@@ -11,12 +12,13 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 실제 병목은 입력 분포에 따라 달라집니다. 작은 파일이 매우 많으면 pre-scan과 파티션 fan-out이, 넓은 스키마 테이블에서는 탐지 집계 표현식 수가 더 크게 작용합니다.
 
 ## 현재 구현이 이미 적용하는 최적화
-- pre-scan 병렬도는 BFS 디렉터리 discovery, 파일 확장, 포맷 판별, 그룹별 schema split에 재사용됩니다.
+
+- pre-scan 병렬도는 BFS 디렉터리 discovery, 파일 확장, 포맷 판별, 그룹별 schema split에 재사용됩니다. discovery의 크기/mtime과 scan run의 CSV/schema/parse cache를 후속 단계에 전달해 같은 메타데이터와 스키마를 반복 조회하지 않습니다.
 - `xlsx` 실제 scan은 spark-excel/POI DataFrame reader 대신 executor-side StAX 스트리머를 사용해 driver가 workbook body와 POI workbook 객체를 들고 있지 않도록 합니다.
 - CSV 본문 읽기는 `inferSchema=false`로 동작합니다.
 - 내부 `text` fallback의 schema signature는 단일 `value` 컬럼으로 고정되어, schema split 중 Spark text reader를 열지 않습니다.
 - CSV dialect 감지는 파일 앞부분의 non-blank 라인 일부만 사용하며, 비기본 dialect가 있는 그룹은 파일별 read option 보존을 위해 exact split/file scan 경로로 처리합니다.
-- `DetectionAggregator`는 메트릭별 개별 job 대신 batched aggregation을 기본 경로로 사용합니다.
+- `DetectionAggregator`는 메트릭별 개별 job 대신 batched aggregation을 기본 경로로 사용합니다. metric 계획 안에서 같은 regex/match type의 compiled pattern과 컬럼별 표현식을 재사용하고, suppression/hint로 제외되는 조합은 계획하지 않습니다.
 - `driver_license_number`도 다른 규칙과 동일한 regex 기반 predicate 경로를 사용하므로, 타입별 Scala UDF나 추가 validator 없이 Catalyst/codegen 경로를 유지합니다.
 - legacy fallback threshold는 `50,000` 표현식으로 올려져 있고, 초과 시에도 메트릭당 개별 count 대신 소배치 집계를 사용합니다.
 - sample raw-value fallback도 배치화되어 있습니다. dataset 경로는 `when(...)` projection을 chunk 단위로 처리하고, file 경로는 파일별 `first(when(...))` 집계를 chunk 단위로 묶어서 메트릭마다 Spark job을 따로 내지 않습니다.
@@ -24,7 +26,10 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - sampled scan과 최종 리포트 저장 경로는 Spark storage cache를 사용하지 않습니다. dynamic allocation 환경에서 cached executor가 YARN 자원을 오래 점유하지 않게 하기 위한 선택입니다.
 - 기본 driver-side 병렬도는 I/O 바운드 pre-scan fan-out을 기준으로 `--pre-scan-parallelism 32`, `--group-parallelism 16`, `--file-parallelism 8`에서 시작합니다. `pre-scan`은 안전 상한 `64`를 유지합니다.
 
+오프라인 리뷰는 입력 상태를 DOM 밖에서 유지하고 화면 근처 행을 렌더링합니다. 샘플 표시는 finding별로 재사용하며 정렬에서 쓰는 표시 문자열과 수치를 캐시해 반복 DOM 생성과 계산을 줄입니다. HTML 분할은 파일당 2MiB를 기준으로 합니다.
+
 ## 작은 파일이 많은 입력
+
 - `--pre-scan-parallelism`은 디렉터리 discovery, 파일 probe, schema split 대기 시간을 줄이는 1차 옵션입니다.
 - `--group-parallelism`과 `--file-parallelism`은 driver 제출 동시성을 늘리지만, executor 분산을 직접 보장하지는 않습니다.
 - small-file group scan에서 HDFS NameNode RPC가 폭증하지 않도록 `spark.privyspark.driverRpcConcurrency`가 driver-side scan 작업 동시성을 기본 `48`로 제한합니다. 더 낮추면 안정성은 높아지고 latency는 늘 수 있으며, `0`은 안전망 비활성화입니다.
@@ -37,6 +42,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 안정적인 해시 순위 파일 샘플링을 둔 이유는 성능만이 아니라 review scope 안정성과 데이터 concentration risk를 함께 보존하기 위해서입니다. 같은 그룹/파일 집합에서는 같은 sampled scope를 유지하고, 특정 데이터가 한 파일에 몰린 경우를 운영적으로 배제하지 않도록 파일 크기 가중치는 쓰지 않습니다.
 
 ## `scan_directory_structure_start` 이후가 느릴 때
+
 이 구간은 보통 driver 쪽 작업입니다.
 
 - 파일 목록 재귀 수집
@@ -46,7 +52,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 
 특히 `scan_directory_files_discovered` 이후 `scan_directory_initial_groups_ready`가 느리면 파일 수가 많을 때 다음 비용이 커질 수 있습니다.
 
-- 파일별 `getFileStatus`
+- discovery 메타데이터를 재사용할 수 없는 입력의 추가 `getFileStatus`와 파일 open
 - 미지원 확장자/무확장자 probe
 - CSV dialect probe
 - `xlsx` workbook metadata 및 header row XML 기반 visible sheet/schema 확장
@@ -54,6 +60,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - `(directory, format)` 그룹화와 정렬
 
 ## 탐지 집계가 느릴 때
+
 `DetectionAggregator`의 전역 aggregate는 결과가 1행이어도 샘플된 DataFrame 전체 파티션을 읽습니다. 그래서 task 수는 `head()`가 아니라 입력 파티션 수와 배치 수에 의해 결정됩니다.
 
 - 파티션 수가 많으면 aggregate task 수도 많아집니다.
@@ -61,6 +68,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - `column_hints`가 있으면 필요한 컬럼에만 규칙을 적용해 메트릭 수를 줄일 수 있습니다.
 
 ## Spark/YARN 운영 팁
+
 - dynamic allocation이 켜져 있어도 작은 job이 짧게 끝나면 executor scale-out이 제한될 수 있습니다.
 - 반대로 cached block이 executor에 남아 있으면 scale-in도 늦어질 수 있습니다. PrivySpark는 이 문제를 줄이기 위해 sampled scan과 report write 경로에서 storage cache를 제거했습니다.
 - 앱 레벨 병렬도만 올려도 Spark scheduler가 FIFO이거나 backlog가 작으면 executor fan-out이 기대보다 작을 수 있습니다.
@@ -68,6 +76,7 @@ PrivySpark 성능은 크게 네 구간으로 나뉩니다.
 - `info`/`debug` driver 로그를 켜면 pre-scan, grouping, progress merge 구간을 단계별로 확인할 수 있습니다.
 
 ## 튜닝 우선순위
+
 1. 입력이 작은 파일 위주면 `spark.privyspark.driverRpcConcurrency`, `--file-sample-ratio`, Spark 파일 파티션 설정부터 조정
 2. 그룹 수가 많으면 `--group-parallelism` 조정
 3. 파일 fallback이 많으면 `--file-parallelism` 조정
