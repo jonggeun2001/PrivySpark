@@ -32,8 +32,7 @@ private[privyspark] object HiveTableScanner {
     sampleRatio: Double,
     timestamp: String,
     suppressions: SuppressionSet = SuppressionSet.empty,
-    allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
-    allowlistInputRoot: Option[String] = None
+    allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty
   ): (Seq[ScanResult], Seq[ScanError]) = {
     val tableFqn = Option(group.hiveTableFqn).map(_.trim).getOrElse("")
     val fileIdentifier = resolveDirectoryIdentifier(datasetPath, group.directoryPath)
@@ -50,7 +49,6 @@ private[privyspark] object HiveTableScanner {
     )
 
     try {
-      val effectiveRules = ScanResultBuilder.effectiveRulesForFormat(group.format, rules)
       val baseDf = spark.table(tableFqn)
       val sampledDf = ScanResultBuilder.sampleRowsDeterministically(baseDf, sampleRatio)
       val sampledRowCount = sampledDf.count()
@@ -59,12 +57,12 @@ private[privyspark] object HiveTableScanner {
         if (sampledRowCount == 0L) {
           Seq.empty
         } else {
-          val matchCounts = DetectionAggregator.aggregate(sampledDf, effectiveRules, suppressions = suppressions)
+          val matchCounts = DetectionAggregator.aggregate(sampledDf, rules, suppressions = suppressions)
           val nonEmptyValueCounts = DetectionAggregator.countNonEmpty(
             sampledDf,
-            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, effectiveRules, suppressions)
+            DetectionAggregator.columnsCoveredByRules(sampledDf.columns.toSeq, rules, suppressions)
           )
-          val sampleValues = DetectionAggregator.sampleMatches(sampledDf, effectiveRules, matchCounts, suppressions = suppressions)
+          val sampleValues = DetectionAggregator.sampleMatches(sampledDf, rules, matchCounts, suppressions = suppressions)
           val fileSize = group.fileSizesByKey.values.sum
           val fileMtimeEpochMs = if (group.fileMtimesByKey.isEmpty) 0L else group.fileMtimesByKey.values.max
 
@@ -84,10 +82,7 @@ private[privyspark] object HiveTableScanner {
         }
 
       val filteredResults = AllowlistApplier.applyAllowlist(
-        spark.sparkContext.hadoopConfiguration,
-        datasetPath,
         allowlistMatcher,
-        allowlistInputRoot,
         provisionalResults
       )
       DriverLogger.debug(

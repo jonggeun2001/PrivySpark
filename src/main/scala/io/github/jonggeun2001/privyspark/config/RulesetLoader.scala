@@ -5,7 +5,7 @@ import io.github.jonggeun2001.privyspark.util.DriverLogger
 import org.yaml.snakeyaml.Yaml
 
 import java.io.FileInputStream
-import java.nio.file.{Files, Paths}
+import java.nio.file.{Files, Path, Paths}
 import java.util.regex.{Pattern, PatternSyntaxException}
 import scala.collection.JavaConverters._
 
@@ -49,7 +49,7 @@ object RulesetLoader {
     }
   }
 
-  private def resolvePath(ruleset: String) = {
+  private def resolvePath(ruleset: String): Path = {
     if (ruleset == "default") {
       defaultRulesetCandidates.find(path => Files.exists(path)).getOrElse(Paths.get(DefaultRulesetPath))
     } else {
@@ -57,20 +57,9 @@ object RulesetLoader {
     }
   }
 
-  private def parseColumnHints(rawValue: Object): Seq[String] = {
-    rawValue match {
-      case values: java.util.List[_] =>
-        values.asScala.flatMap(value => Option(value).map(_.toString.trim)).filter(_.nonEmpty).toSeq
-      case value =>
-        Option(value).map(_.toString.trim).filter(_.nonEmpty).toSeq
-    }
-  }
-
-  private def defaultRulesetCandidates = {
+  private def defaultRulesetCandidates: Seq[Path] = {
     val envPath = sys.env.get("PRIVYSPARK_DEFAULT_RULESET").map(Paths.get(_))
-    val yarnDistributed = Some(Paths.get(YarnDistributedDefaultRuleset))
-    val projectLocal = Some(Paths.get(DefaultRulesetPath))
-    Seq(envPath, yarnDistributed, projectLocal).flatten
+    envPath.toSeq ++ Seq(Paths.get(YarnDistributedDefaultRuleset), Paths.get(DefaultRulesetPath))
   }
 
   private def validateRegex(piiType: String, regex: String, matchType: String): Unit = {
@@ -97,7 +86,7 @@ object RulesetLoader {
     val parsed = rawRules.asScala.map { item =>
       val piiType = Option(item.get("pii_type")).map(_.toString.trim).getOrElse("")
       val regex = Option(item.get("regex")).map(_.toString.trim).getOrElse("")
-      val columnHints = Option(item.get("column_hints")).map(parseColumnHints).getOrElse(Seq.empty)
+      val columnHints = Option(item.get("column_hints")).map(parseStringList).getOrElse(Seq.empty)
       if (piiType.isEmpty || regex.isEmpty) {
         throw new IllegalArgumentException("Each rule must include pii_type and regex")
       }

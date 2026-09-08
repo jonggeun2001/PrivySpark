@@ -45,9 +45,6 @@ private[privyspark] final case class ReviewFinding(
 private[privyspark] object ReviewFindingBuilder {
   val DefaultMaxEvidenceSamples = 5
 
-  def fromScanResults(results: Seq[ScanResult]): Seq[ReviewFinding] =
-    fromScanResultsIterator(results.iterator, Int.MaxValue)
-
   def fromScanResultsIterator(results: Iterator[ScanResult], maxEvidencePerFinding: Int): Seq[ReviewFinding] = {
     val sampleLimit = math.max(0, maxEvidencePerFinding)
     val accumulators = mutable.Map.empty[ReviewFindingGroupKey, ReviewFindingAccumulator]
@@ -65,10 +62,6 @@ private[privyspark] object ReviewFindingBuilder {
 
   def scanResultsFingerprint(findings: Seq[ReviewFinding]): String =
     sha256(findings.map(finding => s"${finding.findingKey}|${finding.findingHash}").sorted.mkString("|"))
-
-  def findingKeyForResult(result: ScanResult): String = {
-    findingKeyForFields(result.dataset_path, tableKeyForResult(result), result.column_name, result.pii_type)
-  }
 
   def evidenceFromScanResult(result: ScanResult): Seq[ReviewEvidence] =
     resultToEvidence(result).sortBy(e => (e.fileIdentifier, e.fileChecksum))
