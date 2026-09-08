@@ -55,7 +55,7 @@
 - `review/ReviewHtmlWriter.scala`: `normalizeSampleMode`, public `write` overloads, 2MB review HTML split, `writeFindings`.
 - `review/ReviewHtmlRenderer.scala`: resource template/script loading, review part metadata rendering, split index rendering.
 - `review/ReviewSampleMasker.scala`: finding JSON rendering L6, sample masking L17.
-- `review/ReviewActionPlanStatus.scala`: action plan state load/match L20, UI status label L75.
+- `review/ReviewActionPlanStatus.scala`: action plan state load/match L21/L26, UI status label L91.
 - `src/main/resources/review/review.html.template`: offline review HTML/CSS shell and `${REVIEW_DATA_JSON}` placeholder.
 - `src/main/resources/review/review.js`: offline review browser state, sorting, validation, and response download logic.
 - `detect/DetectionAggregator.scala`: fault injector plug-point L37, public `aggregate` L52, `aggregateByFile` L61, sample collection L96, metric planning L117.
