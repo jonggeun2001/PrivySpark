@@ -110,7 +110,7 @@ private[privyspark] object CsvHeaderHeuristic {
     }
   }
 
-  private def createCsvOptions(spark: SparkSession, dialect: CsvDialect = CsvDialect()): CSVOptions = {
+  private def createCsvOptions(spark: SparkSession, dialect: CsvDialect): CSVOptions = {
     new CSVOptions(
       scala.collection.immutable.Map(
         "header" -> "true",

@@ -1,20 +1,30 @@
 # 결과와 오류 리포트
 
 ## 최종 출력 경로
+
 - 기본 결과 리포트:
   - `<output>/parquet/scan_results`
 - 기본 오류 리포트:
   - `<output>/parquet/scan_errors`
-- `--output-format csv` 추가 시:
+- `--output-format csv` 지정 시:
   - `<output>/csv/scan_results`
   - `<output>/csv/scan_errors`
-- `--output-format excel` 추가 시:
+- `--output-format excel` 지정 시:
   - `<output>/excel/scan_results.xlsx`
   - `<output>/excel/scan_errors.xlsx`
 
-`--output-format`은 반복 지정 가능하고 지원값은 `parquet`, `csv`, `excel`입니다. 기본값은 `parquet`입니다. 임시 `_progress` 경로는 운영 관측용이며, 최종 출력 계약은 아닙니다.
+`--output-format`은 반복 지정 가능하고 지원값은 `parquet`, `csv`, `excel`입니다. 기본값은 `parquet`입니다.
+
+명시적으로 포맷을 지정하면 그 목록만 생성합니다. 예를 들어 `--output-format csv`만 지정하면 Parquet는 생성하지 않습니다. 둘 다 필요하면 `--output-format parquet --output-format csv`를 사용합니다. 임시 `_progress` 경로는 운영 관측용이며, 최종 출력 계약은 아닙니다.
+
+## 재실행과 출력 교체
+
+같은 `<output>`으로 다시 실행하면 새 리포트를 `_report_staging/<id>`에 먼저 쓰고 기존 결과를 백업한 뒤 교체합니다. 성공하면 이전 실행의 선택되지 않은 포맷 디렉토리도 제거하므로, 여러 실행 이력을 보관하려면 실행별 output 경로를 사용합니다. 교체 실패 시 이전 산출물 복원을 시도하며, 복원까지 실패하면 백업 staging 경로와 `report_output_rollback_failed` 로그를 보존합니다.
+
+Parquet/CSV 경로는 Spark의 `part-*` 파일을 포함하는 디렉토리입니다. CSV는 header를 포함하고, Excel은 `scan_results`/`scan_errors` 시트를 각각의 `.xlsx` 파일에 저장합니다. 결과가 비어 있어도 선택된 포맷과 결과/오류 스키마는 유지합니다.
 
 ## 결과 필드
+
 - `dataset_path`
 - `scan_timestamp`
 - `file_identifier`
@@ -43,6 +53,7 @@
 `scan_results.scan_timestamp`는 CLI 시작 시각 고정값이 아니라, 각 결과 row가 실제로 만들어진 시점의 UTC ISO-8601 시각입니다. 따라서 장시간 스캔이나 다중 그룹 스캔에서는 결과 row마다 값이 달라질 수 있습니다.
 
 ## `hive_table_fqn` 규칙
+
 - `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다.
 - 활성화되면 driver가 설정된 JDBC driver class로 Hive Metastore `DBS`/`TBLS`/`SDS` 테이블을 1회 조회하고, table-level `LOCATION`을 정규화 URI prefix 인덱스로 broadcast 합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다. CLI 값이 Spark conf보다 우선합니다.
 - 결과 row의 입력 파일 경로가 등록된 table `LOCATION` 하위에 있으면 `db.table` 형식으로 `hive_table_fqn`을 채웁니다.
@@ -55,6 +66,7 @@
 - partition별 `LOCATION` override는 현재 열거하지 않습니다. table-level `LOCATION`만 사용합니다.
 
 ## `file_identifier` 규칙
+
 - 기본은 입력 경로 기준 상대경로입니다.
 - 동일 스키마가 exact split으로 확인되고, pre-scan 오류가 없고, 다중 파일 그룹의 디렉토리 승격이 허용된 경우에만 디렉토리 식별자로 승격합니다.
 - sampled `text` group과 bounded schema validation을 통과한 sampled Parquet/ORC/Avro group은 exact split 디렉토리 집계로 승격된 상태가 아니므로 batch 경로에서 파일 식별자를 유지합니다.
@@ -68,16 +80,18 @@
 `file_identifier` 승격 조건을 엄격하게 둔 이유는 결과 해석의 기준 단위를 흐리지 않기 위해서입니다. 디렉토리 단위 집계는 편하지만, 스키마 드리프트나 pre-scan 오류가 있는 상태에서 무리하게 합치면 결과 의미가 달라집니다.
 
 ## Review 필드
+
 - `file_size`는 해당 row를 대표하는 파일 바이트 크기입니다. 파일 식별자 row는 파일 크기, 디렉토리 식별자 row는 포함된 파일 크기 합계를 기록합니다.
 - `file_mtime_epoch_ms`는 해당 row를 대표하는 파일의 마지막 수정 시각(epoch milliseconds)입니다. 디렉토리 식별자 row는 포함된 파일 중 최대 mtime을 기록합니다.
 - `review_status` 기본값은 `pending`입니다. 운영 검토에서 `false_positive`, `true_positive`로 편집할 수 있습니다.
 - `review_reason`은 검토 사유 텍스트입니다. `false_positive` 판정 시 필수로 채우는 것을 권장합니다.
-- `review_invalidated=true`는 이전 allowlist와 같은 `(dataset_path, file_identifier, column_name, pii_type)` 조합이 있었지만, 현재 파일 메타데이터와 checksum이 달라져 재검토가 필요함을 의미합니다.
-- `review_scope_file_identifiers`는 디렉토리 또는 Hive 테이블 집계 row가 실제로 포함한 concrete file identifier 목록입니다. `|` 구분 문자열로 저장되고 `review apply`는 이 목록만 allowlist로 전개합니다.
+- `review_invalidated`는 legacy exact fingerprint 불일치 표시를 위한 호환 필드입니다. 현재 recurring-only matcher는 크기/mtime/checksum으로 무효화하지 않으므로 새 스캔에서 이 값을 `true`로 설정하지 않습니다.
+- `review_scope_file_identifiers`는 디렉토리 또는 Hive 테이블 집계 row가 실제로 포함한 concrete file identifier 목록입니다. 각 식별자를 UTF-8 URL 인코딩한 뒤 `|`로 연결해 저장되고 `review apply`는 이 목록만 allowlist로 전개합니다.
 - `review_scope_file_fingerprints`는 디렉토리 또는 Hive 테이블 집계 row의 파일별 fingerprint snapshot입니다. 내부 인코딩 문자열로 저장되고 `review apply`는 scope 안의 모든 fingerprint가 일치할 때만 false positive를 staged 합니다.
-- `--allowlist`를 쓰지 않으면 review 관련 필드는 기본값만 채워집니다.
+- 새 스캔의 `review_status`, `review_reason`, `review_invalidated`는 각각 `pending`, 빈 문자열, `false`입니다. `--allowlist`와 `--review-state-root`의 recurring 항목에 매칭된 finding은 상태를 바꿔 남기는 대신 결과에서 제외합니다. fingerprint/scope 필드와 legacy `review apply`의 파일 생성 계약은 계속 유지합니다.
 
 ## 비율 필드
+
 - `match_ratio`는 샘플링된 행 기준 비율입니다.
 - `sampled_row_count`는 실제 탐지에 사용된 샘플링 후 행 수입니다.
 - `non_empty_value_count`는 해당 컬럼에서 비어 있지 않아 `non_empty_match_ratio`와 `confidence` 계산 분모로 사용된 값 수입니다.
@@ -85,19 +99,23 @@
 - 비어 있는 값은 `null`이거나 `trim(column)` 결과가 blank인 값입니다.
 - `full_column`도 `match_count` 기준만 달라질 뿐, `confidence`는 여전히 해당 컬럼의 non-empty 값 기준으로 계산됩니다.
 - `confidence`는 `match_count / non_empty_count`의 95% Wilson score 신뢰구간 하한(z=1.96)입니다. 표본이 작을수록 보수적으로 낮아지고, 표본이 커질수록 `non_empty_match_ratio`에 수렴합니다.
-- `sample_matched_fragment`는 실제 regex/validator가 검출한 원문 조각 1건입니다.
+- `sample_matched_fragment`는 실제 regex가 검출한 원문 조각 1건입니다.
 - `sample_raw_value`는 그 조각이 포함된 셀에서 앞뒤 최대 50자 문맥만 잘라 저장한 값입니다.
-- 두 값 모두 소수점 둘째 자리까지 반올림합니다.
+- `match_ratio`, `non_empty_match_ratio`, `confidence`는 `0`~`1` 범위의 수치이며 소수점 둘째 자리까지 `HALF_UP` 반올림합니다. 샘플 문자열은 반올림 대상이 아닙니다. 리뷰 HTML의 `검출비율(%)`는 `match_count / sampled_row_count * 100`으로 따로 표시합니다.
 
 ## 오류 리포트
+
 - 일부 파일/그룹 실패는 전체 작업을 중단시키지 않고 누적 기록합니다.
 - 파일 교체/삭제로 인한 읽기 오류는 재시도 후 실패 시 기록합니다.
-- 손상 JSON, nested archive, unsafe archive path, password-protected archive, multi-volume RAR, RAR5 archive, 매직바이트 불일치 무확장자/미지원 확장자 입력 등은 명시적 오류로 기록합니다.
+- 손상 JSON, nested archive, unsafe archive path, password-protected archive, multi-volume RAR, RAR5 archive, probe 제외 확장자 또는 magic-byte/CSV/text fallback까지 실패한 입력 등은 명시적 오류로 기록합니다.
+
+`scan_errors` 필드는 `dataset_path`, `scan_timestamp`, `file_identifier`, `error_message`입니다. pre-scan에서 0바이트 입력 또는 파일 삭제를 확인해 건너뛴 경우 오류 행을 생성하지 않습니다. `.parquet`처럼 확장자로 포맷을 판별하는 파일은 discovery 메타데이터를 재사용해 pre-scan을 통과할 수 있으며, 이후 삭제가 확인되면 `Schema detection failed` 등의 오류가 기록될 수 있습니다.
 
 ## 진행 중 progress 경로
+
 - 진행 중 임시 shard는 `<output>/_progress/<run_id>/results/*.jsonl`, `errors/*.jsonl`, `meta/completions/*.jsonl`에 기록될 수 있습니다.
 - file fallback scan은 기본적으로 group 종료 시 progress shard를 flush합니다. 따라서 `_progress`는 최종 merge 소스이지만 file별 실시간 tail 계약은 아니며, 파일 완료 즉시 shard가 필요하면 `spark.privyspark.progress.flushMode=file`을 사용합니다.
-- 작업이 실행 중일 때는 `<output>/_progress/<run_id>/in-flight/*.json`에 활성 group, file, allowlist snapshot rescan별 marker가 있을 수 있습니다.
+- 작업이 실행 중일 때는 `<output>/_progress/<run_id>/in-flight/*.json`에 활성 group과 allowlist snapshot rescan marker가 있을 수 있습니다. file marker는 기본 off이며 `spark.privyspark.progress.fileMarker.enabled=true`로 켭니다.
 - in-flight marker는 운영 진단용입니다. 완료된 작업과 처리 가능한 실패는 marker를 삭제하지만, Spark application을 `FAILED`로 끝내는 미복구 group/file 실패는 marker를 보존합니다.
 - in-flight marker 파일명은 파일명에 안전한 UTF-8 문자/숫자와 `.`, `_`, `-`를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다. 원본 `identifier`는 marker JSON 본문에 유지됩니다.
 - clean completion은 탐지나 오류 row 없이 completion marker만 남깁니다.
@@ -106,7 +124,10 @@
 progress 경로를 별도로 둔 이유는 두 가지입니다. 첫째, 긴 스캔에서 이미 끝난 범위의 결과를 바로 확인할 수 있어야 합니다. 둘째, 최종 리포트 소비자가 부분 결과를 완성본으로 오해하지 않게 해야 합니다.
 
 ## 샘플 값 저장 정책
+
 - `scan_results`는 결과 해석을 돕기 위해 원문 샘플 1건을 저장합니다.
 - `sample_matched_fragment`는 실제 검출된 조각 그대로 저장합니다.
 - `sample_raw_value`는 셀 전체 원문 대신, 검출 조각 주변 앞뒤 최대 50자 문맥만 저장합니다.
-- 오류 리포트는 계속 메타데이터만 저장합니다.
+- 오류 리포트는 샘플 전용 필드 없이 경로, 시각, 식별자와 `error_message`를 저장합니다. `error_message`에는 reader 예외 메시지가 포함될 수 있습니다.
+
+`--review-sample-mode`는 생성하는 HTML과 그 HTML에서 내보내는 CSV/response JSON의 샘플 표현에만 적용합니다. 기본 `masked`는 검출 조각만 부분 마스킹하고 주변 문맥을 유지하며, `raw`는 저장된 샘플을 그대로, `none`은 빈 문자열로 전달합니다. 원본 Parquet/CSV/Excel `scan_results`는 이 옵션과 관계없이 위 원문 샘플 정책을 따릅니다. 검출 조각 주변에 있는 다른 민감값까지 자동으로 마스킹하는 옵션은 아닙니다.

@@ -26,10 +26,6 @@ private[privyspark] object ScanResultsReader {
     }
   }
 
-  def toScanResults(df: DataFrame): Seq[ScanResult] = {
-    iterateScanResults(df).toSeq
-  }
-
   def iterateScanResults(df: DataFrame, ordered: Boolean = false): Iterator[ScanResult] = {
     val normalizedColumns = df.columns.map(columnName => columnName.toLowerCase -> columnName).toMap
     val requiredColumns = Seq(

@@ -1,12 +1,20 @@
 # Quick Start
 
 ## Prerequisites
+
 - Spark `3.5.3`
 - Scala `2.12`
 - JVM bytecode target `1.8`
+- JDK 17 and `JAVA_HOME` for building/testing. Gradle 9.x requires JDK 17 or later; the release workflow uses JDK 21. The bytecode target is separate from the build JDK. [Gradle compatibility](https://docs.gradle.org/current/userguide/compatibility.html#java_runtime)
 - YARN cluster runtime
 
 PrivySpark assumes Spark runtime libraries are provided by the cluster. Application dependencies are packaged into the Shadow fat JAR.
+
+Run repository commands from the repository root. The actual submission script is `bin/privyspark-submit`; the Spark runtime and `spark-submit` must be available separately.
+
+## Use a Release JAR
+
+Download `privyspark-<tag>-all.jar` and its checksum from [GitHub Releases](https://github.com/jonggeun2001/PrivySpark/releases) instead of building locally. Set `PRIVYSPARK_APP_JAR=/abs/path/privyspark-<tag>-all.jar` from the repository root to use it with the examples below. The script distributes the default ruleset with `--files`; it is not loaded as a JAR resource. See [submission and configuration files](../operations/execution.md#submission-script-and-configuration-files) for environment variables and offline cluster submission.
 
 ## Build
 
@@ -19,8 +27,10 @@ The main artifact is `build/libs/*-all.jar`.
 ## Test
 
 ```bash
-./gradlew test
+bash scripts/verify-worktree.sh
 ```
+
+This runs the Scala/Spark tests and browser review logic tests. JavaScript tests require Node.js 18 or later and no additional npm packages. Use `./gradlew test` for Scala only, or `node --test src/test/js/*.test.cjs` for JavaScript only. Node.js is not required to run the scanner.
 
 To regenerate the bundled sample datasets:
 
@@ -89,7 +99,7 @@ bin/privyspark-submit \
 For YARN cluster runs, distribute a client-local ignore file first.
 
 ```bash
-PRIVYSPARK_SPARK_FILES=/abs/path/scan.ignore#scan.ignore \
+PRIVYSPARK_SPARK_FILES=/abs/path/scan.ignore#scan.ignore,config/rules/default.yaml#default-rules.yaml \
 bin/privyspark-submit \
   scan \
   --path /abs/input \
@@ -102,6 +112,7 @@ bin/privyspark-submit \
 ## Suppression Example
 
 ```bash
+PRIVYSPARK_SPARK_FILES=/abs/path/scan.suppressions#scan.suppressions,config/rules/default.yaml#default-rules.yaml \
 bin/privyspark-submit \
   scan \
   --path /abs/input \
@@ -112,6 +123,8 @@ bin/privyspark-submit \
 ```
 
 `--suppression-file` is also UTF-8 text. Each line uses `column:pii_type`, and blank lines plus `#` comments are ignored. If the ruleset YAML already defines `suppressions:`, the CLI entries are union-merged with them. Ruleset YAML can group multiple columns with `columns: [col1, col2]` for the same `pii_type`.
+
+`PRIVYSPARK_SPARK_FILES` replaces the default distribution list, so the ignore/suppression examples also include `default-rules.yaml`. Separate multiple files with commas.
 
 ## Distributing a Custom Ruleset
 
@@ -134,11 +147,12 @@ spark-submit \
   --master yarn \
   --deploy-mode cluster \
   --files /abs/path/my-rules.yaml#my-rules.yaml \
-  /abs/path/privyspark-<version>-all.jar \
+  "/abs/path/privyspark-<version>-all.jar" \
   scan --path hdfs:///data/input --output hdfs:///data/output --ruleset my-rules.yaml
 ```
 
 ## Output Paths
+
 - Default final results: `<output>/parquet/scan_results`
 - Default final errors: `<output>/parquet/scan_errors`
 - With `--output-format csv`: `<output>/csv/scan_results`, `<output>/csv/scan_errors`
@@ -147,4 +161,8 @@ spark-submit \
 
 `--output-format` can be repeated and supports `parquet`, `csv`, and `excel`. The default is `parquet`.
 
+Explicit formats replace the default selection. For example, `--output-format csv` writes CSV only. Use `--output-format parquet --output-format csv` when both are needed.
+
 The `_progress` directory is only for observability during long scans. Consumers should rely on the selected final report formats.
+
+For owner review after scanning, continue with the [offline review collector](../reference/offline-review-collector.md).

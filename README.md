@@ -1,30 +1,43 @@
 # PrivySpark
 
-PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재적 개인정보(PII)를 ruleset 기반 정규식과 타입별 strict validator로 탐지하고, 최종 결과를 `scan_results`와 `scan_errors` 리포트로 생성합니다.
+PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재적 개인정보(PII)를 ruleset 기반 정규식으로 탐지하고, 최종 결과를 `scan_results`와 `scan_errors` 리포트로 생성합니다.
 
 한국어 문서가 기준 문서입니다. 영어 문서는 공개 사용자용 대응본으로 함께 제공합니다.
 
 - 한국어 문서: [docs/ko/README.md](docs/ko/README.md)
 - English documentation: [docs/en/README.md](docs/en/README.md)
 
+[빠른 시작](#빠른-시작) · [릴리즈 다운로드](https://github.com/jonggeun2001/PrivySpark/releases) · [샘플](#샘플) · [문제 제보](https://github.com/jonggeun2001/PrivySpark/issues)
+
+## 목차
+
+- [핵심 기능](#핵심-기능)
+- [빠른 시작](#빠른-시작)
+- [지원 입력과 처리 규칙](#지원-입력과-처리-규칙)
+- [운영 예제와 상세 동작](#운영-예제와-상세-동작)
+- [오프라인 리뷰](#오프라인-리뷰)
+- [코드베이스 사용법](#코드베이스-사용법)
+- [문서 구조](#문서-구조)
+- [샘플](#샘플)
+- [소스 구조](#소스-구조)
+- [릴리즈](#릴리즈)
+- [기여](#기여)
+
 ## 핵심 기능
-- 입력 경로는 절대경로 또는 URI만 허용합니다.
-- 실제 파일명에 공백과 Spark glob 특수문자(`*`, `?`, `[`, `]`, `{`, `}`)가 포함되어도 schema detection과 scan reader에는 literal path로 전달합니다.
-- 지원 입력은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`와 archive 계열 `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`입니다.
-- `gzip`, `bzip2`로 감싼 direct text-style data file(`*.csv.gz`, `*.json.bz2` 등)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
-- CSV 계열 입력은 콤마뿐 아니라 탭, 세미콜론, 파이프, 콜론, ASCII 정보 구분자, 일부 다중문자 구분자(`||`, `|~|` 등)를 자동 감지해 컬럼 단위로 스캔합니다.
-- 무확장자 파일과 미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 판별하고, 안정적인 구분자와 헤더/데이터 구조가 확인되는 UTF-8 텍스트만 내부 `csv` 포맷으로 승격합니다. 그 외 바이너리처럼 보이지 않는 UTF-8 또는 EUC-KR 텍스트는 내부 `text` 포맷으로 정규화해 스캔합니다.
-- 0바이트 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 건너뜁니다.
-- password-protected archive, multi-volume RAR, RAR5 archive는 `scan_errors`에 명시적으로 기록합니다.
-- row sampling(`--sample-ratio`)과 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있고, file sampling은 같은 그룹/파일 집합에서 안정적인 해시 기반 subset을 선택합니다. `--file-sample-min-files`로 파일 샘플링을 적용할 최소 그룹 크기(기본 `10`)를 조정할 수 있습니다.
-- `--ignore`, `--ignore-file`로 gitignore 스타일 glob 패턴을 지정해 파일/아카이브 엔트리를 pre-scan 전에 제외할 수 있습니다.
-- ruleset `suppressions:` 또는 `--suppress`, `--suppression-file`로 특정 `(column, pii_type)` 조합만 결과에서 제외할 수 있습니다.
-- `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 기본 `<output>/review/review.html`을 생성할 수 있습니다. `--review-html-dir`을 지정하면 해당 디렉토리 아래 `review.html`로 출력 위치를 바꿀 수 있습니다. review HTML은 파일별 최대 2MB로 제한되며, 초과 시 `review.html` 인덱스와 `review-part-0001.html` 형식의 part 파일로 분할됩니다. 회수한 response JSON은 다음 `scan --review-state-root` 시작 시 자동 수집되어 누적 allowlist/action plan에 반영됩니다.
-- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress와 현재 실행 중인 작업의 `in-flight` marker를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다. Spark application이 `FAILED`로 끝나는 미복구 group/file 실패에서는 당시 marker를 보존합니다.
-- `scan_results`에는 집계 지표, `non_empty_value_count`, `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
-- Hive Metastore JDBC 옵션을 지정하면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다. 입력 `--path`가 table-level `LOCATION`과 정확히 같고 ignore 매치가 없으면 해당 테이블은 물리 파일별 reader 대신 `spark.table("db.table")`로 읽어 테이블 단위 finding을 생성합니다. 최종 `scan_results`는 Hive 매핑이 있는 결과를 `hive_table_fqn`, 컬럼, 개인정보 유형 단위로 묶고 `aggregated_*` 필드와 review scope 파일 목록을 함께 기록합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다.
+
+| 기능 | 제공하는 동작 |
+| --- | --- |
+| Spark 배치 스캔 | 파일 발견, 포맷 판별, 스키마 그룹화, 병렬 탐지와 실패 리포트 |
+| 다양한 입력 | CSV/JSON, Parquet/ORC/Avro, Excel 시트, archive와 텍스트 fallback |
+| 규칙 기반 탐지 | 기본 PII 규칙, 커스텀 YAML, 컬럼 힌트와 suppression |
+| 샘플링과 관측 | 행/파일 샘플링, 단계별 로그, progress JSONL과 실행 중 marker |
+| Hive 연계 | JDBC LOCATION 매핑, exact table-root 스캔, 테이블 단위 결과 집계 |
+| 리포트와 담당자 검토 | Parquet/CSV/Excel, 서버 없는 HTML 리뷰, CSV/TSV 편집, recurring 오탐 제외와 정탐 조치 계획 |
 
 ## 빠른 시작
+
+저장소 루트에서 실행합니다. Spark `3.5.3` / Scala `2.12` 기반 YARN cluster와 `spark-submit`이 필요합니다. 빌드·테스트에는 JDK 17을 사용하고 `JAVA_HOME`을 설정합니다. JVM 바이트코드 타겟은 `1.8`이며 Gradle 실행용 JDK와 구분합니다. 자세한 전제 조건은 [빠른 시작 문서](docs/ko/getting-started/quick-start.md)에 있습니다.
+
 빌드:
 
 ```bash
@@ -34,10 +47,46 @@ PrivySpark는 Spark 기반 배치 스캐너입니다. 데이터셋에서 잠재�
 테스트:
 
 ```bash
-./gradlew test
+bash scripts/verify-worktree.sh
 ```
 
-YARN cluster 실행:
+전체 검증은 Scala/Spark 테스트와 브라우저 리뷰 로직 테스트를 실행합니다. JavaScript 테스트에는 Node.js 18 이상이 필요하며, 스캐너 실행에는 필요하지 않습니다.
+
+YARN cluster에서 첫 스캔:
+
+```bash
+bin/privyspark-submit scan \
+  --path hdfs:///data/input \
+  --output hdfs:///data/privyspark-output \
+  --ruleset default \
+  --sample-ratio 0.2
+```
+
+기본 결과는 `<output>/parquet/scan_results`, 오류는 `<output>/parquet/scan_errors`에 생성됩니다. 탐지 결과에는 검출 조각과 앞뒤 최대 50자 문맥의 원문 샘플이 포함됩니다. [샘플 저장 정책](docs/ko/reference/reports-and-errors.md#샘플-값-저장-정책)을 확인하고, 외부 검토용 HTML은 기본 `masked` 또는 `none` 표시 모드를 사용합니다.
+
+이미 받은 release JAR를 사용하려면 `PRIVYSPARK_APP_JAR=/abs/path/privyspark-<tag>-all.jar`로 지정합니다. 제출 스크립트는 기본적으로 `config/rules/default.yaml#default-rules.yaml`을 배포하며 `--packages`를 사용하지 않습니다. Spark 런타임은 클러스터에서 제공하고 앱 의존성은 fat JAR에 포함합니다.
+
+## 지원 입력과 처리 규칙
+
+- 입력 경로는 절대경로 또는 URI만 허용합니다.
+- 실제 파일명에 공백과 Spark glob 특수문자(`*`, `?`, `[`, `]`, `{`, `}`)가 포함되어도 schema detection과 scan reader에는 literal path로 전달합니다.
+- 지원 입력은 `csv`, `json/jsonl/ndjson`, `parquet`, `orc`, `avro`, `xlsx`와 archive 계열 `zip`, `jar`, `tar`, `tar.gz/tgz`, `tar.bz2/tbz2`, `tar.xz/txz`, `tar.zst/tzst`, `7z`, `rar`입니다.
+- `gzip`, `bzip2`로 감싼 direct text-style data file(`*.csv.gz`, `*.json.bz2` 등)은 원본 경로를 그대로 Spark/Hadoop reader에 전달합니다.
+- CSV 계열 입력은 콤마뿐 아니라 탭, 세미콜론, 파이프, 콜론, ASCII 정보 구분자, 일부 다중문자 구분자(`||`, `|~|` 등)를 자동 감지해 컬럼 단위로 스캔합니다.
+- `pdf`, `jpg` 등 probe 제외 확장자를 뺀 무확장자/미지원 확장자 파일은 `parquet`/`orc` 매직바이트를 우선 판별하고, 안정적인 구분자와 헤더/데이터 구조가 확인되는 UTF-8 텍스트만 내부 `csv` 포맷으로 승격합니다. 그 외 바이너리처럼 보이지 않는 UTF-8 또는 EUC-KR 텍스트는 내부 `text` 포맷으로 정규화해 스캔합니다.
+- 0바이트 파일과 0바이트 archive entry는 포맷 판별과 오류 리포트 대상에서 제외하고 건너뜁니다.
+- password-protected archive, multi-volume RAR, RAR5 archive는 `scan_errors`에 명시적으로 기록합니다.
+- row sampling(`--sample-ratio`)과 file sampling(`--file-sample-ratio`)을 분리해 제어할 수 있고, file sampling은 같은 그룹/파일 집합에서 안정적인 해시 기반 subset을 선택합니다. `--file-sample-min-files`로 파일 샘플링을 적용할 최소 그룹 크기(기본 `10`)를 조정할 수 있습니다.
+- `--ignore`, `--ignore-file`로 gitignore 스타일 glob 패턴을 지정해 파일/아카이브 엔트리를 pre-scan 전에 제외할 수 있습니다.
+- ruleset `suppressions:` 또는 `--suppress`, `--suppression-file`로 특정 `(column, pii_type)` 조합만 결과에서 제외할 수 있습니다.
+- `--review-state-root`로 누적 오프라인 리뷰 state를 적용하고 기본 `<output>/review/review.html`을 생성할 수 있습니다. `--review-html-dir`을 지정하면 해당 디렉토리 아래 `review.html`로 출력 위치를 바꿀 수 있습니다. review HTML은 파일별 최대 2MiB(2,097,152바이트)로 제한되며, 초과 시 `review.html` 인덱스와 `review-part-0001.html` 형식의 part 파일로 분할됩니다. 회수한 response JSON은 다음 `scan --review-state-root` 시작 시 자동 수집되어 누적 allowlist/action plan에 반영됩니다.
+- 실행 중에는 `<output>/_progress/<run_id>` 아래에 group/file 완료 단위 JSONL progress와 현재 실행 중인 group 작업의 `in-flight` marker를 남기고, 정상 종료 시 선택된 최종 출력 포맷으로 merge한 뒤 정리합니다. Spark application이 `FAILED`로 끝나는 미복구 group/file 실패에서는 당시 marker를 보존합니다.
+- `scan_results`에는 집계 지표, `non_empty_value_count`, `sample_raw_value`, `sample_matched_fragment` 1건을 저장합니다. `sample_raw_value`는 매치 주변 앞뒤 최대 50자 문맥만 남깁니다.
+- Hive Metastore JDBC 옵션을 지정하면 table `LOCATION`과 입력 파일 경로를 longest-prefix로 매칭해 `scan_results.hive_table_fqn`에 `db.table`을 기록합니다. 입력 `--path`가 table-level `LOCATION`과 정확히 같고 ignore 매치가 없으면 해당 테이블은 물리 파일별 reader 대신 `spark.table("db.table")`로 읽어 테이블 단위 finding을 생성합니다. 최종 `scan_results`는 Hive 매핑이 있는 결과를 `hive_table_fqn`, 컬럼, 개인정보 유형 단위로 묶고 `aggregated_*` 필드와 review scope 파일 목록을 함께 기록합니다. 기본 driver class는 `org.mariadb.jdbc.Driver`이며 `--hive-metastore-jdbc-driver-class` 또는 `spark.privyspark.hiveMetastore.jdbcDriverClass`로 변경할 수 있습니다.
+- row sampling은 전체 컬럼 값의 해시를 사용하는 결정적 선택입니다. 같은 값과 컬럼 순서는 같은 선택을 만들지만, 정확한 샘플 행 수는 보장하지 않습니다.
+- Hive exact table-root 경로는 `spark.table`에 row sampling만 적용하며 `--file-sample-ratio`는 적용하지 않습니다.
+
+## 운영 예제와 상세 동작
 
 ```bash
 PRIVYSPARK_DEBUG=info \
@@ -76,9 +125,21 @@ bin/privyspark-submit \
 
 자세한 실행 절차와 옵션은 [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/ko/operations/execution.md](docs/ko/operations/execution.md)에 정리돼 있습니다.
 
-서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 컬럼 헤더 정렬이 가능한 `review.html`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 스캔을 실행하는 방식입니다. 다음 `scan --review-state-root`는 스캔 본 작업 전에 자동으로 `inbox/*.json`을 수집하고, invalid response가 하나라도 있거나 collect lock이 이미 있으면 스캔을 시작하지 않고 실패합니다. HTML을 scan output 밖에 배치해야 하면 scan 실행에 `--review-html-dir /abs/reviews`를 추가합니다. Hive 매핑이 있는 finding은 같은 `hive_table_fqn`, 컬럼, 개인정보 유형이면 파티션/파일별로 반복 표시하지 않고 한 행으로 묶으며, 경로 옆 배지로 묶인 파티션/파일 수를 표시합니다. 탐지가 많아 HTML이 2MB를 넘으면 `review.html`은 part 목록 인덱스가 되고, 담당자는 각 `review-part-*.html`을 열어 응답 JSON을 각각 생성한 뒤 모두 inbox에 넣습니다. 같은 finding이 정탐으로 계속 검출되면 다음 리뷰 파일의 `기존 조치 상태` 컬럼에 이전 조치 계획과 예정일이 표시됩니다. Excel에서 대량 편집해야 하면 `review.html` 또는 각 part 파일의 `엑셀 편집용 CSV 다운로드`로 CSV를 내려받아 편집한 뒤, 사내 보안 솔루션이 CSV를 암호화한 경우 반드시 암호화 해제한 CSV를 `복호화한 CSV 불러오기`로 다시 가져옵니다. 파일 업로드 대신 Excel에서 전체 복사한 TSV 클립보드 내용을 붙여넣어 반영할 수 있으며, CSV 파일 업로드의 따옴표로 감싼 쉼표/줄바꿈과 TSV 붙여넣기의 큰따옴표로 감싼 줄바꿈 셀은 셀 내용으로 유지됩니다.
+## 오프라인 리뷰
+
+```bash
+bin/privyspark-submit scan \
+  --path hdfs:///data/input \
+  --output hdfs:///data/privyspark-output \
+  --review-state-root hdfs:///data/privyspark-review-state \
+  --review-sample-mode masked
+```
+
+서버 없이 담당자 검토를 받는 흐름은 스캔에 `--review-state-root`를 추가해 컬럼 헤더 정렬이 가능한 `review.html`을 만들고, 회수한 JSON을 `<review-state-root>/inbox`에 둔 뒤 다음 스캔을 실행하는 방식입니다. 다음 `scan --review-state-root`는 스캔 본 작업 전에 자동으로 `inbox/*.json`을 수집하고, invalid response가 하나라도 있거나 collect lock이 이미 있으면 스캔을 시작하지 않고 실패합니다. HTML을 scan output 밖에 배치해야 하면 scan 실행에 `--review-html-dir /abs/reviews`를 추가합니다. Hive 매핑이 있는 finding은 같은 `hive_table_fqn`, 컬럼, 개인정보 유형이면 파티션/파일별로 반복 표시하지 않고 한 행으로 묶으며, 경로 옆 배지로 묶인 파티션/파일 수를 표시합니다. 탐지가 많아 HTML이 2MiB를 넘으면 `review.html`은 part 목록 인덱스가 되고, 담당자는 각 `review-part-*.html`을 열어 응답 JSON을 각각 생성한 뒤 모두 inbox에 넣습니다. 같은 finding이 정탐으로 계속 검출되면 다음 리뷰 파일의 `기존 조치 상태` 컬럼에 이전 조치 계획과 예정일이 표시됩니다. Excel에서 대량 편집해야 하면 `review.html` 또는 각 part 파일의 `엑셀 편집용 CSV 다운로드`로 CSV를 내려받아 편집한 뒤, 사내 보안 솔루션이 CSV를 암호화한 경우 반드시 암호화 해제한 CSV를 `복호화한 CSV 불러오기`로 다시 가져옵니다. 파일 업로드 대신 Excel에서 전체 복사한 TSV 클립보드 내용을 붙여넣어 반영할 수 있으며, CSV 파일 업로드의 따옴표로 감싼 쉼표/줄바꿈과 TSV 붙여넣기의 큰따옴표로 감싼 줄바꿈 셀은 셀 내용으로 유지됩니다.
 
 자세한 구조는 [docs/ko/reference/offline-review-collector.md](docs/ko/reference/offline-review-collector.md)에 있습니다.
+
+`masked`는 검출 조각을 부분 마스킹하고 주변 문맥을 남깁니다. `none`은 HTML 및 여기서 내려받는 CSV/response JSON의 샘플 문자열을 비웁니다. 두 모드 모두 원본 `scan_results`의 샘플 저장 정책을 바꾸지 않습니다. `review apply`의 legacy exact 파일 생성 방식도 유지되지만, 현재 스캔의 오탐 제외는 recurring state를 사용합니다.
 
 ## 코드베이스 사용법
 
@@ -88,8 +149,11 @@ bin/privyspark-submit \
 # 저장소 기준 표준 검증
 bash scripts/verify-worktree.sh
 
-# 전체 테스트
+# Scala/Spark 테스트만 실행
 ./gradlew test
+
+# 브라우저 리뷰 로직 테스트만 실행 (Node.js 18 이상, 추가 패키지 없음)
+node --test src/test/js/*.test.cjs
 
 # fat JAR 재생성
 ./gradlew clean shadowJar
@@ -97,30 +161,34 @@ bash scripts/verify-worktree.sh
 
 - 로컬 개발과 CI 전 확인은 `bash scripts/verify-worktree.sh`를 기준으로 맞춥니다.
 - 스캔 실행 시 `--path`, `--output`은 절대경로 또는 URI만 허용합니다.
-- `--output-format`은 반복 지정 가능하고, 기본값은 `parquet`입니다. 지원값은 `parquet`, `csv`, `excel`입니다.
+- `--output-format`은 반복 지정 가능하고, 미지정 시에만 `parquet`를 사용합니다. 지원값은 `parquet`, `csv`, `excel`이며 명시한 형식만 생성합니다. Parquet와 CSV가 모두 필요하면 두 옵션을 함께 지정합니다.
 - `--suppress`는 반복 지정 가능하며 `column:pii_type` 형식입니다. `--suppression-file`은 같은 형식을 줄 단위로 읽고, ruleset `suppressions:`와 union으로 합쳐집니다.
 - Hive table 매핑은 `--hive-metastore-jdbc-url`, `--hive-metastore-user`, `--hive-metastore-password-file` 세 옵션을 모두 지정한 경우에만 활성화됩니다. 기본 JDBC driver class는 `org.mariadb.jdbc.Driver`이고, MySQL 등 다른 driver를 쓰면 `--hive-metastore-jdbc-driver-class <CLASS>` 또는 Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass`로 지정합니다. CLI 값이 Spark conf보다 우선합니다. JDBC driver JAR는 fat JAR에 포함하지 않으므로 cluster classpath에 두거나 `PRIVYSPARK_JARS=/path/to/driver.jar`로 함께 제출합니다. driver가 없거나 JDBC 접속/query가 실패하면 warning 후 `hive_table_fqn`은 빈 문자열로 남습니다. 입력 경로가 table-level `LOCATION`과 정확히 일치하는 경우 Spark Catalog에서도 같은 `db.table`을 resolve할 수 있어야 `spark.table` 기반 테이블 스캔이 동작합니다.
 - Shadow fat JAR는 `commons-compress`를 앱 내부 패키지로 relocate합니다. 따라서 Spark/Hadoop 런타임의 구버전 `commons-compress`가 먼저 잡혀도 POI 기반 Excel report write 경로가 런타임 `NoSuchMethodError`에 영향을 받지 않습니다.
 - 기본 ruleset은 [config/rules/default.yaml](config/rules/default.yaml)에 있습니다.
 
 ### 결과를 확인하는 위치
+
 - 기본 최종 리포트는 `<output>/parquet/scan_results`, `<output>/parquet/scan_errors`에 저장됩니다.
-- `--output-format csv`를 지정하면 `<output>/csv/scan_results`, `<output>/csv/scan_errors`가 추가로 생성됩니다.
-- `--output-format excel`을 지정하면 `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`가 추가로 생성됩니다.
+- `--output-format csv`를 지정하면 `<output>/csv/scan_results`, `<output>/csv/scan_errors`가 생성됩니다.
+- `--output-format excel`을 지정하면 `<output>/excel/scan_results.xlsx`, `<output>/excel/scan_errors.xlsx`가 생성됩니다.
 - Hive 매핑이 있는 최종 `scan_results` row는 테이블 단위로 묶일 수 있으며, 이때 `file_identifier`는 테이블 루트 식별자이고 포함된 파일은 `review_scope_file_identifiers`와 `review_scope_file_fingerprints`에 보존됩니다.
-- 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓이고, 실행 중인 group/file/allowlist 작업은 `in-flight/*.json` marker로 관찰할 수 있습니다.
+- 실행 중 progress는 `<output>/_progress/<run_id>` 아래 JSONL로 쌓이고, 실행 중인 group/allowlist 작업은 `in-flight/*.json` marker로 관찰할 수 있습니다. file marker는 기본 off이며 `spark.privyspark.progress.fileMarker.enabled=true`로 켭니다.
 - `in-flight` marker 파일명은 파일명에 안전한 UTF-8 문자/숫자를 보존하고, 경로 구분자와 그 외 문자는 `_`로 치환합니다.
 - Spark application이 `FAILED`로 종료된 경우 미복구 group/file 실패 marker는 삭제하지 않아 마지막 진행 중 작업을 확인할 수 있습니다.
 - `_progress`는 진행 중 임시 경로이고, 최종 출력 계약은 선택된 `parquet`, `csv`, `excel` 산출물입니다.
 - 샘플 값 정책과 리포트 컬럼 의미는 [docs/ko/reference/reports-and-errors.md](docs/ko/reference/reports-and-errors.md)에서 확인합니다.
 
 ### 어디를 수정해야 하는지 빠르게 찾기
+
 - `src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala`
-  - 입력 확장, 그룹화, 스캔 오케스트레이션, progress/최종 리포트 저장
+  - CLI 명령 분기, SparkSession 생명주기, ScanPipeline 실행과 review hook 연결
+- `src/main/scala/io/github/jonggeun2001/privyspark/scan/ScanPipeline.scala`
+  - 입력 확장/그룹 스캔 조정, progress 생명주기, 최종 리포트와 리뷰 HTML 연결
 - `src/main/scala/io/github/jonggeun2001/privyspark/cli/Cli.scala`
   - CLI 파싱과 실행 옵션 정의
 - `src/main/scala/io/github/jonggeun2001/privyspark/detect/DetectionAggregator.scala`
-  - 규칙별 집계, sample 값 추출, fallback regroup 전략
+  - 규칙별 집계 API, sample 값 추출, DetectionMetrics/DetectionBatches 연결
 - `src/main/scala/io/github/jonggeun2001/privyspark/format/FormatDetector.scala`
   - 지원 포맷 판별
 - `src/main/scala/io/github/jonggeun2001/privyspark/config/RulesetLoader.scala`
@@ -129,47 +197,68 @@ bash scripts/verify-worktree.sh
   - ruleset, suppression, 결과, 오류 모델
 - `src/test/scala/io/github/jonggeun2001/privyspark`
   - 기능별 ScalaTest 스펙
+- `src/test/js/review.test.cjs`
+  - 실제 `review.js`의 CSV/TSV 파싱, 판정/기한 검증, 정렬, 입력 상태 테스트
 
 ### 수정 흐름 추천
-1. 현재 상태를 `./gradlew test` 또는 `bash scripts/verify-worktree.sh`로 먼저 확인합니다.
+
+1. 현재 상태를 `bash scripts/verify-worktree.sh`로 먼저 확인합니다.
 2. ruleset 변경이면 [config/rules/default.yaml](config/rules/default.yaml)과 관련 문서를 함께 수정합니다.
-3. 입력 포맷 처리 변경이면 `format/FormatDetector.scala`, `scan/DirectoryScanner.scala`, `PrivySparkApp.scala`, 입력 포맷 문서를 같이 봅니다.
+3. 입력 포맷 처리 변경이면 `format/FormatDetector.scala`, `scan/DirectoryScanner.scala`, `scan/ScanPipeline.scala`, `PrivySparkApp.scala`, 입력 포맷 문서를 같이 봅니다.
 4. 집계나 출력 스키마 변경이면 `detect/DetectionAggregator.scala`, `model/Models.scala`, `report/ReportWriter.scala`, 관련 테스트를 같이 봅니다.
 5. 변경 후 테스트를 다시 돌리고, 필요하면 `bin/privyspark-submit`으로 실제 스캔을 재현합니다.
 
+패키지 책임과 호출 흐름의 탐색 인덱스는 [코드 맵](docs/dev/CODE_MAP.md)에서 확인합니다.
+
 ## 문서 구조
+
 - 시작하기: [docs/ko/getting-started/quick-start.md](docs/ko/getting-started/quick-start.md), [docs/en/getting-started/quick-start.md](docs/en/getting-started/quick-start.md)
 - 제품/기능 개요: [docs/ko/reference/overview.md](docs/ko/reference/overview.md), [docs/en/reference/overview.md](docs/en/reference/overview.md)
 - 입력 포맷과 정규화: [docs/ko/reference/input-formats.md](docs/ko/reference/input-formats.md), [docs/en/reference/input-formats.md](docs/en/reference/input-formats.md)
 - ruleset과 탐지 모델: [docs/ko/reference/rules-and-detection.md](docs/ko/reference/rules-and-detection.md), [docs/en/reference/rules-and-detection.md](docs/en/reference/rules-and-detection.md)
 - 출력과 오류 리포트: [docs/ko/reference/reports-and-errors.md](docs/ko/reference/reports-and-errors.md), [docs/en/reference/reports-and-errors.md](docs/en/reference/reports-and-errors.md)
-- 오프라인 리뷰 collector: [docs/ko/reference/offline-review-collector.md](docs/ko/reference/offline-review-collector.md)
+- 오프라인 리뷰 collector: [docs/ko/reference/offline-review-collector.md](docs/ko/reference/offline-review-collector.md), [docs/en/reference/offline-review-collector.md](docs/en/reference/offline-review-collector.md)
+- Legacy review apply: [docs/ko/reference/review-workflow.md](docs/ko/reference/review-workflow.md), [docs/en/reference/review-workflow.md](docs/en/reference/review-workflow.md)
 - 아키텍처: [docs/ko/architecture/overview.md](docs/ko/architecture/overview.md), [docs/en/architecture/overview.md](docs/en/architecture/overview.md)
 - 운영과 릴리즈: [docs/ko/operations/execution.md](docs/ko/operations/execution.md), [docs/en/operations/execution.md](docs/en/operations/execution.md)
 - 성능 가이드: [docs/ko/operations/performance.md](docs/ko/operations/performance.md), [docs/en/operations/performance.md](docs/en/operations/performance.md)
 
 ## 샘플
+
 - 재현 가능한 입력 케이스 번들은 [samples/input-cases/README.md](samples/input-cases/README.md)에 있습니다.
 - 오프라인 리뷰 응답 HTML 예시는 [samples/offline-review/review-response-example.html](samples/offline-review/review-response-example.html)에 있습니다.
 - 회수한 오프라인 리뷰 응답 JSON을 파일 선택, 드래그앤드롭, 원문 붙여넣기로 확인하고 대상/검출비율 정렬, 샘플/추출값 확인, 검출비율 50% 초과 오탐 강조를 제공하는 운영자 HTML은 [samples/offline-review/review-response-viewer.html](samples/offline-review/review-response-viewer.html)에 있습니다.
 - `./gradlew generateSampleDatasets`는 현재 입력 처리 경로를 재현하는 샘플 케이스를 다시 생성합니다.
 - `./gradlew packageSampleDatasets`는 샘플 번들을 `build/distributions/privyspark-sample-datasets.zip`으로 패키징하고, 릴리즈 자산에서는 `privyspark-<tag>-sample-datasets.zip`으로 배포합니다.
+- 예시 HTML 사용 안내: [samples/offline-review/README.md](samples/offline-review/README.md)
 
 ## 소스 구조
-- `src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala`: 입력 확장, 그룹화, 스캔 오케스트레이션, progress/최종 리포트 저장
+
+- `src/main/scala/io/github/jonggeun2001/privyspark/PrivySparkApp.scala`: CLI 명령 분기, SparkSession 생명주기, ScanPipeline 실행과 review hook 연결
+- `src/main/scala/io/github/jonggeun2001/privyspark/scan/ScanPipeline.scala`: 스캔 파이프라인, progress/최종 리포트와 리뷰 hook 조정
 - `src/main/scala/io/github/jonggeun2001/privyspark/cli/`: CLI 파싱과 경로 검증
 - `src/main/scala/io/github/jonggeun2001/privyspark/scan/`: 입력 확장, pre-scan, 그룹 스캔, 캐시
 - `src/main/scala/io/github/jonggeun2001/privyspark/format/`: 포맷 판별, CSV 추론, workbook 헬퍼
 - `src/main/scala/io/github/jonggeun2001/privyspark/hive/`: Hive Metastore JDBC table location lookup
-- `src/main/scala/io/github/jonggeun2001/privyspark/detect/`: 규칙 집계와 strict validator
+- `src/main/scala/io/github/jonggeun2001/privyspark/detect/`: 정규식 metric 계획, 집계, sample 추출과 fallback
 - `src/main/scala/io/github/jonggeun2001/privyspark/report/`: 출력 포맷, JSON codec, 리포트 쓰기
 - `src/main/scala/io/github/jonggeun2001/privyspark/review/`: review apply, offline review HTML, collector, allowlist 처리
 - `src/main/scala/io/github/jonggeun2001/privyspark/fsio/`: staging 경로 관리와 재시도 I/O
 - `src/main/scala/io/github/jonggeun2001/privyspark/util/`: driver 로그, 병렬도, 식별자 유틸리티
 - `src/main/scala/io/github/jonggeun2001/privyspark/config/RulesetLoader.scala`: 기본/외부 ruleset 로딩과 검증
 - `src/main/scala/io/github/jonggeun2001/privyspark/model/Models.scala`: ruleset, 결과, 오류 모델
+- `src/main/scala/io/github/jonggeun2001/privyspark/progress/`: progress JSONL, heartbeat, in-flight marker, stale run 정리
+- `src/main/scala/io/github/jonggeun2001/privyspark/model/ScanPlanModels.scala`: 입력/그룹 스캔 계획과 결과 경로 ADT
+- `src/main/resources/review/`: 오프라인 HTML 템플릿과 브라우저 `review.js`
 
 ## 릴리즈
+
 - 태그 `v*` 또는 bare semver(`0.1.3`) 푸시 시 GitHub Actions가 Shadow fat JAR를 빌드해 Release 자산으로 업로드합니다.
 - 결과물은 `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, `privyspark-<tag>-review-response-viewer.html` 형식입니다.
 - `default-rules.yaml`은 YARN 제출 시 함께 배포할 수 있는 예시 ruleset 파일입니다.
+- 다운로드와 변경 이력: [GitHub Releases](https://github.com/jonggeun2001/PrivySpark/releases). 앱 버전의 진실 소스는 [build.gradle.kts](build.gradle.kts)이며 문서에 고정 버전을 중복 관리하지 않습니다.
+- 빌드·업로드 절차는 [.github/workflows/release-artifact.yml](.github/workflows/release-artifact.yml)에 정의합니다.
+
+## 기여
+
+문제 제보에는 재현 명령, 입력 포맷, 기대/실제 동작과 관련 로그를 포함합니다. 재현 데이터는 실제 개인정보 대신 합성 데이터를 사용합니다. 변경 PR에는 목적·범위, CLI/출력 스키마 영향, `bash scripts/verify-worktree.sh` 결과를 적고 영향이 있는 한국어·영어 문서를 함께 갱신합니다. 커밋은 `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:` 형식을 사용합니다. 세부 규칙은 [AGENTS.md](AGENTS.md), 코드 진입점은 [코드 맵](docs/dev/CODE_MAP.md)을 참고합니다.

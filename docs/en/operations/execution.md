@@ -1,13 +1,31 @@
 # Execution and Operations
 
 ## Execution Model
-- The public commands are `privyspark scan`, `privyspark review apply`, and `privyspark review collect`.
+
+- The public commands are `bin/privyspark-submit scan`, `bin/privyspark-submit review apply`, and `bin/privyspark-submit review collect`.
 - Input and output paths must be absolute paths or URIs.
 - Input filenames may contain spaces and Spark glob-special characters (`*`, `?`, `[`, `]`, `{`, `}`); PrivySpark treats them as literal filenames. Glob syntax applies only to `--ignore` and `--ignore-file` patterns.
 - The default target runtime is Spark on YARN cluster mode.
 - The build artifact is a Shadow fat JAR (`*-all.jar`).
 
+## Submission Script and Configuration Files
+
+Run `bin/privyspark-submit` from the repository root. This Bash script invokes `spark-submit --master yarn --deploy-mode cluster`. Application arguments follow the JAR; do not append Spark options such as `--conf` or `--files` there. For Spark options not exposed by the script, use the [direct spark-submit example](../getting-started/quick-start.md#distributing-a-custom-ruleset).
+
+| Environment variable | Behavior and default |
+| --- | --- |
+| `PRIVYSPARK_APP_JAR` | Fat JAR to submit; otherwise the first `build/libs/privyspark-*-all.jar` |
+| `PRIVYSPARK_SPARK_FILES` | Comma-separated files/aliases passed to Spark `--files`; defaults to `config/rules/default.yaml#default-rules.yaml`. An explicit value replaces that list |
+| `PRIVYSPARK_JARS` | Additional JARs passed to Spark `--jars`; empty by default |
+| `PRIVYSPARK_PACKAGES` | Maven coordinates passed to Spark `--packages`; empty by default, so offline submission needs no package resolution |
+| `PRIVYSPARK_DEBUG` | Forwarded to the driver as `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG` when set |
+
+`--ruleset default` uses the first existing driver-local file in this order: `PRIVYSPARK_DEFAULT_RULESET`, `default-rules.yaml`, `config/rules/default.yaml`. Custom rulesets are read as local files on the driver, so distribute them with `--files` and use the relative alias. `--ignore-file` and `--suppression-file` support distributed local files and Hadoop URIs. `--allowlist`, `--review-state-root`, `--review-html-dir`, and `--hive-metastore-password-file` require an absolute path or URI, just like input/output paths.
+
+The driver reads `PRIVYSPARK_DEFAULT_RULESET` and timestamp environment variables. For YARN cluster mode, pass them with direct `spark-submit --conf spark.yarn.appMasterEnv.<NAME>=<value>`. The wrapper automatically forwards only `PRIVYSPARK_DEBUG`.
+
 ## `scan` CLI Arguments
+
 - `--path <ABS_PATH_OR_URI>`: input path
 - `--output <ABS_PATH_OR_URI>`: output path
 - `--output-format <parquet|csv|excel>`: repeatable final output format option, default `parquet`
@@ -22,8 +40,8 @@
 - `--excel-byte-array-max-override <INT>`: Apache POI byte array allocation max override, default `300000000`, `> 0`
 - `--ignore <PATTERN>`: repeatable gitignore-style glob ignore pattern
 - `--ignore-file <PATH>`: line-based ignore pattern file path, with `#` comments and blank lines ignored
-- `--allowlist <ABS_PATH_OR_URI>`: false-positive suppression allowlist JSONL path
-- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Before the scan starts, collects `<review-state-root>/inbox/*.json`, updates `<review-state-root>/current`, then applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html` by default. Review HTML files are capped at 2MB each; oversized reviews are split into a `review.html` index and `review-part-0001.html` style part files
+- `--allowlist <ABS_PATH_OR_URI>`: recurring false-positive allowlist JSONL path. Combined with the state allowlist when `--review-state-root` is also set; legacy exact entries do not suppress findings
+- `--review-state-root <ABS_PATH_OR_URI>`: cumulative offline-review state root. Before the scan starts, collects `<review-state-root>/inbox/*.json`, updates `<review-state-root>/current`, then applies `<review-state-root>/current/allowlist.jsonl` and writes `<output>/review/review.html` by default. Review HTML files are capped at 2MiB each; oversized reviews are split into a `review.html` index and `review-part-0001.html` style part files
 - `--review-html-dir <ABS_PATH_OR_URI>`: offline review HTML output directory. Defaults to `<output>/review`, with `review.html` fixed as the entry filename
 - `--review-sample-mode <raw|masked|none>`: sample display mode for `review.html`, default `masked`
 - `--suppress <column:pii_type>`: repeatable false-positive suppression rule
@@ -33,7 +51,12 @@
 - `--hive-metastore-password-file <ABS_PATH_OR_URI>`: file whose first line contains the password. `hdfs://`, `s3a://`, `file://`, and absolute paths are supported
 - `--hive-metastore-jdbc-driver-class <CLASS>`: Hive Metastore JDBC driver class. When the CLI value is omitted, PrivySpark uses the `spark.privyspark.hiveMetastore.jdbcDriverClass` Spark conf; when both are omitted, it defaults to `org.mariadb.jdbc.Driver`
 
+Explicit `--output-format` values replace the default selection: `--output-format csv` writes CSV only; `--output-format parquet --output-format csv` writes both.
+
+`--review-html-dir` and `--review-sample-mode` take effect when `--review-state-root` enables HTML generation. The HTML directory must be a directory path; `.html`, `.htm`, `.xlsm`, and `.xlsx` file paths are rejected.
+
 ## `review apply` CLI Arguments
+
 - `--scan-results <ABS_PATH_OR_URI>`: edited `scan_results` input path. `csv`, `parquet`, and `xlsx` (`scan_results` sheet) are supported.
 - `--input-root <ABS_PATH_OR_URI>`: original scan input root
 - `--allowlist <ABS_PATH_OR_URI>`: allowlist JSONL path to create or update
@@ -41,11 +64,16 @@
 - `--dry-run`: calculates staged entries without writing the output file
 
 ## `review collect` CLI Arguments
+
+- `--scan-results <ABS_PATH_OR_URI>`: deprecated optional compatibility argument. Not used for collection decisions, but validated as an absolute path/URI when provided
 - `--review-state-root <ABS_PATH_OR_URI>`: state root where response JSON files are read and cumulative review state is written
 
-`review collect` reads only `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`. Review owners can create JSON directly in `review.html`; when the review is split into 2MB part files, they create one response JSON from each `review-part-*.html` file and place all returned JSON files in the inbox. When Hive mapping is available, review rows with the same `hive_table_fqn`, column, and PII type are grouped into one table-level finding instead of repeated per partition or file, and the generated response contains one entry for that table-level finding. For Excel editing, they download a CSV from the review file, edit it, import the decrypted CSV back into the page, or paste the TSV clipboard text copied from Excel, and then create the JSON. CSV upload preserves quoted commas and embedded line breaks as cell content. TSV paste is applied using tabs and row breaks, and embedded line breaks remain cell content when Excel wraps that cell in double quotes. `--scan-results` is no longer required. A later scan with the same `--review-state-root` runs this collect step automatically before scanning. If any response is invalid, current state is not updated and the command fails. If `<review-state-root>/.collect.lock` already exists, the command fails to prevent concurrent state updates; the lock is removed after collect finishes.
+`review collect` reads only `<review-state-root>/inbox/*.json` and updates `allowlist.jsonl`, `action_plan.jsonl`, `finding_status.jsonl`, and `response_ledger.jsonl` under `<review-state-root>/current`. Review owners can create JSON directly in `review.html`; when the review is split into 2MiB part files, they create one response JSON from each `review-part-*.html` file and place all returned JSON files in the inbox. When Hive mapping is available, review rows with the same `hive_table_fqn`, column, and PII type are grouped into one table-level finding instead of repeated per partition or file, and the generated response contains one entry for that table-level finding. For Excel editing, they download a CSV from the review file, edit it, import the decrypted CSV back into the page, or paste the TSV clipboard text copied from Excel, and then create the JSON. CSV upload preserves quoted commas and embedded line breaks as cell content. TSV paste is applied using tabs and row breaks, and embedded line breaks remain cell content when Excel wraps that cell in double quotes. `--scan-results` is no longer required. A later scan with the same `--review-state-root` runs this collect step automatically before scanning. If any response is invalid, current state is not updated and the command fails. If `<review-state-root>/.collect.lock` already exists, the command fails to prevent concurrent state updates; the lock is removed after collect finishes.
+
+See the [offline review collector](../reference/offline-review-collector.md) for inbox recollection, audit retention, lock recovery, and per-file state replacement limits.
 
 ## Ignore Patterns
+
 - Patterns without `/` match basenames. Example: `_SUCCESS`, `*.crc`
 - Patterns with `/` match input-root-relative paths. Example: `backup/**`, `logs/2025/*.gz`
 - A leading `/` is treated as an input-root anchor. Example: `/backup/**`, `/logs/`
@@ -59,16 +87,18 @@ The ignore filter runs before pre-scan so low-value inputs such as `_SUCCESS`, `
 Allowlists are intentionally different from ignore rules. Ignore rules skip files before scanning, while allowlists suppress only reviewed recurring false positives after detection. When Hive mapping exists the key is `(scan_path, hive_table_fqn, column_name, pii_type)`; otherwise the key is `(scan_path, file_identifier_pattern, column_name, pii_type)`. New recurring responses require exact `column_name` and `pii_type` values; `*` wildcards are rejected for those fields.
 
 ## Suppression
+
 - Suppression removes only a specific `(column, pii_type)` result pair. Column names are matched case-insensitively by exact equality.
 - `--suppress` only accepts the `column:pii_type` format.
 - `--suppression-file` is read through Hadoop `FileSystem`. In YARN cluster mode, distribute client-local files first with `--files` or `PRIVYSPARK_SPARK_FILES`, then reference the distributed alias.
 - CLI suppressions are union-merged with ruleset YAML `suppressions:`.
 
 ## Hive Table Lookup
+
 - Hive table lookup is enabled only when `--hive-metastore-jdbc-url`, `--hive-metastore-user`, and `--hive-metastore-password-file` are all provided. Supplying only one or two options is a CLI error. Supplying none logs `hive_lookup_inactive`, and `hive_table_fqn` remains `""`.
 - When enabled, the driver queries Hive Metastore `DBS`/`TBLS`/`SDS` once through the configured JDBC driver class and broadcasts a table-level `LOCATION` prefix index. If a result row's physical input path falls under a table prefix, `scan_results.hive_table_fqn` is filled with `db.table`. Final `scan_results` groups partition/file rows with the same `hive_table_fqn`, column, and PII type into one table-level row, summing `non_empty_value_count` before recalculating ratios.
 - When the input `--path` exactly matches a table-level `LOCATION` and discovery finds no `--ignore` matches, PrivySpark reads that table with `spark.table("db.table")` instead of the pre-scan schema/file batch reader, so raw progress and final parquet/csv/excel results use the table-root identifier. Direct partition child paths, or exact table roots with ignored paths, continue to use the existing physical file scan path. This mode requires Spark Catalog to resolve the same `db.table`; resolution failures are recorded as scan errors for that table.
-- The password file is read through Hadoop `FileSystem`. Shared URIs such as `hdfs://` do not require extra YARN `--files` distribution. Client-local files must still be distributed first with `--files` or `PRIVYSPARK_SPARK_FILES`, then referenced by the distributed alias.
+- The password file is read through Hadoop `FileSystem`. Shared URIs such as `hdfs://` do not require extra YARN `--files` distribution. `--hive-metastore-password-file` rejects a plain relative alias. A client-local path is not automatically available on the cluster driver; use a shared HDFS/object-store URI or an absolute path/`file:///` URI that the driver can actually read.
 - JDBC driver JARs are not packaged in the Shadow JAR. The default driver class is `org.mariadb.jdbc.Driver`; set `--hive-metastore-jdbc-driver-class` or Spark conf `spark.privyspark.hiveMetastore.jdbcDriverClass` when using another driver. CLI values take precedence over Spark conf. To use Hive table lookup, install the driver on the cluster common classpath, or submit it through Spark `--jars` by setting `PRIVYSPARK_JARS=/path/to/driver.jar`. In environments that allow Maven package resolution, `PRIVYSPARK_PACKAGES=org.mariadb.jdbc:mariadb-java-client:3.4.1` is also supported.
 - For MariaDB/MySQL compatible drivers or JDBC URLs, PrivySpark applies `connectTimeout=5000` and `socketTimeout=30000` when the URL does not define them. For other drivers, configure driver-specific timeout parameters directly in the JDBC URL.
 - If JDBC connection, password-file reading, or metastore query fails, PrivySpark logs `hive_lookup_disabled` and continues with an empty mapping. Successful index creation logs `hive_lookup_ready size=<N>`.
@@ -76,6 +106,7 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 - Partition-level `LOCATION` overrides are not supported yet. PrivySpark uses only table-level `LOCATION`.
 
 ## Parallelism
+
 - CLI values are passed directly into application logic.
 - When omitted, PrivySpark uses `spark.privyspark.preScanParallelism`, `spark.privyspark.groupParallelism`, `spark.privyspark.fileParallelism`, or the application defaults (`32`, `16`, `8`).
 - Pre-scan parallelism covers directory discovery, input expansion, format probing, and group schema split.
@@ -87,11 +118,13 @@ Allowlists are intentionally different from ignore rules. Ignore rules skip file
 These settings do not directly guarantee executor fan-out. Actual executor distribution still depends on input partitioning, Spark scheduling, and dynamic allocation backlog.
 
 ## Retry and HDFS Refresh
+
 - File read retry now attempts up to three times and uses exponential backoff from a 200ms base with jitter, reducing simultaneous retry waves from many driver threads.
 - Before retrying, Spark catalog refresh targets the original file paths by default. Parent directory refresh is disabled by default because it can trigger expensive NameNode `listStatus` calls on large directories.
 - Set `spark.privyspark.retry.refreshParent=true` to opt back into parent directory refresh if an environment depends on the previous behavior.
 
 ## Excel Reader Configuration
+
 - During `xlsx` pre-scan, the driver lightly parses workbook metadata and header row XML to build visible sheet lists and schema signatures; sheet body row/cell contents are handled by the executor-side StAX streamer.
 - `--excel-max-rows-in-memory` is retained for CLI compatibility with the previous spark-excel scan reader. When explicitly set, PrivySpark logs `excel_max_rows_in_memory_unused` and does not use the value for scan reads.
 - The `spark.privyspark.excel.maxRowsInMemory` Spark conf also no longer affects executor-side `xlsx` scans.
@@ -102,7 +135,8 @@ These settings do not directly guarantee executor fan-out. Actual executor distr
 - The Shadow fat JAR relocates `commons-compress` into a PrivySpark-internal package. This keeps POI-based Excel report write paths on the bundled compatible copy even when Spark/Hadoop exposes an older `commons-compress` first.
 
 ## Sampling
-- `--sample-ratio` is non-deterministic row sampling.
+
+- `--sample-ratio` uses deterministic `xxhash64` buckets over all columns cast to strings. With the same values and column order, it selects the same rows; duplicate rows with identical values are selected or excluded together. The ratio is a target, not an exact row-count guarantee.
 - When `sampleRatio >= 1.0`, no row sampling is applied.
 - `--file-sample-ratio` selects a stable hash-ranked subset of files inside both batch scan and file-fallback group scans.
 - File sampling only applies when the group has more files than `--file-sample-min-files`. Groups at or below the threshold still scan every file.
@@ -112,7 +146,24 @@ These settings do not directly guarantee executor fan-out. Actual executor distr
 
 Stable hash-ranked file sampling keeps the same subset for the same group and file set, which prevents review scopes from drifting between runs when data has not changed. It still avoids size weighting because the operational concern is file-level concentration risk; size-weighted sampling would bias toward large files and could amplify concentration instead of reflecting it.
 
+Hive exact table-root scans apply row sampling to `spark.table` and do not use `--file-sample-ratio` or `--file-sample-min-files`. File sampling applies to the physical batch/file scan paths described above.
+
+## Driver Exit Codes
+
+The following table describes the exit codes of the `PrivySparkApp` driver process.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Driver completed. Recoverable file/group failures can still appear in `scan_errors`; inspect the error report as well |
+| `2` | CLI parsing or absolute-path/URI validation failed before SparkSession creation |
+| `1` | Unrecovered runtime error, collector validation failure, or collect-lock conflict |
+
+Findings alone do not cause a failure exit code. Failed automatic collection with `--review-state-root` prevents the scan work from starting.
+
+`bin/privyspark-submit` runs the remote driver in YARN cluster mode, so its shell exit code is not guaranteed to match this table. The Spark submission client handles a failed YARN application status by throwing an exception. To distinguish argument errors from runtime failures, inspect the YARN final status and diagnostics together with the driver log events `cli_argument_invalid` and `scan_failed`; do not rely on shell code `2` alone. [Spark YARN submission client source](https://github.com/apache/spark/blob/v3.5.3/resource-managers/yarn/src/main/scala/org/apache/spark/deploy/yarn/Client.scala#L1190-L1222)
+
 ## Driver Logging
+
 - Driver log level can be configured through `PRIVYSPARK_DEBUG`, `spark.yarn.appMasterEnv.PRIVYSPARK_DEBUG`, or `-Dprivyspark.debug`.
 - Supported values are `error`, `warn`, `info`, `debug`, and `off`.
 - The default is `warn`.
@@ -131,11 +182,12 @@ The schema-signature cache created for pre-scan is reused by group-scan sampled 
 
 When ignore rules apply, events such as `scan_directory_file_ignored` and `archive_entry_skipped reason=ignored` are emitted, and `ignored_files` is included in `scan_directory_files_discovered`, `scan_directory_pre_scan_execute_complete`, and `scan_complete`.
 
-If a file is discovered and then deleted before pre-scan probing, the file is skipped and logged as `scan_directory_file_skipped reason=not_found`. It is included in `skipped_files` for `scan_directory_pre_scan_execute_complete`, not in `scan_errors`.
+When pre-scan detects that a file was deleted and skips it, the event is logged as `scan_directory_file_skipped reason=not_found`. It is included in `skipped_files` for `scan_directory_pre_scan_execute_complete`, not in `scan_errors`. Files whose format is inferred from their extension can pass pre-scan using cached discovery metadata; deletion detected during later schema inspection or reading can still produce an error row.
 
 ## `_progress` Handling
+
 - In-progress shards are written as JSONL under `<output>/_progress/<run_id>/results`, `errors`, and `meta/completions`.
-- File fallback scans flush progress at group granularity by default. In this mode, per-file completed rows may not appear under `_progress` until the group finishes, and a driver failure causes that group to be rerun on the next attempt.
+- File fallback scans flush progress at group granularity by default. In this mode, per-file completed rows may not appear under `_progress` until the group finishes, and a driver failure can lose that group's unflushed progress. The next run cleans stale progress and performs a new scan; completed groups are not skipped through checkpoint resume.
 - Running group and allowlist snapshot tasks create temporary JSON markers under `<output>/_progress/<run_id>/in-flight`. File-level markers are disabled by default to avoid create/delete pressure during small-file scans; set `spark.privyspark.progress.fileMarker.enabled=true` to restore file-level in-flight visibility.
 - Each in-flight marker includes `runId`, `scope`, `identifier`, `threadName`, `startedAtEpochMs`, and available scan metadata such as `format` and `schemaSignature`.
 - In-flight marker filenames preserve filesystem-safe UTF-8 letters/digits plus `.`, `_`, and `-`; path separators and other characters are replaced with `_`. The original `identifier` remains in the JSON body.
@@ -149,6 +201,7 @@ If a file is discovered and then deleted before pre-scan probing, the file is sk
 This design keeps long-running progress observable without mixing partial output into the final consumer-facing result paths.
 
 ## Releases
+
 - GitHub Release is triggered by pushing a `v*` tag or bare semver tag.
 - The release workflow runs `./gradlew clean shadowJar packageSampleDatasets`.
 - Release assets are `privyspark-<tag>-all.jar`, `privyspark-<tag>-all.jar.sha256`, `default-rules.yaml`, `privyspark-<tag>-sample-datasets.zip`, `privyspark-<tag>-review-response-example.html`, and `privyspark-<tag>-review-response-viewer.html`.

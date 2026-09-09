@@ -439,6 +439,37 @@ class ReviewCollectCommandSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(actionPlan.contains("hdfs:///user/username"))
   }
 
+  test("mixed valid and invalid responses preserve current state and release the collect lock") {
+    val stateRoot = Files.createTempDirectory("privyspark-review-rejected-batch-")
+    try {
+      Files.createDirectories(stateRoot.resolve("inbox"))
+      Files.createDirectories(stateRoot.resolve("current"))
+      val current = stateRoot.resolve("current/allowlist.jsonl")
+      val original = "existing state must remain unchanged\n".getBytes(StandardCharsets.UTF_8)
+      Files.write(current, original)
+      val valid = falsePositiveResponse("valid", "email", "email", "test data")
+      val invalid = truePositiveResponse("invalid", "email", "email", "")
+      Files.write(stateRoot.resolve("inbox/owner.json"),
+        responseEnvelope("/data/project", Seq(valid, invalid)).getBytes(StandardCharsets.UTF_8))
+
+      val error = intercept[IllegalStateException] {
+        ReviewCollectCommand.run(spark, ReviewCollectCliConfig(reviewStateRoot = stateRoot.toString))
+      }
+      assert(error.getMessage.contains("action_plan and action_due_date are required"))
+      assert(Files.readAllBytes(current).sameElements(original))
+      assert(!Files.exists(stateRoot.resolve("current/action_plan.jsonl")))
+      assert(!Files.exists(stateRoot.resolve(".collect.lock")))
+      val children = Files.list(stateRoot)
+      try assert(!children.anyMatch(path => path.getFileName.toString.startsWith("current.tmp-"))) finally children.close()
+    } finally {
+      val paths = Files.walk(stateRoot)
+      try {
+        import scala.collection.JavaConverters._
+        paths.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
+      } finally paths.close()
+    }
+  }
+
   private def responseEnvelope(scanPath: String, responses: Seq[String]): String =
     s"""{"schema_version":1,"scan_path":"$scanPath","responder":"owner1","responded_at":"2026-04-30T10:00:00Z","responses":[${responses.mkString(",")}]}"""
 

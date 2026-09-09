@@ -8,6 +8,7 @@ import org.scalatestplus.junit.JUnitRunner
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectInputStream, ObjectOutputStream}
 import java.sql.{Connection, DriverManager}
 import java.util.Properties
 
@@ -129,6 +130,41 @@ class HiveTableLookupSpec extends AnyFunSuite {
     )
 
     assert(index.lookup("HDFS://NameNode.Example.Com/warehouse/sales%20data/part-00000.parquet") == "mart.sales_data")
+  }
+
+  test("lookup preserves root locations, local aliases and duplicate priority after serialization") {
+    val index = HiveTableLookupIndex(Vector(
+      "/" -> "root.local",
+      "file:/" -> "root.file",
+      "hdfs://nn/" -> "root.hdfs",
+      "/warehouse/sales" -> "z.sales",
+      "file:/warehouse/sales/" -> "a.sales",
+      "hdfs://nn/warehouse/sales" -> "mart.sales",
+      "hdfs://nn/warehouse/sales/private" -> "mart.private"
+    ))
+    val cases = Seq(
+      ("/", "root.file", "root.file"),
+      ("/other/part.csv", "root.file", ""),
+      ("file:/other/part.csv", "root.file", ""),
+      ("/warehouse/sales", "a.sales", "a.sales"),
+      ("file:/warehouse/sales/part.csv", "a.sales", ""),
+      ("/warehouse/salesforce/part.csv", "root.file", ""),
+      ("hdfs://nn/", "root.hdfs", "root.hdfs"),
+      ("hdfs://nn/warehouse/sales/private/part.csv", "mart.private", ""),
+      ("hdfs://nn/warehouse/sales/private-extra/part.csv", "mart.sales", ""),
+      ("hdfs://other/warehouse/sales/part.csv", "", "")
+    )
+    def check(candidate: HiveTableLookupIndex): Unit = cases.foreach {
+      case (path, expectedPrefix, expectedExact) =>
+        assert(candidate.lookup(path) == expectedPrefix, path)
+        assert(candidate.lookupExact(path) == expectedExact, path)
+    }
+    check(index)
+    val bytes = new ByteArrayOutputStream()
+    val out = new ObjectOutputStream(bytes)
+    try out.writeObject(index) finally out.close()
+    val in = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray))
+    try check(in.readObject().asInstanceOf[HiveTableLookupIndex]) finally in.close()
   }
 
   test("stripCompositeIdentifier keeps archive or workbook host path") {

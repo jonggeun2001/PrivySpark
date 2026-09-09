@@ -43,25 +43,31 @@ object HiveMetastoreJdbcConfig {
 }
 
 final case class HiveTableLookupIndex(entries: Vector[(String, String)]) extends Serializable {
-  @transient private lazy val normalizedEntries: Vector[(String, String)] =
-    HiveTableLookupIndex.normalizeEntries(entries)
+  @transient private lazy val normalizedIndex: (Int, Map[String, String]) = {
+    val normalizedEntries = HiveTableLookupIndex.normalizeEntries(entries)
+    // Keep the first (lexicographically smallest) table for duplicate locations.
+    normalizedEntries.size -> normalizedEntries.reverseIterator.toMap
+  }
 
-  def size: Int = normalizedEntries.size
+  def size: Int = normalizedIndex._1
 
   def lookup(rawPath: String): String = {
     HiveTableLookup.normalizePathForLookup(rawPath).flatMap { normalizedPath =>
-      normalizedEntries.collectFirst {
-        case (prefix, tableFqn) if HiveTableLookupIndex.matchesPrefix(normalizedPath, prefix) => tableFqn
+      val tablesByLocation = normalizedIndex._2
+      var matched = tablesByLocation.get(normalizedPath)
+      var separator = normalizedPath.lastIndexOf('/')
+      while (matched.isEmpty && separator >= 0) {
+        // Try a slash-terminated root before its shorter parent location.
+        matched = tablesByLocation.get(normalizedPath.substring(0, separator + 1))
+          .orElse(tablesByLocation.get(normalizedPath.substring(0, separator)))
+        separator = normalizedPath.lastIndexOf('/', separator - 1)
       }
+      matched
     }.getOrElse("")
   }
 
   def lookupExact(rawPath: String): String = {
-    HiveTableLookup.normalizePathForLookup(rawPath).flatMap { normalizedPath =>
-      normalizedEntries.collectFirst {
-        case (location, tableFqn) if normalizedPath == location => tableFqn
-      }
-    }.getOrElse("")
+    HiveTableLookup.normalizePathForLookup(rawPath).flatMap(path => normalizedIndex._2.get(path)).getOrElse("")
   }
 }
 
@@ -85,13 +91,6 @@ object HiveTableLookupIndex {
     val filePathVariant =
       if (normalizedLocation.startsWith("file:/")) Some(normalizedLocation.stripPrefix("file:")) else None
     (Vector(normalizedLocation) ++ filePathVariant).distinct
-  }
-
-  private[hive] def matchesPrefix(path: String, prefix: String): Boolean = {
-    path == prefix ||
-      (prefix == "/" && path.startsWith("/")) ||
-      (prefix.endsWith("/") && path.startsWith(prefix)) ||
-      path.startsWith(prefix + "/")
   }
 }
 

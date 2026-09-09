@@ -1,13 +1,15 @@
 # ruleset과 탐지 모델
 
 ## 탐지 방식
-- 탐지는 ruleset regex 결과를 집계와 sample 추출에 그대로 사용합니다.
+
+- 탐지는 ruleset regex 결과를 집계와 sample 추출에 그대로 사용합니다. 타입별 추가 strict validator나 checksum 검증은 수행하지 않으며, `validator` 필드는 로드 단계에서 거부합니다.
 - 결과 집계는 컬럼 단위 또는 파일 단위로 수행됩니다.
 - invalid regex는 ruleset 로드 단계에서 즉시 실패합니다.
 
 ruleset을 로드할 때 regex를 미리 검증하는 이유는 스캔이 한참 진행된 뒤에 잘못된 정규식 때문에 실패하는 상황을 막기 위해서입니다. 긴 배치 작업에서는 시작 전 실패가 운영적으로 훨씬 낫습니다.
 
 ## 기본 ruleset
+
 - 기본 파일: `config/rules/default.yaml`
 - 기본 탐지 타입:
   - 전화번호
@@ -22,13 +24,15 @@ ruleset을 로드할 때 regex를 미리 검증하는 이유는 스캔이 한참
   - IP 주소
 
 ## 커스텀 ruleset 규칙
-- 각 rule은 `pii_type`, `regex`를 포함해야 합니다.
-- `column_hints`는 선택 항목이며, 지정 시 힌트가 포함된 컬럼에만 적용합니다.
+
+- top-level `rules`에는 최소 한 개의 규칙이 있어야 하며, 각 rule은 비어 있지 않은 `pii_type`, `regex`를 포함해야 합니다.
+- `column_hints`는 선택 항목이며, 컬럼명과 힌트를 trim/소문자로 정규화한 뒤 힌트 하나 이상이 부분 문자열로 포함된 컬럼에만 적용합니다.
 - `match_type`은 선택 항목이며 기본값은 `value`입니다.
 - top-level `suppressions`는 선택 항목이며 특정 `(column, pii_type)` 결과를 제외합니다. 각 항목은 단일 `column` 또는 여러 `columns`를 사용할 수 있습니다.
 - 허용 `match_type` 값은 `value`, `full_column`입니다.
 
 ## 오탐 제외 (Suppressions)
+
 특정 컬럼이 특정 탐지 타입에만 반복적으로 오탐되는 경우, ruleset은 그대로 유지한 채 결과만 제외할 수 있습니다. suppression은 컬럼명 대소문자를 무시한 exact match와 `pii_type` exact match를 함께 써서 적용합니다.
 
 ### YAML 설정
@@ -48,6 +52,7 @@ suppressions:
 `column`에도 YAML 배열을 쓸 수 있지만, 하나의 suppression 항목이 여러 컬럼으로 펼쳐질 때는 `columns`를 권장합니다.
 
 ### CLI 로 추가 suppression
+
 - `--suppress <column:pii_type>`는 반복 지정 가능합니다.
 - `--suppression-file <path>`는 UTF-8 텍스트 파일을 줄 단위 `column:pii_type` 형식으로 읽고, 빈 줄과 `#` 주석을 무시합니다.
 - CLI/file 형식에서는 마지막 `:`를 구분자로 사용하므로 컬럼명 안에 `:`가 포함돼도 표현할 수 있습니다.
@@ -57,6 +62,7 @@ suppressions:
 예시:
 
 ```bash
+PRIVYSPARK_SPARK_FILES=/abs/path/scan.suppressions#scan.suppressions,config/rules/default.yaml#default-rules.yaml \
 bin/privyspark-submit \
   scan \
   --path /abs/input \
@@ -67,6 +73,7 @@ bin/privyspark-submit \
 ```
 
 ### 매칭 규칙
+
 - 컬럼명은 trim 후 소문자로 정규화한 값으로 exact match 합니다.
 - `pii_type`은 trim 후 exact match 합니다.
 - ruleset YAML의 `column`/`columns` 배열은 컬럼별 `(column, pii_type)` suppression으로 펼쳐집니다.
@@ -74,24 +81,28 @@ bin/privyspark-submit \
 - 같은 컬럼이라도 suppression에 지정되지 않은 다른 `pii_type`은 계속 탐지됩니다.
 
 ### 동작과 한계
+
 - ruleset에 없는 `pii_type`을 suppression에 적어도 스캔을 실패시키지 않고 warning만 남깁니다. 같은 suppression 파일을 여러 ruleset에 재사용하기 위한 동작입니다.
 - suppression은 value-regex 기반 예외나 컬럼명 glob/regex 매칭을 지원하지 않습니다.
 - suppression 변경 후에는 기존 결과 파일을 신뢰하지 말고 스캔을 다시 실행해야 합니다.
 
 ## 지원하지 않는 규칙
+
 - `pii_type: name`
 - `validator` 필드
 - `__KOREAN_NAME_RULE_REGEX__` 내부 참조
 
 ## `match_type`
-- `value`: regex에 매칭되는 값 개수를 집계합니다.
+
+- `value`: regex에 부분 일치하는 비어 있지 않은 값의 개수를 집계합니다. 한 셀에서 여러 번 일치해도 그 행/컬럼은 1건입니다.
 - `full_column`: 각 비어 있지 않은 값을 regex 전체 일치 기준으로 평가합니다.
 - 내부 `text` fallback 포맷에서도 각 줄 전체를 하나의 값으로 보고 `full_column`의 전체 일치 규칙을 그대로 적용합니다.
 
 `full_column`을 따로 둔 이유는 주민등록번호처럼 값 전체가 특정 포맷이어야 하는 탐지와, 자유 텍스트 안 substring 검출을 같은 규칙으로 처리하면 오탐이 크게 늘어나기 때문입니다.
 
 ## 타입별 제약
-- `phone_number`: 국내 `010`/`011`/`016`/`017`/`018`/`019`와 `+82 10...` 계열 국제 표기를 검출합니다.
+
+- `phone_number`: 국내 `010`/`011`/`016`/`017`/`018`/`019`와 `+82-10-...` 또는 하이픈 없는 `+8210...` 계열 국제 표기를 검출합니다. 기본 regex는 번호 내부 공백을 허용하지 않습니다.
 - `email`: 토큰 경계를 적용하고, 마지막 TLD는 영문 2자 이상으로 제한해 잘못 붙은 suffix나 비정상 도메인 오탐을 줄입니다.
 - `resident_registration_number`: 하이픈 포함/미포함 입력을 허용하고, 성별/세기 코드 1자리 축약형도 허용합니다.
 - `resident_registration_number`: 기본 ruleset은 월 `01`~`12`, 일 `01`~`31` 범위만 허용하고, 더 긴 숫자 토큰 내부 substring은 제외합니다.
@@ -106,7 +117,8 @@ bin/privyspark-submit \
 이 기본 ruleset 조정 방향은 모든 타입을 주민등록번호처럼 과도하게 조이는 것이 아니라, 형식 규격이 명확한 한국 식별자는 더 강하게 제한하고, 변형이 많은 타입은 경계 조건 위주로만 보강하는 쪽을 택한 것입니다. 오탐을 줄이되 정상값 누락이 급격히 늘어나는 변화는 피하려는 의도입니다.
 
 ## 집계 전략
-- 기본 경로는 batched aggregation(`agg`)입니다.
+
+- 기본 경로는 batched aggregation(`agg`)이며, 기본 배치당 최대 표현식 수는 `400`입니다.
 - 표현식 수가 임계치(`50,000`)를 넘으면 소배치 fallback으로 전환합니다.
 - 집계 예외가 나면 safe legacy fallback으로 전환합니다.
 - 파일 단위 집계 시 내부 동적 파일 식별 컬럼을 추가해 원본 컬럼 충돌을 피합니다.

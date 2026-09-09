@@ -124,7 +124,7 @@ class DirectoryScannerSpec extends AnyFunSuite with PrivySparkSpecFixtures {
       assert(group.hiveTableFqn == "finance.cards")
       assert(group.format == "hive_table")
       assert(group.directoryPath == tableDir.toString)
-      assert(group.filePaths.toSet == Set(dailyFile.toString, monthlyFile.toString))
+      assert(group.filePaths.map(path => new org.apache.hadoop.fs.Path(path).toUri.getPath).toSet == Set(dailyFile.toString, monthlyFile.toString))
       assert(group.useDirectoryIdentifier)
       assert(group.directoryIdentifierEligible)
     } finally {

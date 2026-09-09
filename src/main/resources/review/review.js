@@ -159,15 +159,12 @@
     function isBlank(value) {
       return String(value ?? '').trim() === '';
     }
-    function formValuesSnapshot() {
+    function collectFormValues() {
       const values = {};
       formState.forEach((state, index) => {
         values[index] = Object.assign({}, state);
       });
       return values;
-    }
-    function collectFormValues() {
-      return formValuesSnapshot();
     }
     function sampleSortText(finding) {
       return finding.evidence_samples.map(sample => [
@@ -287,9 +284,6 @@
         section.hidden = section.getAttribute('data-decision-section') !== decision;
       });
     }
-    function applyScopeVisibility(row) {
-      return row;
-    }
     function validationTarget(row, field) {
       return field === 'decision'
         ? row.querySelector('[data-validation-field="decision"]')
@@ -403,10 +397,16 @@
       }
     }
     function firstValidationErrorInDisplayOrder(errors) {
-      const rows = Array.from(tbody.querySelectorAll('tr[data-index]'));
+      const firstErrorByIndex = new Map();
+      errors.forEach(error => {
+        if (!firstErrorByIndex.has(error.index)) {
+          firstErrorByIndex.set(error.index, error);
+        }
+      });
+      const rows = tbody.querySelectorAll('tr[data-index]');
       for (const row of rows) {
         const index = Number(row.getAttribute('data-index'));
-        const error = errors.find(candidate => candidate.index === index);
+        const error = firstErrorByIndex.get(index);
         if (error) {
           return error;
         }
@@ -822,7 +822,6 @@
       row.setAttribute('data-hydrated', 'true');
       setFieldValues(row, index);
       applyDecisionVisibility(row);
-      applyScopeVisibility(row);
       applyValidationState(row, index);
       hydratedRows.set(index, row);
     }
@@ -840,7 +839,6 @@
       if (row) {
         setFieldValues(row, index);
         applyDecisionVisibility(row);
-        applyScopeVisibility(row);
         applyValidationState(row, index);
       }
     }
@@ -908,7 +906,6 @@
       const row = button.closest('tr');
       updateDecisionButtons(row, index);
       applyDecisionVisibility(row);
-      applyScopeVisibility(row);
       applyValidationState(row, index);
     }
     function handleFormEvent(event) {

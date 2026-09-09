@@ -25,7 +25,6 @@ private[privyspark] object GroupBatchScanner {
     fileSampleMinFiles: Int = 10,
     suppressions: SuppressionSet = SuppressionSet.empty,
     allowlistMatcher: AllowlistMatcher = AllowlistMatcher.empty,
-    allowlistInputRoot: Option[String] = None,
     selectedSourceKeys: Option[Seq[String]] = None,
     progressRun: Option[ProgressRun] = None,
     hiveLookup: Option[Broadcast[HiveTableLookupIndex]] = None
@@ -70,20 +69,18 @@ private[privyspark] object GroupBatchScanner {
       "effective_sample_ratio" -> effectiveSampleRatio
     )
     withFileReadRetry(spark, physicalPaths, "group_batch_scan") {
-      val effectiveRules = ScanResultBuilder.effectiveRulesForFormat(group.format, rules)
       val baseDf = readSource(spark, group.format, physicalPaths, group.csvHasHeader)
-      val fileIdentifierColumn = Some(resolveFileIdentifierColumn(baseDf.columns.toSeq))
-      val sourceDf = baseDf.withColumn(fileIdentifierColumn.get, input_file_name())
+      val fileIdentifierColumn = resolveFileIdentifierColumn(baseDf.columns.toSeq)
+      val sourceDf = baseDf.withColumn(fileIdentifierColumn, input_file_name())
       DriverLogger.debug(
         "group_scan_batch_source_ready",
         "directory" -> group.directoryPath,
         "format" -> group.format,
         "columns" -> sourceDf.columns.length,
-        "file_identifier_mode" -> fileIdentifierColumn.get
+        "file_identifier_mode" -> fileIdentifierColumn
       )
 
       val sampledDf = if (fileSamplingApplied) sourceDf else ScanResultBuilder.sampleRowsDeterministically(sourceDf, sampleRatio)
-      val columnName = fileIdentifierColumn.get
       val sampledRowsStartNanos = System.nanoTime()
       logTcpSnapshot(
         "batch_action_start",
@@ -92,7 +89,7 @@ private[privyspark] object GroupBatchScanner {
         "dataframe_cached" -> false
       )
       val sampledRowsByFile = sampledDf
-        .groupBy(col(columnName))
+        .groupBy(col(fileIdentifierColumn))
         .count()
         .collect()
         .flatMap { row =>
@@ -136,7 +133,7 @@ private[privyspark] object GroupBatchScanner {
           "selected_files" -> effectiveSelectedSourceKeys.size,
           "dataframe_cached" -> false
         )
-        val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, columnName, effectiveRules, suppressions = suppressions)
+        val matchCountsByFile = DetectionAggregator.aggregateByFile(sampledDf, fileIdentifierColumn, rules, suppressions = suppressions)
         logTcpSnapshot(
           "batch_action_complete",
           "action" -> "aggregate_matches",
@@ -154,8 +151,8 @@ private[privyspark] object GroupBatchScanner {
         )
         val sampleValuesByFile = DetectionAggregator.sampleMatchesByFile(
           sampledDf,
-          columnName,
-          effectiveRules,
+          fileIdentifierColumn,
+          rules,
           matchCountsByFile,
           suppressions = suppressions
         )
@@ -174,7 +171,7 @@ private[privyspark] object GroupBatchScanner {
           "selected_files" -> effectiveSelectedSourceKeys.size,
           "dataframe_cached" -> false
         )
-        val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, columnName, matchCountsByFile.map(_.columnName).distinct)
+        val nonEmptyCountsByFile = DetectionAggregator.countNonEmptyByFile(sampledDf, fileIdentifierColumn, matchCountsByFile.map(_.columnName).distinct)
         logTcpSnapshot(
           "batch_action_complete",
           "action" -> "count_non_empty",
@@ -233,7 +230,7 @@ private[privyspark] object GroupBatchScanner {
           suppressions,
           matchedSourceKeys,
           batchFileIdentifierValuesBySourceKey,
-          columnName,
+          fileIdentifierColumn,
           selectedFileCount = effectiveSelectedSourceKeys.size,
           progressRun = progressRun,
           hiveLookup = hiveLookup
@@ -248,10 +245,7 @@ private[privyspark] object GroupBatchScanner {
           throw new IllegalStateException(s"Review snapshot changed during batch rescan: ${group.directoryPath}")
         }
         val filteredResults = AllowlistApplier.applyAllowlist(
-          spark.sparkContext.hadoopConfiguration,
-          datasetPath,
           allowlistMatcher,
-          allowlistInputRoot,
           snapshotResults
         )
         DriverLogger.debug(
