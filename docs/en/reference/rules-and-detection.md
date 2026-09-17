@@ -23,6 +23,29 @@ Rulesets are validated before scanning so long-running jobs do not fail late bec
   - Korean passport number
   - IP address
 
+### Entire Values Containing Exactly 64 Hexadecimal Characters
+
+Every default rule excludes a raw value whose entire content matches `\A[0-9A-Fa-f]{64}\z`. This reduces false positives from digits inside SHA-256 hash strings and covers uppercase, lowercase, and digits-only values.
+
+| Raw value | Behavior |
+| --- | --- |
+| Exactly 64 ASCII hexadecimal characters | Excluded from all default PII types |
+| 63 or 65 hexadecimal characters | Existing rules apply |
+| 64 hexadecimal characters with surrounding whitespace or a newline | Existing rules apply |
+| A `0x`, `0X`, or `hash=` prefix, or additional text | Existing rules apply |
+
+The condition checks the entire value without trimming whitespace or interpreting prefixes. It checks string shape, not whether SHA-256 produced the value, so an ordinary identifier with the same shape is also excluded. It does not filter individual hash tokens inside text; false positives inside such tokens can remain.
+
+Each complete default regex is wrapped as follows. The trailing exclusion checks the entire value even when substring searching starts in the middle, while preserving the original matched fragment and position.
+
+```regex
+(?:ORIGINAL_REGEX)(?<!\A(?=[0-9A-Fa-f]{64}\z)[0-9A-Fa-f]{0,64})
+```
+
+Excluded values contribute neither to match counts nor to sample candidates, but remain in the non-empty value count. The policy resides only in `config/rules/default.yaml`, with no engine, rule schema, or dependency changes. It is not automatically applied to custom rulesets.
+
+Regression coverage checks the exclusion and boundary inputs for every default rule in `RulesetLoaderSpec`. `DetectionAggregatorSpec` checks aggregation and sample exclusion for actual Spark `sha2(..., 256)` output, plus adherence to custom rules. Run `bash scripts/verify-worktree.sh` for full verification.
+
 ## Custom Ruleset Contract
 
 - The top-level `rules` list must contain at least one rule; every rule requires non-empty `pii_type` and `regex` values.
@@ -120,7 +143,7 @@ The default-ruleset tightening strategy is intentionally asymmetric. Korean iden
 
 To reduce false positives from seven digits embedded in continuous hexadecimal random strings, the default ruleset rejects compact 7-digit short forms immediately adjacent to `0-9`, `a-f`, or `A-F`. The regex uses `(?<![0-9A-Fa-f])` and `(?![0-9A-Fa-f])` for these boundaries, plus `(?<!0[xX])` to reject an immediate `0x` or `0X` prefix.
 
-Full 13-digit forms and hyphenated 7-digit short forms retain their existing numeric boundaries. These alternatives live entirely in the regex in `config/rules/default.yaml`; they introduce no type-specific engine exception or ruleset schema change. Custom rulesets continue to follow their own regexes unchanged.
+Full 13-digit forms and hyphenated 7-digit short forms retain their existing numeric boundaries, while the whole-value 64-character hexadecimal exclusion above applies to every alternative. These alternatives live entirely in the regex in `config/rules/default.yaml`; they introduce no type-specific engine exception or ruleset schema change. Custom rulesets continue to follow their own regexes unchanged.
 
 All examples below are synthetic and use the default `value` matching mode.
 
