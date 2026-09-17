@@ -50,6 +50,53 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(!regex.findFirstIn("20251027").nonEmpty)
   }
 
+  test("default resident registration rule rejects compact short forms inside hexadecimal tokens") {
+    val rule = RulesetLoader.load("default").find(_.piiType == "resident_registration_number").get
+    val regex = new Regex(rule.regex)
+    val nonMatches = Seq(
+      "ab9012251cd",
+      "AB9012251CD",
+      "abcdef9012251",
+      "9012251ABCDEF",
+      "0x9012251",
+      "0X9012251",
+      "0xab9012251cd",
+      "code9012251",
+      "19012251",
+      "90122512",
+      "901225123456",
+      "90122512345678"
+    )
+
+    nonMatches.foreach { value =>
+      assert(regex.findFirstIn(value).isEmpty, s"unexpected resident registration match in $value")
+    }
+  }
+
+  test("default resident registration rule preserves standalone short forms and existing full and hyphenated forms") {
+    val rule = RulesetLoader.load("default").find(_.piiType == "resident_registration_number").get
+    val regex = new Regex(rule.regex)
+    val examples = Seq(
+      "9012251" -> "9012251",
+      "주민번호9012251입니다" -> "9012251",
+      "rrn=9012251" -> "9012251",
+      "rrn9012251" -> "9012251",
+      "(9012251)" -> "9012251",
+      "901225-1" -> "901225-1",
+      "a901225-1f" -> "901225-1",
+      "9012251234567" -> "9012251234567",
+      "a9012251234567f" -> "9012251234567",
+      "901225-1234567" -> "901225-1234567",
+      "a901225-1234567f" -> "901225-1234567"
+    )
+
+    examples.foreach { case (value, fragment) =>
+      assert(regex.findFirstIn(value).contains(fragment), s"missing resident registration match in $value")
+    }
+    assert(regex.findAllIn("hash=ab9012251cd; 주민번호=8801012; 주민번호=901225-1").toSeq ==
+      Seq("8801012", "901225-1"))
+  }
+
   test("default phone rule accepts domestic and +82 mobile forms") {
     val phoneRule = RulesetLoader.load("default").find(_.piiType == "phone_number")
     assert(phoneRule.nonEmpty)

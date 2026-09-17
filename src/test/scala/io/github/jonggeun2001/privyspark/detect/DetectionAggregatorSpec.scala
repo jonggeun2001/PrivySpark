@@ -1,6 +1,6 @@
 package io.github.jonggeun2001.privyspark.detect
 
-import io.github.jonggeun2001.privyspark.config.SuppressionSet
+import io.github.jonggeun2001.privyspark.config.{RulesetLoader, SuppressionSet}
 import io.github.jonggeun2001.privyspark.detect.DetectionAggregator.{AggregationConfig, FileMatchCount}
 import io.github.jonggeun2001.privyspark.detect.testing.DetectionFaultInjectors
 import io.github.jonggeun2001.privyspark.model.{MatchCount, PiiRule, PiiRuleMatchType, Suppression}
@@ -310,6 +310,32 @@ class DetectionAggregatorSpec extends AnyFunSuite with BeforeAndAfterAll {
     assert(jobCount == 2, s"expected two Spark jobs for batched sample extraction, found $jobCount")
     assert(samples(emailMatch.metricAlias).sampleMatchedFragment == "alpha@example.com")
     assert(samples(phoneMatch.metricAlias).sampleMatchedFragment == "010-1234-5678")
+  }
+
+  test("default resident registration rule counts and samples valid short forms after hexadecimal noise") {
+    val df = Seq(
+      "ab9012251cd",
+      "0X9012251",
+      "hash=ab9012251cd; 주민번호=8801012"
+    ).toDF("notes")
+    val rules = RulesetLoader.load("default").filter(_.piiType == "resident_registration_number")
+
+    val matchCounts = DetectionAggregator.aggregate(df, rules)
+    val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
+
+    assert(sortByKey(matchCounts) == Seq(MatchCount("notes", "resident_registration_number", 1L)))
+    assert(samples(matchCounts.head.metricAlias).sampleMatchedFragment == "8801012")
+  }
+
+  test("custom resident registration regex still controls hexadecimal fragment detection") {
+    val df = Seq("ab9012251cd").toDF("notes")
+    val rules = Seq(PiiRule("resident_registration_number", "[0-9]{7}"))
+
+    val matchCounts = DetectionAggregator.aggregate(df, rules)
+    val samples = DetectionAggregator.sampleMatches(df, rules, matchCounts)
+
+    assert(sortByKey(matchCounts) == Seq(MatchCount("notes", "resident_registration_number", 1L)))
+    assert(samples(matchCounts.head.metricAlias).sampleMatchedFragment == "9012251")
   }
 
   test("sampleMatches respects aggregation fallback config") {

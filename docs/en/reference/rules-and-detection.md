@@ -105,7 +105,7 @@ bin/privyspark-submit \
 - `phone_number`: supports domestic `010`/`011`/`016`/`017`/`018`/`019` patterns and `+82-10-...` or compact `+8210...` international forms. The default regex does not accept spaces inside a number.
 - `email`: adds token boundaries and requires a final alphabetic TLD of at least two characters to reduce suffix-style and malformed-domain false positives.
 - `resident_registration_number`: supports hyphenated and compact forms, including a 1-digit gender/century short form.
-- `resident_registration_number`: the default ruleset only constrains month `01`-`12` and day `01`-`31`, and rejects matches inside longer numeric tokens.
+- `resident_registration_number`: the default ruleset only constrains month `01`-`12` and day `01`-`31`, and rejects matches inside longer numeric tokens. Compact 7-digit short forms also use the hexadecimal boundaries described below.
 - `foreign_registration_number`: mirrors the resident-registration month/day constraints and only allows foreign-registration codes `5`-`8` in the seventh digit.
 - `driver_license_number`: accepts legacy hyphenated 10-digit numbers, current 12-digit numbers, and pre-July-2-2014 Korean region-name formats such as `서울 00 - 123456 - 01` and `부산0012345601`. Current numeric region codes are still limited to `11`-`26`, `28`, and Korean region-name forms are limited to the KoROAD notice list: `서울`, `부산`, `경기`, `강원`, `충북`, `충남`, `전북`, `전남`, `경북`, `경남`, `제주`, `대구`, `인천`, `광주`, `대전`, and `울산`. The default ruleset intentionally excludes bare legacy 10-digit numeric values to reduce `full_column` false positives against other 10-digit identifiers, and it blocks legacy hyphenated matches only when they would start inside an invalid current-format prefix such as `27-12-345678-90`. Runtime detection now follows the configured regex directly for both aggregation and sample extraction.
 - `address`: remains relatively conservative because Korean address strings vary heavily in real datasets. Tightening it too aggressively would increase misses faster than it reduces false positives.
@@ -115,6 +115,26 @@ bin/privyspark-submit \
 - `ip_address`: keeps IPv4 range checks, avoids substrings inside longer dotted numeric tokens such as `10.0.0.1.5`, and still matches common sentence-ending forms such as `192.168.0.1.`.
 
 The default-ruleset tightening strategy is intentionally asymmetric. Korean identifiers with a stable public format are constrained more aggressively, while high-variation types are tightened mainly at token boundaries. The goal is to reduce false positives without turning normal field variations into widespread false negatives.
+
+### Hexadecimal Boundaries for Resident Registration Short Forms
+
+To reduce false positives from seven digits embedded in continuous hexadecimal random strings, the default ruleset rejects compact 7-digit short forms immediately adjacent to `0-9`, `a-f`, or `A-F`. The regex uses `(?<![0-9A-Fa-f])` and `(?![0-9A-Fa-f])` for these boundaries, plus `(?<!0[xX])` to reject an immediate `0x` or `0X` prefix.
+
+Full 13-digit forms and hyphenated 7-digit short forms retain their existing numeric boundaries. These alternatives live entirely in the regex in `config/rules/default.yaml`; they introduce no type-specific engine exception or ruleset schema change. Custom rulesets continue to follow their own regexes unchanged.
+
+All examples below are synthetic and use the default `value` matching mode.
+
+| Input | Resident registration match |
+| --- | --- |
+| `9012251`, `rrn=9012251`, `주민번호9012251입니다` | Preserved |
+| `901225-1`, `ab901225-1cd` | Preserved |
+| `ab9012251234567cd`, `ab901225-1234567cd` | Preserved |
+| `ab9012251cd`, `9012251ABCDEF` | Excluded |
+| `0x9012251`, `0X9012251` | Excluded |
+
+This is a heuristic based on adjacent characters. It also excludes `code9012251` because of the preceding `e`, so a real short form attached to an English label may be missed. A standalone seven-digit random value cannot be distinguished from a real short form, and hyphen-separated identifiers such as `deadbeef-9012251-cafebabe` remain outside this exclusion. If one cell contains both an excluded fragment and another valid match, the valid match still contributes to aggregation and sample extraction.
+
+Regression coverage checks default regex boundaries and preservation of existing formats in `RulesetLoaderSpec`, and aggregation, sample extraction, and adherence to custom resident registration regexes in `DetectionAggregatorSpec`. Run `bash scripts/verify-worktree.sh` for full verification.
 
 ## Aggregation Strategy
 
