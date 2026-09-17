@@ -9,6 +9,8 @@ import org.scalatestplus.junit.JUnitRunner
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.security.MessageDigest
+import java.util.Locale
 import scala.util.matching.Regex
 
 @RunWith(classOf[JUnitRunner])
@@ -22,14 +24,96 @@ class RulesetLoaderSpec extends AnyFunSuite {
     assert(rules.exists(_.piiType == "email"))
     assert(rules.exists(_.piiType == "passport_number"))
     assert(driverLicenseRule.nonEmpty)
-    assert(driverLicenseRule.get.regex == "(?:(?<![0-9])(?:(?<![0-9]{2}-)[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)-[0-9]{2}-[0-9]{6}-[0-9]{2}|(?:1[1-9]|2[0-6]|28)[0-9]{10})(?![0-9])|(?<![가-힣A-Za-z0-9])(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산)\\s*(?:[0-9]{10}|[0-9]{2}\\s*-\\s*[0-9]{6}\\s*-\\s*[0-9]{2})(?![가-힣A-Za-z0-9]))")
     assert(foreignRegistrationNumberRule.nonEmpty)
-    assert(foreignRegistrationNumberRule.get.regex == "(?<![0-9])[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])(?:-[5-8][0-9]{6}|[5-8][0-9]{6})(?![0-9])")
     assert(passportRule.nonEmpty)
-    assert(passportRule.get.regex == "(?<![A-Za-z0-9])[MSROD](?!0{8})[0-9]{8}(?![A-Za-z0-9])")
     assert(!rules.exists(_.piiType == "name"))
     assert(rules.forall(_.columnHints.isEmpty))
     assert(rules.forall(_.matchType == "value"))
+  }
+
+  test("default rules reject exact 64-character hexadecimal values at every candidate position") {
+    val patterns = RulesetLoader.load("default").map(rule => rule.piiType -> new Regex(rule.regex))
+    val fragments = Seq("0172352458", "2511254628909", "3611196465423", "266674872712", "4167119679039490")
+    val embeddedValues = fragments.flatMap { fragment =>
+      Seq(0, 5, 64 - fragment.length).map { offset =>
+        ("a" * offset) + fragment + ("b" * (64 - offset - fragment.length))
+      }
+    }
+    val values = (embeddedValues ++ Seq("1" * 64, "a" * 64)).flatMap(value => Seq(value, value.toUpperCase(Locale.ROOT)))
+
+    values.foreach { value =>
+      patterns.foreach { case (piiType, regex) =>
+        assert(regex.findFirstIn(value).isEmpty, s"$piiType matched an exact 64-character hexadecimal value: $value")
+      }
+    }
+  }
+
+  test("default rules reject real SHA-256 hashes that contain numeric identifier fragments") {
+    val patterns = RulesetLoader.load("default").map(rule => rule.piiType -> new Regex(rule.regex))
+    val sha256 = MessageDigest.getInstance("SHA-256")
+    val hashes = Seq(40, 105, 178, 231, 1241, 1317).map { seed =>
+      sha256.digest(s"privyspark-sha256-probe-$seed".getBytes(StandardCharsets.UTF_8))
+        .map(byte => f"${byte & 0xff}%02x").mkString
+    }
+
+    hashes.flatMap(hash => Seq(hash, hash.toUpperCase(Locale.ROOT))).foreach { hash =>
+      patterns.foreach { case (piiType, regex) =>
+        assert(regex.findFirstIn(hash).isEmpty, s"$piiType matched SHA-256 digest $hash")
+      }
+    }
+  }
+
+  test("default rules retain numeric matches outside the exact 64-character hexadecimal exclusion") {
+    val rules = RulesetLoader.load("default").map(rule => rule.piiType -> new Regex(rule.regex)).toMap
+    val examples = Seq(
+      "phone_number" -> "0172352458",
+      "resident_registration_number" -> "2511254628909",
+      "foreign_registration_number" -> "3611196465423",
+      "driver_license_number" -> "266674872712",
+      "credit_card_number" -> "4167119679039490"
+    )
+
+    examples.foreach { case (piiType, fragment) =>
+      val hex64 = "a" + fragment + ("b" * (63 - fragment.length))
+      val values = Seq(
+        hex64.dropRight(1),
+        hex64 + "b",
+        " " + hex64,
+        hex64 + " ",
+        hex64 + "\n",
+        "0x" + hex64,
+        "0X" + hex64,
+        "hash=" + hex64,
+        hex64.dropRight(1) + "g",
+        hex64 + "; 연락처=010-1234-5678"
+      )
+      values.foreach { value =>
+        val found = rules(piiType).findFirstMatchIn(value)
+        assert(found.map(_.matched).contains(fragment), s"$piiType lost its fragment in $value")
+        assert(found.map(_.start).contains(value.indexOf(fragment)), s"$piiType changed its fragment position in $value")
+      }
+    }
+  }
+
+  test("default rules preserve standalone identifiers in full-column matching") {
+    val rules = RulesetLoader.load("default").map(rule => rule.piiType -> rule.regex).toMap
+    val examples = Seq(
+      "phone_number" -> "01012345678",
+      "email" -> "alpha@example.com",
+      "resident_registration_number" -> "9012251",
+      "foreign_registration_number" -> "8801015123456",
+      "driver_license_number" -> "111234567890",
+      "address" -> "서울특별시 강남구 테헤란로 123",
+      "bank_account_number" -> "123-456-789",
+      "credit_card_number" -> "4111111111111111",
+      "passport_number" -> "M12345678",
+      "ip_address" -> "192.168.0.1"
+    )
+
+    examples.foreach { case (piiType, value) =>
+      val pattern = new Regex(s"\\A(?:${rules(piiType)})\\z").pattern
+      assert(pattern.matcher(value).matches(), s"$piiType no longer matches its full value: $value")
+    }
   }
 
   test("default resident registration rule accepts short and full forms without matching numeric dates") {
